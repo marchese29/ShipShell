@@ -1,10 +1,16 @@
+mod bindings;
+
 use anyhow::Result;
+use bindings::shp;
 use pyo3::prelude::*;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use std::ffi::CString;
 
 fn main() -> Result<()> {
+    // Register the shp module before initializing Python
+    pyo3::append_to_inittab!(shp);
+
     // Initialize Python interpreter
     Python::initialize();
 
@@ -14,6 +20,9 @@ fn main() -> Result<()> {
     println!("ShipShell Python REPL");
     println!("Type 'exit()' or press Ctrl+D to quit");
     println!();
+
+    // Import shp module into __main__ namespace
+    Python::attach(|py| py.run(c"from shp import *", None, None))?;
 
     // Main REPL loop
     loop {
