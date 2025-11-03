@@ -23,7 +23,7 @@ pub mod shp {
     impl ShipProgram {
         #[pyo3(signature = (*args))]
         fn __call__(&self, args: Vec<String>) -> PyResult<ShipRunnable> {
-            Ok(ShipRunnable(Arc::new(ShipRunnableInner::Command {
+            Ok(ShipRunnable(Arc::new(Runnable::Command {
                 prog: self.clone(),
                 args,
             })))
@@ -32,21 +32,21 @@ pub mod shp {
 
     #[pyclass(frozen)]
     #[derive(Clone)]
-    pub struct ShipRunnable(Arc<ShipRunnableInner>);
+    pub struct ShipRunnable(Arc<Runnable>);
 
     #[allow(dead_code)]
     #[derive(Clone)]
-    enum ShipRunnableInner {
+    enum Runnable {
         Command {
             prog: ShipProgram,
             args: Vec<String>,
         },
         Pipeline {
             predecessors: Vec<ShipRunnable>,
-            final_cmd: Box<ShipRunnable>,
+            final_cmd: ShipRunnable,
         },
         Subshell {
-            runnable: Box<ShipRunnable>,
+            runnable: ShipRunnable,
         },
     }
 
@@ -60,19 +60,19 @@ pub mod shp {
     impl From<&ShipRunnable> for shell_env::CommandSpec {
         fn from(runnable: &ShipRunnable) -> Self {
             match runnable.0.as_ref() {
-                ShipRunnableInner::Command { prog, args } => shell_env::CommandSpec::Command {
+                Runnable::Command { prog, args } => shell_env::CommandSpec::Command {
                     program: prog.name().to_string(),
                     args: args.clone(),
                 },
-                ShipRunnableInner::Pipeline {
+                Runnable::Pipeline {
                     predecessors,
                     final_cmd,
                 } => shell_env::CommandSpec::Pipeline {
                     predecessors: predecessors.iter().map(|p| p.into()).collect(),
-                    final_cmd: Box::new(final_cmd.as_ref().into()),
+                    final_cmd: Box::new(final_cmd.into()),
                 },
-                ShipRunnableInner::Subshell { runnable } => shell_env::CommandSpec::Subshell {
-                    runnable: Box::new(runnable.as_ref().into()),
+                Runnable::Subshell { runnable } => shell_env::CommandSpec::Subshell {
+                    runnable: Box::new(runnable.into()),
                 },
             }
         }
@@ -81,7 +81,7 @@ pub mod shp {
     #[pymethods]
     impl ShipRunnable {
         fn __or__(&self, other: &ShipRunnable) -> PyResult<ShipRunnable> {
-            use ShipRunnableInner::*;
+            use Runnable::*;
 
             let result_inner = match (self.0.as_ref(), other.0.as_ref()) {
                 // Atomic | Atomic -> Pipeline([lhs], rhs)
@@ -89,7 +89,7 @@ pub mod shp {
                 (Command { .. } | Subshell { .. }, Command { .. } | Subshell { .. }) => {
                     Arc::new(Pipeline {
                         predecessors: vec![self.clone()],
-                        final_cmd: Box::new(other.clone()),
+                        final_cmd: other.clone(),
                     })
                 }
 
@@ -102,10 +102,10 @@ pub mod shp {
                     Command { .. } | Subshell { .. },
                 ) => {
                     let mut new_predecessors = predecessors.clone();
-                    new_predecessors.push((**final_cmd).clone());
+                    new_predecessors.push(final_cmd.clone());
                     Arc::new(Pipeline {
                         predecessors: new_predecessors,
-                        final_cmd: Box::new(other.clone()),
+                        final_cmd: other.clone(),
                     })
                 }
 
@@ -137,7 +137,7 @@ pub mod shp {
                     },
                 ) => {
                     let mut new_predecessors = lhs_preds.clone();
-                    new_predecessors.push((**lhs_final).clone());
+                    new_predecessors.push(lhs_final.clone());
                     new_predecessors.extend(rhs_preds.clone());
                     Arc::new(Pipeline {
                         predecessors: new_predecessors,
@@ -171,10 +171,7 @@ pub mod shp {
         // PyO3 automatically converts:
         // - cmd to String (calls __str__ if needed)
         // - each arg to String (calls __str__ if needed)
-        Ok(ShipRunnable(Arc::new(ShipRunnableInner::Command {
-            prog,
-            args,
-        })))
+        Ok(ShipRunnable(Arc::new(Runnable::Command { prog, args })))
     }
 
     #[pyfunction]
@@ -194,8 +191,11 @@ pub mod shp {
 
     #[pyfunction]
     fn sub(runnable: ShipRunnable) -> PyResult<ShipRunnable> {
-        Ok(ShipRunnable(Arc::new(ShipRunnableInner::Subshell {
-            runnable: Box::new(runnable),
-        })))
+        Ok(ShipRunnable(Arc::new(Runnable::Subshell { runnable })))
+    }
+
+    #[pyfunction]
+    fn shexec(runnable: &ShipRunnable) -> PyResult<ShipResult> {
+        runnable.__call__()
     }
 }
