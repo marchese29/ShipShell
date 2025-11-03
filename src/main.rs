@@ -1,4 +1,5 @@
 mod bindings;
+mod shell_env;
 
 use anyhow::Result;
 use bindings::shp;

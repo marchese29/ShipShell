@@ -1,37 +1,92 @@
 use pyo3::prelude::*;
 use std::sync::Arc;
 
+use crate::shell_env;
+
 #[pymodule]
 pub mod shp {
     use super::*;
 
-    #[pyclass(frozen)]
+    #[pyclass]
     #[derive(Clone)]
-    pub struct ShellRunnable(Arc<ShellRunnableInner>);
+    pub struct ShipProgram {
+        name: String,
+    }
 
-    #[allow(dead_code)]
-    #[derive(Clone)]
-    enum ShellRunnableInner {
-        Command {
-            cmd: String,
-            args: Vec<String>,
-        },
-        Pipeline {
-            predecessors: Vec<ShellRunnable>,
-            final_cmd: Box<ShellRunnable>,
-        },
-        Subshell(Box<ShellRunnable>),
+    impl ShipProgram {
+        pub fn name(&self) -> &str {
+            &self.name
+        }
     }
 
     #[pymethods]
-    impl ShellRunnable {
-        fn __or__(&self, other: &ShellRunnable) -> PyResult<ShellRunnable> {
-            use ShellRunnableInner::*;
+    impl ShipProgram {
+        #[pyo3(signature = (*args))]
+        fn __call__(&self, args: Vec<String>) -> PyResult<ShipRunnable> {
+            Ok(ShipRunnable(Arc::new(ShipRunnableInner::Command {
+                prog: self.clone(),
+                args,
+            })))
+        }
+    }
+
+    #[pyclass(frozen)]
+    #[derive(Clone)]
+    pub struct ShipRunnable(Arc<ShipRunnableInner>);
+
+    #[allow(dead_code)]
+    #[derive(Clone)]
+    enum ShipRunnableInner {
+        Command {
+            prog: ShipProgram,
+            args: Vec<String>,
+        },
+        Pipeline {
+            predecessors: Vec<ShipRunnable>,
+            final_cmd: Box<ShipRunnable>,
+        },
+        Subshell {
+            runnable: Box<ShipRunnable>,
+        },
+    }
+
+    #[pyclass]
+    #[derive(Clone)]
+    pub struct ShipResult {
+        #[pyo3(get)]
+        pub exit_code: u8,
+    }
+
+    impl From<&ShipRunnable> for shell_env::CommandSpec {
+        fn from(runnable: &ShipRunnable) -> Self {
+            match runnable.0.as_ref() {
+                ShipRunnableInner::Command { prog, args } => shell_env::CommandSpec::Command {
+                    program: prog.name().to_string(),
+                    args: args.clone(),
+                },
+                ShipRunnableInner::Pipeline {
+                    predecessors,
+                    final_cmd,
+                } => shell_env::CommandSpec::Pipeline {
+                    predecessors: predecessors.iter().map(|p| p.into()).collect(),
+                    final_cmd: Box::new(final_cmd.as_ref().into()),
+                },
+                ShipRunnableInner::Subshell { runnable } => shell_env::CommandSpec::Subshell {
+                    runnable: Box::new(runnable.as_ref().into()),
+                },
+            }
+        }
+    }
+
+    #[pymethods]
+    impl ShipRunnable {
+        fn __or__(&self, other: &ShipRunnable) -> PyResult<ShipRunnable> {
+            use ShipRunnableInner::*;
 
             let result_inner = match (self.0.as_ref(), other.0.as_ref()) {
                 // Atomic | Atomic -> Pipeline([lhs], rhs)
                 // (Command and Subshell are both atomic units)
-                (Command { .. } | Subshell(_), Command { .. } | Subshell(_)) => {
+                (Command { .. } | Subshell { .. }, Command { .. } | Subshell { .. }) => {
                     Arc::new(Pipeline {
                         predecessors: vec![self.clone()],
                         final_cmd: Box::new(other.clone()),
@@ -44,7 +99,7 @@ pub mod shp {
                         predecessors,
                         final_cmd,
                     },
-                    Command { .. } | Subshell(_),
+                    Command { .. } | Subshell { .. },
                 ) => {
                     let mut new_predecessors = predecessors.clone();
                     new_predecessors.push((**final_cmd).clone());
@@ -56,7 +111,7 @@ pub mod shp {
 
                 // Atomic | Pipeline -> prepend to pipeline
                 (
-                    Command { .. } | Subshell(_),
+                    Command { .. } | Subshell { .. },
                     Pipeline {
                         predecessors,
                         final_cmd,
@@ -91,18 +146,33 @@ pub mod shp {
                 }
             };
 
-            Ok(ShellRunnable(result_inner))
+            Ok(ShipRunnable(result_inner))
+        }
+
+        fn __call__(&self) -> PyResult<ShipResult> {
+            let spec: shell_env::CommandSpec = self.into();
+            let result = shell_env::execute(&spec);
+            Ok(ShipResult {
+                exit_code: result.exit_code,
+            })
         }
     }
 
     #[pyfunction]
-    #[pyo3(signature = (cmd, *args))]
-    fn cmd(cmd: String, args: Vec<String>) -> PyResult<ShellRunnable> {
+    #[pyo3(signature = (name))]
+    fn prog(name: String) -> PyResult<ShipProgram> {
+        // TODO: Resolve the program from the shell environment
+        Ok(ShipProgram { name })
+    }
+
+    #[pyfunction]
+    #[pyo3(signature = (prog, *args))]
+    fn cmd(prog: ShipProgram, args: Vec<String>) -> PyResult<ShipRunnable> {
         // PyO3 automatically converts:
         // - cmd to String (calls __str__ if needed)
         // - each arg to String (calls __str__ if needed)
-        Ok(ShellRunnable(Arc::new(ShellRunnableInner::Command {
-            cmd,
+        Ok(ShipRunnable(Arc::new(ShipRunnableInner::Command {
+            prog,
             args,
         })))
     }
@@ -110,10 +180,10 @@ pub mod shp {
     #[pyfunction]
     #[pyo3(signature = (cmd1, cmd2, *cmds))]
     fn pipe(
-        cmd1: ShellRunnable,
-        cmd2: ShellRunnable,
-        cmds: Vec<ShellRunnable>,
-    ) -> PyResult<ShellRunnable> {
+        cmd1: ShipRunnable,
+        cmd2: ShipRunnable,
+        cmds: Vec<ShipRunnable>,
+    ) -> PyResult<ShipRunnable> {
         let mut result = cmd1.__or__(&cmd2)?;
         for cmd in cmds {
             result = result.__or__(&cmd)?;
@@ -123,9 +193,9 @@ pub mod shp {
     }
 
     #[pyfunction]
-    fn sub(runnable: ShellRunnable) -> PyResult<ShellRunnable> {
-        Ok(ShellRunnable(Arc::new(ShellRunnableInner::Subshell(
-            Box::new(runnable),
-        ))))
+    fn sub(runnable: ShipRunnable) -> PyResult<ShipRunnable> {
+        Ok(ShipRunnable(Arc::new(ShipRunnableInner::Subshell {
+            runnable: Box::new(runnable),
+        })))
     }
 }
