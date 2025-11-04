@@ -1,11 +1,102 @@
+use pyo3::exceptions::PyKeyError;
 use pyo3::prelude::*;
+use pyo3::types::PyList;
+use std::ffi::CString;
 use std::sync::Arc;
 
-use crate::shell_env;
+use crate::shell_env::{self, EnvValue};
+
+/// Execute a line of Python code in REPL mode with auto-run for ShipRunnable
+pub fn execute_repl_line(py: Python, line: &str) -> PyResult<()> {
+    let code = CString::new(line)?;
+
+    // Try to evaluate as an expression first
+    match py.eval(code.as_c_str(), None, None) {
+        Ok(result) => {
+            // Check if it's a ShipRunnable - auto-run it
+            if result.is_instance_of::<shp::ShipRunnable>() {
+                // Call the Python __call__ method (i.e., invoke the runnable)
+                let exec_result = result.call0()?;
+                // Check if exit code is non-zero
+                if let Ok(ship_result) = exec_result.extract::<shp::ShipResult>()
+                    && ship_result.exit_code != 0
+                {
+                    println!("Exit code: {}", ship_result.exit_code);
+                }
+            } else if !result.is_none() {
+                // Print non-None values using repr() like Python REPL
+                println!("{}", result.repr()?);
+            }
+            Ok(())
+        }
+        Err(_) => {
+            // If eval fails, try running as a statement
+            py.run(code.as_c_str(), None, None)
+        }
+    }
+}
+
+/// Convert a Python object to an EnvValue
+fn py_to_env_value(obj: &Bound<PyAny>) -> PyResult<EnvValue> {
+    // Try as None first
+    if obj.is_none() {
+        return Ok(EnvValue::None);
+    }
+
+    // Try as string
+    if let Ok(s) = obj.extract::<String>() {
+        return Ok(EnvValue::String(s));
+    }
+
+    // Try as integer
+    if let Ok(i) = obj.extract::<i64>() {
+        return Ok(EnvValue::Integer(i));
+    }
+
+    // Try as float
+    if let Ok(f) = obj.extract::<f64>() {
+        return Ok(EnvValue::Decimal(f));
+    }
+
+    // Try as list
+    if let Ok(list) = obj.clone().cast_into::<PyList>() {
+        let mut vec = Vec::new();
+        for item in list.iter() {
+            vec.push(py_to_env_value(&item)?);
+        }
+        return Ok(EnvValue::List(vec));
+    }
+
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+        "Value must be str, int, float, None, or list of these types",
+    ))
+}
+
+/// Convert an EnvValue to a Python object
+fn env_value_to_py(py: Python, value: &EnvValue) -> PyResult<Py<PyAny>> {
+    match value {
+        EnvValue::String(s) => Ok(s.clone().into_pyobject(py)?.into_any().unbind()),
+        EnvValue::Integer(i) => Ok((*i).into_pyobject(py)?.into_any().unbind()),
+        EnvValue::Decimal(f) => Ok((*f).into_pyobject(py)?.into_any().unbind()),
+        EnvValue::None => Ok(py.None()),
+        EnvValue::List(vec) => {
+            let items: Result<Vec<Py<PyAny>>, _> =
+                vec.iter().map(|item| env_value_to_py(py, item)).collect();
+            Ok(PyList::new(py, &items?)?.into_any().unbind())
+        }
+    }
+}
 
 #[pymodule]
 pub mod shp {
     use super::*;
+
+    /// Initialize the module and add the env instance
+    #[pymodule_init]
+    fn init(m: &Bound<PyModule>) -> PyResult<()> {
+        m.add("env", Py::new(m.py(), ShipEnv)?)?;
+        Ok(())
+    }
 
     #[pyclass]
     #[derive(Clone)]
@@ -197,5 +288,93 @@ pub mod shp {
     #[pyfunction]
     fn shexec(runnable: &ShipRunnable) -> PyResult<ShipResult> {
         runnable.__call__()
+    }
+
+    /// Get an environment variable
+    #[pyfunction]
+    fn get_env(py: Python, key: String) -> PyResult<Py<PyAny>> {
+        match shell_env::get_var(&key) {
+            Some(value) => env_value_to_py(py, &value),
+            None => Ok(py.None()),
+        }
+    }
+
+    /// Set an environment variable
+    #[pyfunction]
+    fn set_env(key: String, value: Bound<PyAny>) -> PyResult<()> {
+        let env_value = py_to_env_value(&value)?;
+        shell_env::set_var(key, env_value);
+        Ok(())
+    }
+
+    /// Dictionary-like access to environment variables
+    #[pyclass]
+    struct ShipEnv;
+
+    #[pymethods]
+    impl ShipEnv {
+        fn __getitem__(&self, py: Python, key: String) -> PyResult<Py<PyAny>> {
+            match shell_env::get_var(&key) {
+                Some(value) => env_value_to_py(py, &value),
+                None => Err(PyKeyError::new_err(format!("Key '{}' not found", key))),
+            }
+        }
+
+        fn __setitem__(&self, key: String, value: Bound<PyAny>) -> PyResult<()> {
+            let env_value = py_to_env_value(&value)?;
+            shell_env::set_var(key, env_value);
+            Ok(())
+        }
+
+        fn __delitem__(&self, key: String) -> PyResult<()> {
+            match shell_env::unset_var(&key) {
+                Some(_) => Ok(()),
+                None => Err(PyKeyError::new_err(format!("Key '{}' not found", key))),
+            }
+        }
+
+        fn __contains__(&self, key: String) -> PyResult<bool> {
+            Ok(shell_env::contains_var(&key))
+        }
+
+        fn __len__(&self) -> PyResult<usize> {
+            Ok(shell_env::var_count())
+        }
+
+        fn keys(&self, py: Python) -> PyResult<Py<PyList>> {
+            let keys = shell_env::all_var_keys();
+            Ok(PyList::new(py, &keys)?.into())
+        }
+
+        fn values(&self, py: Python) -> PyResult<Py<PyList>> {
+            let all_vars = shell_env::all_vars();
+            let values: Result<Vec<Py<PyAny>>, _> =
+                all_vars.values().map(|v| env_value_to_py(py, v)).collect();
+            Ok(PyList::new(py, &values?)?.into())
+        }
+
+        fn items(&self, py: Python) -> PyResult<Py<PyList>> {
+            let all_vars = shell_env::all_vars();
+            let items: Result<Vec<(String, Py<PyAny>)>, PyErr> = all_vars
+                .iter()
+                .map(|(k, v)| Ok((k.clone(), env_value_to_py(py, v)?)))
+                .collect();
+            Ok(PyList::new(py, &items?)?.into())
+        }
+
+        fn get(
+            &self,
+            py: Python,
+            key: String,
+            default: Option<Bound<PyAny>>,
+        ) -> PyResult<Py<PyAny>> {
+            match shell_env::get_var(&key) {
+                Some(value) => env_value_to_py(py, &value),
+                None => match default {
+                    Some(d) => Ok(d.unbind()),
+                    None => Ok(py.None()),
+                },
+            }
+        }
     }
 }

@@ -8,12 +8,18 @@ use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use std::ffi::CString;
 
+// Embed Python initialization files at compile time
+const PYTHON_INIT: &str = include_str!("../python/init.py");
+
 fn main() -> Result<()> {
     // Register the shp module before initializing Python
     pyo3::append_to_inittab!(shp);
 
     // Initialize Python interpreter
     Python::initialize();
+
+    // Initialize shell environment from parent process
+    shell_env::init_from_parent();
 
     // Create rustyline editor for REPL
     let mut rl = DefaultEditor::new()?;
@@ -22,8 +28,12 @@ fn main() -> Result<()> {
     println!("Type 'exit()' or press Ctrl+D to quit");
     println!();
 
-    // Import shp module into __main__ namespace
-    Python::attach(|py| py.run(c"from shp import *", None, None))?;
+    // Initialize Python environment
+    Python::attach(|py| {
+        let init_cstr = CString::new(PYTHON_INIT).unwrap();
+        py.run(init_cstr.as_c_str(), None, None)?;
+        Ok::<(), PyErr>(())
+    })?;
 
     // Main REPL loop
     loop {
@@ -40,27 +50,10 @@ fn main() -> Result<()> {
                     continue;
                 }
 
-                // Execute Python code with attach
+                // Execute Python code with auto-run for ShipRunnable
                 Python::attach(|py| {
-                    // Convert to CString for PyO3
-                    if let Ok(code) = CString::new(line.as_str()) {
-                        // Try to evaluate as an expression first
-                        match py.eval(code.as_c_str(), None, None) {
-                            Ok(result) => {
-                                // Check if result is not None
-                                if !result.is_none() {
-                                    // Print the result
-                                    println!("{}", result);
-                                }
-                            }
-                            Err(_) => {
-                                // If eval fails, try running as a statement
-                                if let Err(e) = py.run(code.as_c_str(), None, None) {
-                                    // Print Python errors
-                                    e.print(py);
-                                }
-                            }
-                        }
+                    if let Err(e) = bindings::execute_repl_line(py, &line) {
+                        e.print(py);
                     }
                 });
             }
