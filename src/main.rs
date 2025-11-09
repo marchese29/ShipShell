@@ -1,5 +1,5 @@
 mod bindings;
-mod shell_env;
+mod shell;
 
 use anyhow::Result;
 use bindings::shp;
@@ -19,7 +19,7 @@ fn main() -> Result<()> {
     Python::initialize();
 
     // Initialize shell environment from parent process
-    shell_env::init_from_parent();
+    shell::init_from_parent();
 
     // Create rustyline editor for REPL
     let mut rl = DefaultEditor::new()?;

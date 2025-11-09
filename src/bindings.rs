@@ -4,7 +4,7 @@ use pyo3::types::PyList;
 use std::ffi::CString;
 use std::sync::Arc;
 
-use crate::shell_env::{self, EnvValue};
+use crate::shell::{self, CommandSpec, EnvValue, execute};
 
 /// Execute a line of Python code in REPL mode with auto-run for ShipRunnable
 pub fn execute_repl_line(py: Python, line: &str) -> PyResult<()> {
@@ -156,21 +156,21 @@ pub mod shp {
         pub exit_code: u8,
     }
 
-    impl From<&ShipRunnable> for shell_env::CommandSpec {
+    impl From<&ShipRunnable> for CommandSpec {
         fn from(runnable: &ShipRunnable) -> Self {
             match runnable.0.as_ref() {
-                Runnable::Command { prog, args } => shell_env::CommandSpec::Command {
+                Runnable::Command { prog, args } => CommandSpec::Command {
                     program: prog.name().to_string(),
                     args: args.clone(),
                 },
                 Runnable::Pipeline {
                     predecessors,
                     final_cmd,
-                } => shell_env::CommandSpec::Pipeline {
+                } => CommandSpec::Pipeline {
                     predecessors: predecessors.iter().map(|p| p.into()).collect(),
                     final_cmd: Box::new(final_cmd.into()),
                 },
-                Runnable::Subshell { runnable } => shell_env::CommandSpec::Subshell {
+                Runnable::Subshell { runnable } => CommandSpec::Subshell {
                     runnable: Box::new(runnable.into()),
                 },
             }
@@ -249,8 +249,8 @@ pub mod shp {
         }
 
         fn __call__(&self) -> PyResult<ShipResult> {
-            let spec: shell_env::CommandSpec = self.into();
-            let result = shell_env::execute(&spec);
+            let spec: CommandSpec = self.into();
+            let result = execute(&spec);
             Ok(ShipResult {
                 exit_code: result.exit_code,
             })
@@ -301,7 +301,7 @@ pub mod shp {
     /// Get an environment variable
     #[pyfunction]
     fn get_env(py: Python, key: String) -> PyResult<Py<PyAny>> {
-        match shell_env::get_var(&key) {
+        match shell::get_var(&key) {
             Some(value) => env_value_to_py(py, &value),
             None => Ok(py.None()),
         }
@@ -311,7 +311,7 @@ pub mod shp {
     #[pyfunction]
     fn set_env(key: String, value: Bound<PyAny>) -> PyResult<()> {
         let env_value = py_to_env_value(&value)?;
-        shell_env::set_var(key, env_value);
+        shell::set_var(key, env_value);
         Ok(())
     }
 
@@ -322,7 +322,7 @@ pub mod shp {
     #[pymethods]
     impl ShipEnv {
         fn __getitem__(&self, py: Python, key: String) -> PyResult<Py<PyAny>> {
-            match shell_env::get_var(&key) {
+            match shell::get_var(&key) {
                 Some(value) => env_value_to_py(py, &value),
                 None => Err(PyKeyError::new_err(format!("Key '{}' not found", key))),
             }
@@ -330,39 +330,39 @@ pub mod shp {
 
         fn __setitem__(&self, key: String, value: Bound<PyAny>) -> PyResult<()> {
             let env_value = py_to_env_value(&value)?;
-            shell_env::set_var(key, env_value);
+            shell::set_var(key, env_value);
             Ok(())
         }
 
         fn __delitem__(&self, key: String) -> PyResult<()> {
-            match shell_env::unset_var(&key) {
+            match shell::unset_var(&key) {
                 Some(_) => Ok(()),
                 None => Err(PyKeyError::new_err(format!("Key '{}' not found", key))),
             }
         }
 
         fn __contains__(&self, key: String) -> PyResult<bool> {
-            Ok(shell_env::contains_var(&key))
+            Ok(shell::contains_var(&key))
         }
 
         fn __len__(&self) -> PyResult<usize> {
-            Ok(shell_env::var_count())
+            Ok(shell::var_count())
         }
 
         fn keys(&self, py: Python) -> PyResult<Py<PyList>> {
-            let keys = shell_env::all_var_keys();
+            let keys = shell::all_var_keys();
             Ok(PyList::new(py, &keys)?.into())
         }
 
         fn values(&self, py: Python) -> PyResult<Py<PyList>> {
-            let all_vars = shell_env::all_vars();
+            let all_vars = shell::all_vars();
             let values: Result<Vec<Py<PyAny>>, _> =
                 all_vars.values().map(|v| env_value_to_py(py, v)).collect();
             Ok(PyList::new(py, &values?)?.into())
         }
 
         fn items(&self, py: Python) -> PyResult<Py<PyList>> {
-            let all_vars = shell_env::all_vars();
+            let all_vars = shell::all_vars();
             let items: Result<Vec<(String, Py<PyAny>)>, PyErr> = all_vars
                 .iter()
                 .map(|(k, v)| Ok((k.clone(), env_value_to_py(py, v)?)))
@@ -376,7 +376,7 @@ pub mod shp {
             key: String,
             default: Option<Bound<PyAny>>,
         ) -> PyResult<Py<PyAny>> {
-            match shell_env::get_var(&key) {
+            match shell::get_var(&key) {
                 Some(value) => env_value_to_py(py, &value),
                 None => match default {
                     Some(d) => Ok(d.unbind()),
