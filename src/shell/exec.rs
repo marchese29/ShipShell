@@ -231,14 +231,15 @@ fn resolve_program_path(program: &str) -> Result<PathBuf, ProgramResolutionError
     // Extract PATH directories, supporting both List and String variants
     let path_dirs: Vec<String> = match get_var("PATH") {
         Some(EnvValue::List(items)) => {
-            // PATH is a list - validate all items are strings
+            // PATH is a list - convert items to strings
             let mut dirs = Vec::new();
             for item in items {
                 match item {
                     EnvValue::String(s) => dirs.push(s),
+                    EnvValue::FilePath(p) => dirs.push(p.to_string_lossy().to_string()),
                     _ => {
                         return Err(ProgramResolutionError::InvalidPath(
-                            "PATH list contains non-string values".to_string(),
+                            "PATH list contains invalid values".to_string(),
                         ));
                     }
                 }
@@ -249,10 +250,14 @@ fn resolve_program_path(program: &str) -> Result<PathBuf, ProgramResolutionError
             // PATH is a colon-separated string (traditional format)
             s.split(':').map(String::from).collect()
         }
+        Some(EnvValue::FilePath(p)) => {
+            // PATH is a single FilePath - treat as single directory
+            vec![p.to_string_lossy().to_string()]
+        }
         Some(_) => {
-            // PATH is set but has invalid type (Integer, Decimal, None)
+            // PATH is set but has invalid type (Integer, Decimal, Bool, None)
             return Err(ProgramResolutionError::InvalidPath(
-                "PATH must be a string or list".to_string(),
+                "PATH must be a string, path, or list".to_string(),
             ));
         }
         None => {

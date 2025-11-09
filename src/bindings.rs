@@ -12,7 +12,9 @@ pub fn execute_repl_line(py: Python, line: &str) -> PyResult<()> {
     let code = CString::new(line)?;
 
     // Try to evaluate as an expression first
-    match py.eval(code.as_c_str(), None, None) {
+    let eval_result = py.eval(code.as_c_str(), None, None);
+
+    match eval_result {
         Ok(result) => {
             // Check if it's a ShipRunnable - auto-run it
             if result.is_instance_of::<shp::ShipRunnable>() {
@@ -25,14 +27,36 @@ pub fn execute_repl_line(py: Python, line: &str) -> PyResult<()> {
                     println!("Exit code: {}", ship_result.exit_code);
                 }
             } else if !result.is_none() {
-                // Print non-None values using repr() like Python REPL
-                println!("{}", result.repr()?);
+                // Check if this object ID is in the silent set
+                let builtins = py.import("ship_ergo.builtins")?;
+                let silent_ids = builtins.getattr("_silent_ids")?;
+
+                // Get the ID of the result object
+                let id_code = CString::new("id")?;
+                let id_fn = py.eval(id_code.as_c_str(), None, None)?;
+                let obj_id = id_fn.call1((&result,))?;
+
+                // Only print if not in silent set
+                if !silent_ids.contains(obj_id)? {
+                    println!("{}", result.repr()?);
+                }
             }
+
+            // Clear silent marks after evaluation
+            let builtins = py.import("ship_ergo.builtins")?;
+            builtins.call_method0("_clear_silent_marks")?;
+
             Ok(())
         }
         Err(_) => {
             // If eval fails, try running as a statement
-            py.run(code.as_c_str(), None, None)
+            let run_result = py.run(code.as_c_str(), None, None);
+
+            // Clear silent marks after statement execution too
+            let builtins = py.import("ship_ergo.builtins")?;
+            builtins.call_method0("_clear_silent_marks")?;
+
+            run_result
         }
     }
 }
@@ -40,6 +64,7 @@ pub fn execute_repl_line(py: Python, line: &str) -> PyResult<()> {
 /// Convert a Python object to an EnvValue with strict type checking (no coercion)
 fn py_to_env_value(obj: &Bound<PyAny>) -> PyResult<EnvValue> {
     use pyo3::types::{PyBool, PyFloat, PyInt, PyString};
+    use std::path::PathBuf;
 
     // Check for None first
     if obj.is_none() {
@@ -66,6 +91,16 @@ fn py_to_env_value(obj: &Bound<PyAny>) -> PyResult<EnvValue> {
         return Ok(EnvValue::String(obj.extract::<String>()?));
     }
 
+    // Check for pathlib.Path
+    let py = obj.py();
+    if let Ok(pathlib) = py.import("pathlib")
+        && let Ok(path_class) = pathlib.getattr("Path")
+        && obj.is_instance(&path_class)?
+    {
+        let path_str: String = obj.call_method0("__str__")?.extract()?;
+        return Ok(EnvValue::FilePath(PathBuf::from(path_str)));
+    }
+
     // Check for list
     if let Ok(list) = obj.cast::<PyList>() {
         let mut vec = Vec::new();
@@ -76,7 +111,7 @@ fn py_to_env_value(obj: &Bound<PyAny>) -> PyResult<EnvValue> {
     }
 
     Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-        "Value must be str, int, float, bool, None, or list - no coercion allowed",
+        "Value must be str, int, float, bool, None, Path, or list - no coercion allowed",
     ))
 }
 
@@ -92,6 +127,14 @@ fn env_value_to_py(py: Python, value: &EnvValue) -> PyResult<Py<PyAny>> {
             let items: Result<Vec<Py<PyAny>>, _> =
                 vec.iter().map(|item| env_value_to_py(py, item)).collect();
             Ok(PyList::new(py, &items?)?.into_any().unbind())
+        }
+        EnvValue::FilePath(path) => {
+            // Import pathlib.Path and create a Path object
+            let pathlib = py.import("pathlib")?;
+            let path_class = pathlib.getattr("Path")?;
+            let path_str = path.to_string_lossy().to_string();
+            let path_obj = path_class.call1((path_str,))?;
+            Ok(path_obj.unbind())
         }
     }
 }
@@ -473,6 +516,7 @@ pub mod shp {
             Ok(PyList::new(py, &items?)?.into())
         }
 
+        #[pyo3(signature = (key, default=None))]
         fn get(
             &self,
             py: Python,

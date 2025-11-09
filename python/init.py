@@ -5,9 +5,15 @@ NOTE: This code is run directly in the shell REPL - whatever you do in here will
 shell environment.
 """
 
-# shp module is defined natively in rust
+# Allow easy access to shp bindings
 from shp import *
+import shp
 
-# Import shell built-in functions from ship_ergo
-# Using "from ... import *" only imports names in __all__, keeping typing imports out of namespace
+# Included imports
+# Use sparingly - we would prefer people opt in to these in their own configuration files
+import os
+from pathlib import Path
+
+# ship_ergo.builtins is dual-purpose.  People can import it in their scripts for a better IDE
+# editing experience; and we also use it as the actual source implementation
 from ship_ergo.builtins import *

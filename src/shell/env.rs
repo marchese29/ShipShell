@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::CString;
+use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
 
 /// Represents a value that can be stored in the shell environment
@@ -11,6 +12,7 @@ pub enum EnvValue {
     Bool(bool),
     None,
     List(Vec<EnvValue>),
+    FilePath(PathBuf),
 }
 
 impl EnvValue {
@@ -34,7 +36,62 @@ impl EnvValue {
                 .map(|item| item.to_string_repr()) // Recursive!
                 .collect::<Vec<_>>()
                 .join(":"),
+            EnvValue::FilePath(path) => path.to_string_lossy().to_string(),
         }
+    }
+
+    /// Parse a string value into an EnvValue, attempting to detect the appropriate type
+    /// Priority order ensures roundtrip consistency and proper handling of edge cases
+    fn parse_from_string(s: &str) -> EnvValue {
+        // 1. Empty string → None
+        if s.is_empty() {
+            return EnvValue::None;
+        }
+
+        // 2. Exact "True" → Bool(true)
+        if s == "True" {
+            return EnvValue::Bool(true);
+        }
+
+        // 3. Exact "False" → Bool(false)
+        if s == "False" {
+            return EnvValue::Bool(false);
+        }
+
+        // 4. Valid integer (without decimal point)
+        if !s.contains('.')
+            && let Ok(i) = s.parse::<i64>()
+        {
+            return EnvValue::Integer(i);
+        }
+
+        // 5. Valid decimal (with decimal point)
+        if s.contains('.')
+            && let Ok(f) = s.parse::<f64>()
+        {
+            return EnvValue::Decimal(f);
+        }
+
+        // 6. Contains ":" → List (recursively parsed, BEFORE path check)
+        // This prevents paths with colons (like PATH=/usr/bin:/bin) from being incorrectly split
+        if s.contains(':') {
+            let items: Vec<EnvValue> = s.split(':').map(EnvValue::parse_from_string).collect();
+            return EnvValue::List(items);
+        }
+
+        // 7. Path-like patterns → FilePath (stored unresolved)
+        // Check for common path patterns (no filesystem check needed)
+        if s.starts_with('/') ||                    // Absolute Unix path: /usr/bin
+           (s.starts_with('~') && s.contains('/')) || // Home-relative path: ~/Documents
+           s.starts_with("./") ||                    // Current directory: ./file.txt
+           s.starts_with("../")
+        {
+            // Parent directory: ../file.txt
+            return EnvValue::FilePath(PathBuf::from(s));
+        }
+
+        // 8. Everything else → String
+        EnvValue::String(s.to_string())
     }
 }
 
@@ -55,7 +112,7 @@ impl ShellEnvironment {
     pub fn from_parent() -> Self {
         let mut env_vars = HashMap::new();
         for (key, value) in std::env::vars() {
-            env_vars.insert(key, EnvValue::String(value));
+            env_vars.insert(key, EnvValue::parse_from_string(&value));
         }
         Self { env_vars }
     }

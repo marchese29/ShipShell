@@ -6,12 +6,40 @@ both in ShipShell and standalone Python environments.
 """
 
 from pathlib import Path
-from typing import IO
+from typing import IO, TypeVar, TYPE_CHECKING
 import os
 import sys
 
+from shp import env
+
 # Control what gets exported with "from ... import *"
 __all__ = ["cd", "pwd", "pushd", "popd", "dirs", "source", "exit", "quit"]
+
+# Type variable for silent() helper
+T = TypeVar("T")
+
+# Set of object IDs that should be silent in REPL (cleared after each evaluation)
+_silent_ids: set[int] = set()
+
+
+def _silent(value: T) -> T:
+    """
+    Mark a value as silent for the current REPL evaluation.
+
+    Type checkers see: T -> T (identity function)
+    Runtime: Adds object ID to transient silent set
+    """
+    if TYPE_CHECKING:
+        return value  # Type checker sees this
+    else:
+        _silent_ids.add(id(value))
+        return value
+
+
+def _clear_silent_marks() -> None:
+    """Internal: Clear silent markers after REPL evaluation."""
+    _silent_ids.clear()
+
 
 # Directory stack for pushd/popd
 _dirstack: list[Path] = []
@@ -28,7 +56,9 @@ def cd(path: str | Path | None = None) -> Path:
     else:
         target = Path(path).expanduser()
     os.chdir(target)
-    return Path.cwd()
+    new_dir = Path.cwd()
+    env["PWD"] = new_dir  # Store as Path in ShipShell env
+    return _silent(new_dir)
 
 
 def source(file: str | Path | IO[str]) -> None:
@@ -60,7 +90,9 @@ def pushd(path: str | Path) -> Path:
     Returns the new current directory as a Path object.
     """
     _dirstack.append(Path.cwd())
-    return cd(path)
+    result = cd(path)
+    print(result)
+    return _silent(result)
 
 
 def popd() -> Path | None:
@@ -72,7 +104,9 @@ def popd() -> Path | None:
     if not _dirstack:
         print("popd: directory stack empty")
         return None
-    return cd(_dirstack.pop())
+    result = cd(_dirstack.pop())
+    print(result)
+    return _silent(result)
 
 
 def dirs() -> list[Path]:
@@ -81,9 +115,29 @@ def dirs() -> list[Path]:
 
     Returns a list with current directory first, followed by the stack.
     """
-    return [Path.cwd()] + _dirstack
+    result = [Path.cwd()] + _dirstack
+    for d in result:
+        print(d)
+    return _silent(result)
 
 
-def pwd() -> Path:
-    """Get the current working directory as a Path object."""
-    return Path.cwd()
+def pwd(physical: bool = False) -> Path:
+    """
+    Get the current working directory.
+
+    Args:
+        physical: If True, return the physical path (resolve symlinks).
+                 If False (default), return the logical path from PWD.
+
+    Returns:
+        Path object representing the current directory
+    """
+    if physical:
+        # Physical path: resolve all symlinks
+        result = Path.cwd().resolve()
+    else:
+        # Logical path: get from ShipShell environment (already a Path!)
+        result = env.get("PWD", Path.cwd())
+
+    print(result)
+    return _silent(result)
