@@ -48,6 +48,12 @@ impl ProgramResolutionError {
 }
 
 #[derive(Debug, Clone)]
+pub enum RedirectTarget {
+    FilePath { path: String, append: bool },
+    FileDescriptor { fd: i32 },
+}
+
+#[derive(Debug, Clone)]
 pub enum CommandSpec {
     Command {
         program: String,
@@ -60,9 +66,13 @@ pub enum CommandSpec {
     Subshell {
         runnable: Box<CommandSpec>,
     },
+    Redirect {
+        runnable: Box<CommandSpec>,
+        target: RedirectTarget,
+    },
 }
 
-/// Execute a command, pipeline, or subshell
+/// Execute a command, pipeline, subshell, or redirect
 pub fn execute(spec: &CommandSpec) -> ShellResult {
     match spec {
         CommandSpec::Command { program, args } => execute_command(program, args),
@@ -71,6 +81,7 @@ pub fn execute(spec: &CommandSpec) -> ShellResult {
             final_cmd,
         } => execute_pipeline(predecessors, final_cmd),
         CommandSpec::Subshell { runnable } => execute_subshell(runnable),
+        CommandSpec::Redirect { runnable, target } => execute_redirect(runnable, target),
     }
 }
 
@@ -96,6 +107,57 @@ fn execute_subshell(spec: &CommandSpec) -> ShellResult {
         Ok(ForkResult::Parent { child }) => wait_for_child(child),
         Ok(ForkResult::Child) => {
             let result = execute(spec); // Recursive!
+            std::process::exit(result.exit_code as i32);
+        }
+        Err(e) => panic!("fork failed: {}", e),
+    }
+}
+
+/// Execute command with output redirection
+fn execute_redirect(spec: &CommandSpec, target: &RedirectTarget) -> ShellResult {
+    match unsafe { fork() } {
+        Ok(ForkResult::Parent { child }) => wait_for_child(child),
+        Ok(ForkResult::Child) => {
+            // Set up the output redirection
+            match target {
+                RedirectTarget::FilePath { path, append } => {
+                    // Open the file with appropriate flags
+                    use std::fs::OpenOptions;
+                    let file = OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .truncate(!append)
+                        .append(*append)
+                        .open(path);
+
+                    match file {
+                        Ok(f) => {
+                            use std::os::unix::io::IntoRawFd;
+                            let fd = f.into_raw_fd();
+                            // Redirect stdout to the file
+                            unsafe {
+                                libc::dup2(fd, 1);
+                                libc::close(fd);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("{}: {}", path, e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                RedirectTarget::FileDescriptor { fd } => {
+                    // Redirect stdout to the provided file descriptor
+                    unsafe {
+                        libc::dup2(*fd, 1);
+                        // Close the original fd since dup2 created a copy at fd 1
+                        libc::close(*fd);
+                    }
+                }
+            }
+
+            // Execute the inner command
+            let result = execute(spec);
             std::process::exit(result.exit_code as i32);
         }
         Err(e) => panic!("fork failed: {}", e),
@@ -274,6 +336,11 @@ fn exec_pipeline_stage(spec: &CommandSpec) -> ! {
         CommandSpec::Subshell { runnable } => {
             // Execute the subshell and exit with its result
             let result = execute(runnable);
+            std::process::exit(result.exit_code as i32);
+        }
+        CommandSpec::Redirect { .. } => {
+            // Execute the redirect and exit with its result
+            let result = execute(spec);
             std::process::exit(result.exit_code as i32);
         }
         CommandSpec::Pipeline { .. } => {

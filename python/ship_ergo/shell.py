@@ -41,6 +41,22 @@ class ShipRunnable:
         """Pipe this command's output to another command."""
         raise NotImplementedError("Piping only works in ShipShell REPL")
 
+    def __gt__(self, target: Any) -> "ShipRunnable":
+        """Redirect output to a file (truncate mode).
+
+        Args:
+            target: Either a string path or a file-like object with fileno()
+        """
+        raise NotImplementedError("Output redirection only works in ShipShell REPL")
+
+    def __rshift__(self, target: Any) -> "ShipRunnable":
+        """Redirect output to a file (append mode).
+
+        Args:
+            target: Either a string path or a file-like object with fileno()
+        """
+        raise NotImplementedError("Output redirection only works in ShipShell REPL")
+
 
 class ShipProgram:
     """Represents a program that can be executed."""

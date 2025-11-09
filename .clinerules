@@ -1,0 +1,59 @@
+# ShipShell Project Rules for Cline
+
+## Interactive Shell Testing Workflow
+
+ShipShell now has proper multi-line input support! You can test features using either automated piping or interactive pasting.
+
+### Method 1: Automated Testing (Preferred for Simple Tests)
+
+For single-line or simple multi-line commands, pipe input directly to `cargo run`:
+
+```bash
+echo "prog('echo')('Hello') > 'test.txt'
+prog('cat')('test.txt')
+exit()" | cargo run
+```
+
+**Advantages:**
+- Fast and automated
+- Assistant can see all output immediately
+- Works great for testing simple statements
+
+### Method 2: Interactive Testing (For Complex Multi-line)
+
+For complex indented blocks or when you want to verify interactive behavior:
+
+1. **Assistant provides test commands** - I tell you what to paste
+2. **Assistant runs `cargo run`** - I execute `cargo run` with no input
+3. **You paste the test commands** - You paste into the running shell
+4. **You exit the shell** - Run `exit()` or press Ctrl+D
+5. **Assistant sees the output** - I can verify the results
+
+**Important for pasting indented blocks:**
+- Include a **blank line after indented blocks** (like `with`, `for`, `if`) to signal completion
+- This mimics standard Python REPL behavior
+
+### Example: Automated Test
+
+```bash
+echo "x = 1
+y = 2
+print(f'x={x}, y={y}')
+exit()" | cargo run
+```
+
+### Example: Interactive Test with Indented Block
+
+Assistant provides commands:
+```
+"Please paste this into the shell (note the blank line after the with block):
+
+with open('test.txt', 'w') as f:
+    f.write('Hello\\n')
+
+prog('cat')('test.txt')
+exit()
+"
+```
+
+Then assistant runs `cargo run`, user pastes the commands, and the shell executes them correctly.

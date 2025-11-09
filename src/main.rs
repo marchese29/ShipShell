@@ -4,8 +4,8 @@ mod shell;
 use anyhow::Result;
 use bindings::shp;
 use pyo3::prelude::*;
-use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
+use rustyline::{Config, Editor};
 use std::ffi::CString;
 
 // Embed Python modules at compile time
@@ -14,6 +14,23 @@ const SHIP_SHELL_MARKER: &str = include_str!("../python/ship_shell_marker.py");
 const SHIP_ERGO_BUILTINS: &str = include_str!("../python/ship_ergo/builtins.py");
 const SHIP_ERGO_SHELL: &str = include_str!("../python/ship_ergo/shell.py");
 const SHIP_ERGO_INIT: &str = include_str!("../python/ship_ergo/__init__.py");
+
+/// Check if a Python statement is complete using Python's codeop module
+fn is_complete_python_statement(code: &str) -> bool {
+    Python::attach(|py| {
+        // Import codeop module and get compile_command function
+        let result = py
+            .import("codeop")
+            .and_then(|codeop| codeop.getattr("compile_command"))
+            .and_then(|compile_cmd| compile_cmd.call1((code,)));
+
+        match result {
+            Ok(obj) if obj.is_none() => false, // None = incomplete
+            Ok(_) => true,                     // Code object = complete
+            Err(_) => true,                    // Syntax error = let Python report it
+        }
+    })
+}
 
 /// Register embedded Python modules in sys.modules
 fn register_embedded_modules(py: Python) -> PyResult<()> {
@@ -54,7 +71,8 @@ fn main() -> Result<()> {
     shell::init_from_parent();
 
     // Create rustyline editor for REPL
-    let mut rl = DefaultEditor::new()?;
+    let config = Config::builder().build();
+    let mut rl: Editor<(), _> = Editor::with_config(config)?;
 
     println!("ShipShell Python REPL");
     println!("Type 'exit()' or press Ctrl+D to quit");
@@ -74,26 +92,43 @@ fn main() -> Result<()> {
     })?;
 
     // Main REPL loop
+    let mut buffer = String::new();
     loop {
-        // Read input with "ship>" prompt
-        let readline = rl.readline("ship> ");
+        // Use different prompt for continuation lines
+        let prompt = if buffer.is_empty() {
+            "ship> "
+        } else {
+            "..... "
+        };
+
+        let readline = rl.readline(prompt);
 
         match readline {
             Ok(line) => {
-                // Add to history
-                let _ = rl.add_history_entry(line.as_str());
-
-                // Skip empty lines
-                if line.trim().is_empty() {
-                    continue;
+                // Append line to buffer
+                if !buffer.is_empty() {
+                    buffer.push('\n');
                 }
+                buffer.push_str(&line);
 
-                // Execute Python code with auto-run for ShipRunnable
-                Python::attach(|py| {
-                    if let Err(e) = bindings::execute_repl_line(py, &line) {
-                        e.print(py);
+                // Check if statement is complete
+                if is_complete_python_statement(&buffer) {
+                    // Add complete statement to history
+                    let _ = rl.add_history_entry(buffer.as_str());
+
+                    // Skip empty statements
+                    if !buffer.trim().is_empty() {
+                        // Execute Python code with auto-run for ShipRunnable
+                        Python::attach(|py| {
+                            if let Err(e) = bindings::execute_repl_line(py, &buffer) {
+                                e.print(py);
+                            }
+                        });
                     }
-                });
+
+                    // Clear buffer for next statement
+                    buffer.clear();
+                }
             }
             Err(ReadlineError::Interrupted) => {
                 // Ctrl+C - continue REPL

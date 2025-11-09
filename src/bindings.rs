@@ -1,3 +1,4 @@
+use nix::libc;
 use pyo3::exceptions::PyKeyError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
@@ -147,6 +148,16 @@ pub mod shp {
         Subshell {
             runnable: ShipRunnable,
         },
+        Redirect {
+            runnable: ShipRunnable,
+            target: RedirectTarget,
+        },
+    }
+
+    #[derive(Clone)]
+    enum RedirectTarget {
+        FilePath { path: String, append: bool },
+        FileDescriptor { fd: i32 },
     }
 
     #[pyclass]
@@ -173,6 +184,23 @@ pub mod shp {
                 Runnable::Subshell { runnable } => CommandSpec::Subshell {
                     runnable: Box::new(runnable.into()),
                 },
+                Runnable::Redirect { runnable, target } => {
+                    let shell_target = match target {
+                        RedirectTarget::FilePath { path, append } => {
+                            shell::RedirectTarget::FilePath {
+                                path: path.clone(),
+                                append: *append,
+                            }
+                        }
+                        RedirectTarget::FileDescriptor { fd } => {
+                            shell::RedirectTarget::FileDescriptor { fd: *fd }
+                        }
+                    };
+                    CommandSpec::Redirect {
+                        runnable: Box::new(runnable.into()),
+                        target: shell_target,
+                    }
+                }
             }
         }
     }
@@ -183,6 +211,18 @@ pub mod shp {
             use Runnable::*;
 
             let result_inner = match (self.0.as_ref(), other.0.as_ref()) {
+                // Redirect on either side - error (redirections can't be piped)
+                (Redirect { .. }, _) => {
+                    return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                        "Cannot pipe from a redirected command - redirection must be the final operation",
+                    ));
+                }
+                (_, Redirect { .. }) => {
+                    return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                        "Cannot pipe to a redirected command - redirection must be the final operation",
+                    ));
+                }
+
                 // Atomic | Atomic -> Pipeline([lhs], rhs)
                 // (Command and Subshell are both atomic units)
                 (Command { .. } | Subshell { .. }, Command { .. } | Subshell { .. }) => {
@@ -254,6 +294,69 @@ pub mod shp {
             Ok(ShipResult {
                 exit_code: result.exit_code,
             })
+        }
+
+        fn __gt__(&self, target: Bound<PyAny>) -> PyResult<ShipRunnable> {
+            let redirect_target = if let Ok(path) = target.extract::<String>() {
+                // String path - truncate mode
+                RedirectTarget::FilePath {
+                    path,
+                    append: false,
+                }
+            } else if target.hasattr("fileno")? {
+                // File-like object - get file descriptor
+                let fileno_method = target.getattr("fileno")?;
+                let fd: i32 = fileno_method.call0()?.extract()?;
+
+                // Duplicate the file descriptor for cross-fork safety
+                let dup_fd = unsafe { libc::dup(fd) };
+                if dup_fd == -1 {
+                    return Err(PyErr::new::<pyo3::exceptions::PyOSError, _>(
+                        "Failed to duplicate file descriptor",
+                    ));
+                }
+
+                RedirectTarget::FileDescriptor { fd: dup_fd }
+            } else {
+                return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                    "Redirect target must be a string path or file-like object with fileno()",
+                ));
+            };
+
+            Ok(ShipRunnable(Arc::new(Runnable::Redirect {
+                runnable: self.clone(),
+                target: redirect_target,
+            })))
+        }
+
+        fn __rshift__(&self, target: Bound<PyAny>) -> PyResult<ShipRunnable> {
+            let redirect_target = if let Ok(path) = target.extract::<String>() {
+                // String path - append mode
+                RedirectTarget::FilePath { path, append: true }
+            } else if target.hasattr("fileno")? {
+                // File-like object - get file descriptor
+                let fileno_method = target.getattr("fileno")?;
+                let fd: i32 = fileno_method.call0()?.extract()?;
+
+                // Duplicate the file descriptor for cross-fork safety
+                let dup_fd = unsafe { libc::dup(fd) };
+                if dup_fd == -1 {
+                    return Err(PyErr::new::<pyo3::exceptions::PyOSError, _>(
+                        "Failed to duplicate file descriptor",
+                    ));
+                }
+
+                RedirectTarget::FileDescriptor { fd: dup_fd }
+            } else {
+                return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                    "Redirect target must be a string path or file-like object with fileno()",
+                ));
+            };
+
+            Ok(ShipRunnable(Arc::new(Runnable::Redirect {
+                runnable: self.clone(),
+                target: redirect_target,
+            })))
         }
     }
 
