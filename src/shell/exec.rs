@@ -59,6 +59,10 @@ pub enum CommandSpec {
         program: String,
         args: Vec<String>,
     },
+    Builtin {
+        name: String,
+        args: Vec<String>,
+    },
     Pipeline {
         predecessors: Vec<CommandSpec>,
         final_cmd: Box<CommandSpec>,
@@ -76,6 +80,7 @@ pub enum CommandSpec {
 pub fn execute(spec: &CommandSpec) -> ShellResult {
     match spec {
         CommandSpec::Command { program, args } => execute_command(program, args),
+        CommandSpec::Builtin { name, args } => execute_builtin(name, args, false), // Don't fork for direct REPL execution
         CommandSpec::Pipeline {
             predecessors,
             final_cmd,
@@ -94,6 +99,78 @@ fn execute_command(program: &str, args: &[String]) -> ShellResult {
         }
         Err(e) => panic!("fork failed: {}", e),
     }
+}
+
+/// Execute a builtin command
+///
+/// If should_fork is true, runs in a subprocess (for pipelines/subshells).
+/// If false, runs directly in the current process (for REPL commands).
+fn execute_builtin(name: &str, args: &[String], should_fork: bool) -> ShellResult {
+    if should_fork {
+        // Fork for isolation (pipelines, subshells)
+        match unsafe { fork() } {
+            Ok(ForkResult::Parent { child }) => wait_for_child(child),
+            Ok(ForkResult::Child) => {
+                let exit_code = call_builtin_function(name, args);
+                std::process::exit(exit_code);
+            }
+            Err(e) => panic!("fork failed: {}", e),
+        }
+    } else {
+        // Run directly in parent process (REPL commands)
+        let exit_code = call_builtin_function(name, args);
+        ShellResult {
+            exit_code: exit_code as u8,
+        }
+    }
+}
+
+/// Helper function to call a Python builtin function
+fn call_builtin_function(name: &str, args: &[String]) -> i32 {
+    use pyo3::prelude::*;
+
+    Python::attach(|py| {
+        // Import shp.builtins module
+        let builtins = match py.import("shp.builtins") {
+            Ok(m) => m,
+            Err(e) => {
+                e.print(py);
+                return 1;
+            }
+        };
+
+        // Get the builtin function
+        let func = match builtins.getattr(name) {
+            Ok(f) => f,
+            Err(_) => {
+                eprintln!("{}: builtin not found", name);
+                return 127;
+            }
+        };
+
+        // Call the builtin with args - convert Vec<String> to Python tuple
+        let result = if args.is_empty() {
+            func.call0()
+        } else {
+            // Convert Vec<String> to Python tuple of strings for unpacking
+            use pyo3::types::PyTuple;
+            let py_args =
+                PyTuple::new(py, args.iter().map(|s| s.as_str())).expect("Failed to create tuple");
+            func.call1(py_args)
+        };
+
+        match result {
+            Ok(ret) => {
+                // Try to extract exit code as int
+                ret.extract::<i32>().unwrap_or(0)
+            }
+            Err(e) => {
+                // TODO: Smarter error mapping?
+                e.print(py);
+                1
+            }
+        }
+    })
 }
 
 /// Execute a pipeline
@@ -337,6 +414,11 @@ fn exec_pipeline_stage(spec: &CommandSpec) -> ! {
     match spec {
         CommandSpec::Command { program, args } => {
             resolve_and_exec(program, args);
+        }
+        CommandSpec::Builtin { .. } => {
+            // Execute the builtin in a subshell and exit with its result
+            let result = execute(spec);
+            std::process::exit(result.exit_code as i32);
         }
         CommandSpec::Subshell { runnable } => {
             // Execute the subshell and exit with its result

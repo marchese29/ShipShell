@@ -1,8 +1,9 @@
 """
-Stub implementations of ShipShell functionality for IDE support.
+ShipShell Core API - Stubs for IDE support.
 
 These stubs provide type hints and minimal implementations for use
-outside of the ShipShell environment.
+outside of the ShipShell environment. In actual ShipShell, these are
+replaced by Rust-native implementations.
 """
 
 from typing import Any

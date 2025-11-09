@@ -1,1 +1,0 @@
-"""ShipShell Python module."""

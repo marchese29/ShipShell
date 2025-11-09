@@ -11,9 +11,9 @@ use std::ffi::CString;
 // Embed Python modules at compile time
 const PYTHON_INIT: &str = include_str!("../python/init.py");
 const SHIP_SHELL_MARKER: &str = include_str!("../python/ship_shell_marker.py");
-const SHIP_ERGO_BUILTINS: &str = include_str!("../python/ship_ergo/builtins.py");
-const SHIP_ERGO_SHELL: &str = include_str!("../python/ship_ergo/shell.py");
-const SHIP_ERGO_INIT: &str = include_str!("../python/ship_ergo/__init__.py");
+const SHP_BUILTINS: &str = include_str!("../python/shp_builtins.py");
+const SHP_ERGO_BUILTINS: &str = include_str!("../python/shp/ergo/builtins.py");
+const SHP_ERGO_INIT: &str = include_str!("../python/shp/ergo/__init__.py");
 
 /// Check if a Python statement is complete using Python's codeop module
 fn is_complete_python_statement(code: &str) -> bool {
@@ -51,11 +51,13 @@ fn register_embedded_modules(py: Python) -> PyResult<()> {
         Ok(())
     };
 
-    // Register all embedded modules (register submodules before the package)
+    // Register all embedded modules
+    // Note: We DON'T register the Python shp stub - the Rust native module is already registered
+    // The shp/__init__.py file is only for external IDE/script support
     register("ship_shell_marker", SHIP_SHELL_MARKER, None)?;
-    register("ship_ergo.builtins", SHIP_ERGO_BUILTINS, Some("ship_ergo"))?;
-    register("ship_ergo.shell", SHIP_ERGO_SHELL, Some("ship_ergo"))?;
-    register("ship_ergo", SHIP_ERGO_INIT, Some("ship_ergo"))?;
+    register("shp.builtins", SHP_BUILTINS, Some("shp"))?;
+    register("shp.ergo.builtins", SHP_ERGO_BUILTINS, Some("shp.ergo"))?;
+    register("shp.ergo", SHP_ERGO_INIT, Some("shp.ergo"))?;
 
     Ok(())
 }
@@ -84,7 +86,7 @@ fn main() -> Result<()> {
         Ok::<(), PyErr>(())
     })?;
 
-    // Initialize Python environment (can now import ship_shell_marker and ship_ergo)
+    // Initialize Python environment (can now import ship_shell_marker and shp.ergo)
     Python::attach(|py| {
         let init_cstr = CString::new(PYTHON_INIT).unwrap();
         py.run(init_cstr.as_c_str(), None, None)?;

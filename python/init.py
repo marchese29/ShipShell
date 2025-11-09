@@ -5,7 +5,7 @@ NOTE: This code is run directly in the shell REPL - whatever you do in here will
 shell environment.
 """
 
-# Allow easy access to shp bindings
+# Bare-bones initialization - import shp for shell primitives
 from shp import *
 import shp
 
@@ -14,6 +14,6 @@ import shp
 import os
 from pathlib import Path
 
-# ship_ergo.builtins is dual-purpose.  People can import it in their scripts for a better IDE
-# editing experience; and we also use it as the actual source implementation
-from ship_ergo.builtins import *
+# The only module we're going to import on the user's behalf is the ergo support or built-ins since
+# it is fundamental to the shell.  Everything else can be done in an RC file as desired.
+from shp.ergo.builtins import *

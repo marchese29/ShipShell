@@ -27,36 +27,15 @@ pub fn execute_repl_line(py: Python, line: &str) -> PyResult<()> {
                     println!("Exit code: {}", ship_result.exit_code);
                 }
             } else if !result.is_none() {
-                // Check if this object ID is in the silent set
-                let builtins = py.import("ship_ergo.builtins")?;
-                let silent_ids = builtins.getattr("_silent_ids")?;
-
-                // Get the ID of the result object
-                let id_code = CString::new("id")?;
-                let id_fn = py.eval(id_code.as_c_str(), None, None)?;
-                let obj_id = id_fn.call1((&result,))?;
-
-                // Only print if not in silent set
-                if !silent_ids.contains(obj_id)? {
-                    println!("{}", result.repr()?);
-                }
+                // Print the result
+                println!("{}", result.repr()?);
             }
-
-            // Clear silent marks after evaluation
-            let builtins = py.import("ship_ergo.builtins")?;
-            builtins.call_method0("_clear_silent_marks")?;
 
             Ok(())
         }
         Err(_) => {
             // If eval fails, try running as a statement
-            let run_result = py.run(code.as_c_str(), None, None);
-
-            // Clear silent marks after statement execution too
-            let builtins = py.import("ship_ergo.builtins")?;
-            builtins.call_method0("_clear_silent_marks")?;
-
-            run_result
+            py.run(code.as_c_str(), None, None)
         }
     }
 }
@@ -166,10 +145,18 @@ pub mod shp {
     impl ShipProgram {
         #[pyo3(signature = (*args))]
         fn __call__(&self, args: Vec<String>) -> PyResult<ShipRunnable> {
-            Ok(ShipRunnable(Arc::new(Runnable::Command {
-                prog: self.clone(),
-                args,
-            })))
+            // Check if this is a builtin
+            if is_builtin(&self.name) {
+                Ok(ShipRunnable(Arc::new(Runnable::Builtin {
+                    name: self.name.clone(),
+                    args,
+                })))
+            } else {
+                Ok(ShipRunnable(Arc::new(Runnable::Command {
+                    prog: self.clone(),
+                    args,
+                })))
+            }
         }
     }
 
@@ -184,6 +171,10 @@ pub mod shp {
             prog: ShipProgram,
             args: Vec<String>,
         },
+        Builtin {
+            name: String,
+            args: Vec<String>,
+        },
         Pipeline {
             predecessors: Vec<ShipRunnable>,
             final_cmd: ShipRunnable,
@@ -195,6 +186,13 @@ pub mod shp {
             runnable: ShipRunnable,
             target: RedirectTarget,
         },
+    }
+
+    /// Builtin command registry
+    const BUILTINS: &[&str] = &["cd", "pwd", "pushd", "popd", "dirs", "exit", "quit"];
+
+    fn is_builtin(name: &str) -> bool {
+        BUILTINS.contains(&name)
     }
 
     #[derive(Clone)]
@@ -215,6 +213,10 @@ pub mod shp {
             match runnable.0.as_ref() {
                 Runnable::Command { prog, args } => CommandSpec::Command {
                     program: prog.name().to_string(),
+                    args: args.clone(),
+                },
+                Runnable::Builtin { name, args } => CommandSpec::Builtin {
+                    name: name.clone(),
                     args: args.clone(),
                 },
                 Runnable::Pipeline {
@@ -267,13 +269,14 @@ pub mod shp {
                 }
 
                 // Atomic | Atomic -> Pipeline([lhs], rhs)
-                // (Command and Subshell are both atomic units)
-                (Command { .. } | Subshell { .. }, Command { .. } | Subshell { .. }) => {
-                    Arc::new(Pipeline {
-                        predecessors: vec![self.clone()],
-                        final_cmd: other.clone(),
-                    })
-                }
+                // (Command, Builtin, and Subshell are all atomic units)
+                (
+                    Command { .. } | Builtin { .. } | Subshell { .. },
+                    Command { .. } | Builtin { .. } | Subshell { .. },
+                ) => Arc::new(Pipeline {
+                    predecessors: vec![self.clone()],
+                    final_cmd: other.clone(),
+                }),
 
                 // Pipeline | Atomic -> extend pipeline
                 (
@@ -281,7 +284,7 @@ pub mod shp {
                         predecessors,
                         final_cmd,
                     },
-                    Command { .. } | Subshell { .. },
+                    Command { .. } | Builtin { .. } | Subshell { .. },
                 ) => {
                     let mut new_predecessors = predecessors.clone();
                     new_predecessors.push(final_cmd.clone());
@@ -293,7 +296,7 @@ pub mod shp {
 
                 // Atomic | Pipeline -> prepend to pipeline
                 (
-                    Command { .. } | Subshell { .. },
+                    Command { .. } | Builtin { .. } | Subshell { .. },
                     Pipeline {
                         predecessors,
                         final_cmd,

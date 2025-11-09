@@ -227,4 +227,14 @@ pub fn init_from_parent() {
     let env = get_shell_env();
     let mut env_write = env.write().unwrap();
     *env_write = ShellEnvironment::from_parent();
+
+    // HOME is typically inherited from parent - no need to set it explicitly
+    // If HOME is not set, builtins like cd() can handle the error appropriately
+
+    // Increment SHLVL (inheriting from parent if present)
+    let current_shlvl = match env_write.get("SHLVL") {
+        Some(EnvValue::Integer(i)) => *i + 1,
+        _ => 0,
+    };
+    env_write.set("SHLVL".to_string(), EnvValue::Integer(current_shlvl + 1));
 }
