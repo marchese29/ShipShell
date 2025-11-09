@@ -36,30 +36,37 @@ pub fn execute_repl_line(py: Python, line: &str) -> PyResult<()> {
     }
 }
 
-/// Convert a Python object to an EnvValue
+/// Convert a Python object to an EnvValue with strict type checking (no coercion)
 fn py_to_env_value(obj: &Bound<PyAny>) -> PyResult<EnvValue> {
-    // Try as None first
+    use pyo3::types::{PyBool, PyFloat, PyInt, PyString};
+
+    // Check for None first
     if obj.is_none() {
         return Ok(EnvValue::None);
     }
 
-    // Try as string
-    if let Ok(s) = obj.extract::<String>() {
-        return Ok(EnvValue::String(s));
+    // Check for bool BEFORE int (bool is subclass of int in Python!)
+    if obj.is_instance_of::<PyBool>() {
+        return Ok(EnvValue::Bool(obj.extract::<bool>()?));
     }
 
-    // Try as integer
-    if let Ok(i) = obj.extract::<i64>() {
-        return Ok(EnvValue::Integer(i));
+    // Check for int (but not bool, which we already handled)
+    if obj.is_instance_of::<PyInt>() {
+        return Ok(EnvValue::Integer(obj.extract::<i64>()?));
     }
 
-    // Try as float
-    if let Ok(f) = obj.extract::<f64>() {
-        return Ok(EnvValue::Decimal(f));
+    // Check for float
+    if obj.is_instance_of::<PyFloat>() {
+        return Ok(EnvValue::Decimal(obj.extract::<f64>()?));
     }
 
-    // Try as list
-    if let Ok(list) = obj.clone().cast_into::<PyList>() {
+    // Check for string
+    if obj.is_instance_of::<PyString>() {
+        return Ok(EnvValue::String(obj.extract::<String>()?));
+    }
+
+    // Check for list
+    if let Ok(list) = obj.cast::<PyList>() {
         let mut vec = Vec::new();
         for item in list.iter() {
             vec.push(py_to_env_value(&item)?);
@@ -68,7 +75,7 @@ fn py_to_env_value(obj: &Bound<PyAny>) -> PyResult<EnvValue> {
     }
 
     Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-        "Value must be str, int, float, None, or list of these types",
+        "Value must be str, int, float, bool, None, or list - no coercion allowed",
     ))
 }
 
@@ -78,6 +85,7 @@ fn env_value_to_py(py: Python, value: &EnvValue) -> PyResult<Py<PyAny>> {
         EnvValue::String(s) => Ok(s.clone().into_pyobject(py)?.into_any().unbind()),
         EnvValue::Integer(i) => Ok((*i).into_pyobject(py)?.into_any().unbind()),
         EnvValue::Decimal(f) => Ok((*f).into_pyobject(py)?.into_any().unbind()),
+        EnvValue::Bool(b) => Ok((*b).into_pyobject(py)?.to_owned().into_any().unbind()),
         EnvValue::None => Ok(py.None()),
         EnvValue::List(vec) => {
             let items: Result<Vec<Py<PyAny>>, _> =

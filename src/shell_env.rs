@@ -4,8 +4,8 @@ use nix::unistd::{ForkResult, Pid, execve, fork, pipe};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
-use which::which;
 
 /// Represents a value that can be stored in the shell environment
 #[derive(Debug, Clone, PartialEq)]
@@ -13,8 +13,34 @@ pub enum EnvValue {
     String(String),
     Integer(i64),
     Decimal(f64),
+    Bool(bool),
     None,
     List(Vec<EnvValue>),
+}
+
+impl EnvValue {
+    /// Recursively convert an EnvValue to a string representation
+    /// Used for converting environment variables to strings for child processes
+    fn to_string_repr(&self) -> String {
+        match self {
+            EnvValue::String(s) => s.clone(),
+            EnvValue::Integer(i) => i.to_string(),
+            EnvValue::Decimal(d) => d.to_string(),
+            EnvValue::Bool(b) => {
+                if *b {
+                    "True".to_string()
+                } else {
+                    "False".to_string()
+                }
+            }
+            EnvValue::None => String::new(), // Empty string
+            EnvValue::List(items) => items
+                .iter()
+                .map(|item| item.to_string_repr()) // Recursive!
+                .collect::<Vec<_>>()
+                .join(":"),
+        }
+    }
 }
 
 /// The shell's environment, containing all environment variables
@@ -79,20 +105,8 @@ impl ShellEnvironment {
         self.env_vars
             .iter()
             .filter_map(|(key, value)| {
-                let value_str = match value {
-                    EnvValue::String(s) => s.clone(),
-                    EnvValue::Integer(i) => i.to_string(),
-                    EnvValue::Decimal(d) => d.to_string(),
-                    EnvValue::None => return None,
-                    EnvValue::List(items) => items
-                        .iter()
-                        .filter_map(|v| match v {
-                            EnvValue::String(s) => Some(s.clone()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join(":"),
-                };
+                let value_str = value.to_string_repr();
+                // Include all variables, even those with empty string values (EnvValue::None)
                 CString::new(format!("{}={}", key, value_str)).ok()
             })
             .collect()
@@ -168,6 +182,41 @@ pub struct ShellResult {
     pub exit_code: u8,
 }
 
+/// Represents errors that can occur during program path resolution
+#[derive(Debug)]
+enum ProgramResolutionError {
+    /// Command not found in PATH
+    NotFound(String),
+    /// File doesn't exist (for paths with '/')
+    NoSuchFile(String),
+    /// File exists but is not executable
+    PermissionDenied(String),
+    /// PATH environment variable has invalid configuration
+    InvalidPath(String),
+}
+
+impl ProgramResolutionError {
+    /// Get the appropriate exit code for this error type
+    fn exit_code(&self) -> i32 {
+        match self {
+            ProgramResolutionError::NotFound(_) => 127,
+            ProgramResolutionError::NoSuchFile(_) => 127,
+            ProgramResolutionError::PermissionDenied(_) => 126,
+            ProgramResolutionError::InvalidPath(_) => 127,
+        }
+    }
+
+    /// Get the error message
+    fn message(&self) -> &str {
+        match self {
+            ProgramResolutionError::NotFound(msg) => msg,
+            ProgramResolutionError::NoSuchFile(msg) => msg,
+            ProgramResolutionError::PermissionDenied(msg) => msg,
+            ProgramResolutionError::InvalidPath(msg) => msg,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum CommandSpec {
     Command {
@@ -241,28 +290,136 @@ fn wait_for_child(child: Pid) -> ShellResult {
     }
 }
 
-/// Resolve program path and execute with arguments (never returns on success)
-fn resolve_and_exec(program: &str, args: &[String]) -> ! {
-    // Resolve the program path using which
-    let prog_path = if program.contains('/') {
-        // If program contains '/', it's already a path
-        program.to_string()
-    } else {
-        // Use which to find the program in PATH
-        match which(program) {
-            Ok(path) => path.to_string_lossy().to_string(),
-            Err(_) => {
-                eprintln!("{}: command not found", program);
-                std::process::exit(127);
+/// Resolve a program name to its full path following POSIX command search rules
+///
+/// POSIX rules:
+/// 1. If program contains '/', use it as a literal path (absolute or relative)
+/// 2. Otherwise, search PATH environment variable directories in order
+/// 3. Return the first executable file found
+fn resolve_program_path(program: &str) -> Result<PathBuf, ProgramResolutionError> {
+    // Rule 1: If program contains '/', treat as literal path
+    if program.contains('/') {
+        let path = PathBuf::from(program);
+
+        // Check if the file exists
+        if !path.exists() {
+            return Err(ProgramResolutionError::NoSuchFile(format!(
+                "{}: No such file or directory",
+                program
+            )));
+        }
+
+        // Check if it's executable (using access syscall)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            match std::fs::metadata(&path) {
+                Ok(metadata) => {
+                    let permissions = metadata.permissions();
+                    if permissions.mode() & 0o111 == 0 {
+                        return Err(ProgramResolutionError::PermissionDenied(format!(
+                            "{}: Permission denied",
+                            program
+                        )));
+                    }
+                }
+                Err(_) => {
+                    return Err(ProgramResolutionError::PermissionDenied(format!(
+                        "{}: Permission denied",
+                        program
+                    )));
+                }
             }
+        }
+
+        return Ok(path);
+    }
+
+    // Rule 2: Search PATH environment variable
+    // Extract PATH directories, supporting both List and String variants
+    let path_dirs: Vec<String> = match get_var("PATH") {
+        Some(EnvValue::List(items)) => {
+            // PATH is a list - validate all items are strings
+            let mut dirs = Vec::new();
+            for item in items {
+                match item {
+                    EnvValue::String(s) => dirs.push(s),
+                    _ => {
+                        return Err(ProgramResolutionError::InvalidPath(
+                            "PATH list contains non-string values".to_string(),
+                        ));
+                    }
+                }
+            }
+            dirs
+        }
+        Some(EnvValue::String(s)) => {
+            // PATH is a colon-separated string (traditional format)
+            s.split(':').map(String::from).collect()
+        }
+        Some(_) => {
+            // PATH is set but has invalid type (Integer, Decimal, None)
+            return Err(ProgramResolutionError::InvalidPath(
+                "PATH must be a string or list".to_string(),
+            ));
+        }
+        None => {
+            // PATH is not set - use a simple default
+            vec![
+                "/usr/local/bin".to_string(),
+                "/usr/bin".to_string(),
+                "/bin".to_string(),
+            ]
         }
     };
 
-    let prog_cstr = CString::new(prog_path.as_str()).expect("Program path contains null byte");
+    // Search each directory in PATH
+    for dir in &path_dirs {
+        if dir.is_empty() {
+            continue;
+        }
 
-    // Build argv
+        let candidate = PathBuf::from(dir).join(program);
+
+        // Check if file exists and is executable
+        if candidate.exists() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(metadata) = std::fs::metadata(&candidate) {
+                    let permissions = metadata.permissions();
+                    if permissions.mode() & 0o111 != 0 {
+                        return Ok(candidate);
+                    }
+                }
+            }
+        }
+    }
+
+    // Command not found in PATH
+    Err(ProgramResolutionError::NotFound(format!(
+        "{}: command not found",
+        program
+    )))
+}
+
+/// Resolve program path and execute with arguments (never returns on success)
+fn resolve_and_exec(program: &str, args: &[String]) -> ! {
+    // Resolve the program path using POSIX rules
+    let prog_path = match resolve_program_path(program) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("{}", error.message());
+            std::process::exit(error.exit_code());
+        }
+    };
+
+    let prog_path_str = prog_path.to_string_lossy();
+    let prog_cstr = CString::new(prog_path_str.as_ref()).expect("Program path contains null byte");
+
+    // Build argv (first arg is the program name as given, not the full path)
     let mut argv: Vec<CString> = Vec::new();
-    argv.push(prog_cstr.clone());
+    argv.push(CString::new(program).expect("Program name contains null byte"));
     for arg in args {
         argv.push(CString::new(arg.as_str()).expect("Argument contains null byte"));
     }
