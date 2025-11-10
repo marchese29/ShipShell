@@ -9,9 +9,9 @@ use rustyline::{Config, Editor};
 use std::ffi::CString;
 
 // Embed Python modules at compile time
+const CORE: &str = include_str!("../python/core.py");
 const PYTHON_INIT: &str = include_str!("../python/init.py");
 const SHIP_SHELL_MARKER: &str = include_str!("../python/ship_shell_marker.py");
-const SHP_BUILTINS: &str = include_str!("../python/shp_builtins.py");
 const SHP_ERGO_BUILTINS: &str = include_str!("../python/shp/ergo/builtins.py");
 const SHP_ERGO_INIT: &str = include_str!("../python/shp/ergo/__init__.py");
 
@@ -54,8 +54,8 @@ fn register_embedded_modules(py: Python) -> PyResult<()> {
     // Register all embedded modules
     // Note: We DON'T register the Python shp stub - the Rust native module is already registered
     // The shp/__init__.py file is only for external IDE/script support
+    register("core", CORE, None)?;
     register("ship_shell_marker", SHIP_SHELL_MARKER, None)?;
-    register("shp.builtins", SHP_BUILTINS, Some("shp"))?;
     register("shp.ergo.builtins", SHP_ERGO_BUILTINS, Some("shp.ergo"))?;
     register("shp.ergo", SHP_ERGO_INIT, Some("shp.ergo"))?;
 

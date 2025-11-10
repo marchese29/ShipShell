@@ -5,11 +5,32 @@ use std::ffi::CString;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::PathBuf;
 
+use super::builtins::get_builtin;
 use super::env::{EnvValue, get_shell_env, get_var};
 
 #[derive(Debug, Clone)]
 pub struct ShellResult {
     pub exit_code: u8,
+}
+
+/// Public interface for executing commands from Python bindings
+/// This enum hides shell internals (like builtin detection) from the bindings layer
+#[derive(Debug, Clone)]
+pub enum ExecRequest {
+    Program {
+        name: String,
+        args: Vec<String>,
+    },
+    Pipeline {
+        stages: Vec<ExecRequest>,
+    },
+    Subshell {
+        request: Box<ExecRequest>,
+    },
+    Redirect {
+        request: Box<ExecRequest>,
+        target: RedirectTarget,
+    },
 }
 
 /// Represents errors that can occur during program path resolution
@@ -53,14 +74,15 @@ pub enum RedirectTarget {
     FileDescriptor { fd: i32 },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum CommandSpec {
     Command {
         program: String,
         args: Vec<String>,
     },
     Builtin {
-        name: String,
+        name: String,               // For debugging/logging
+        func: fn(&[String]) -> i32, // Function pointer for efficient execution
         args: Vec<String>,
     },
     Pipeline {
@@ -76,11 +98,112 @@ pub enum CommandSpec {
     },
 }
 
-/// Execute a command, pipeline, subshell, or redirect
-pub fn execute(spec: &CommandSpec) -> ShellResult {
+// Custom Debug impl since function pointers don't implement Debug
+impl std::fmt::Debug for CommandSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CommandSpec::Command { program, args } => f
+                .debug_struct("Command")
+                .field("program", program)
+                .field("args", args)
+                .finish(),
+            CommandSpec::Builtin { name, args, .. } => f
+                .debug_struct("Builtin")
+                .field("name", name)
+                .field("args", args)
+                .finish(),
+            CommandSpec::Pipeline {
+                predecessors,
+                final_cmd,
+            } => f
+                .debug_struct("Pipeline")
+                .field("predecessors", predecessors)
+                .field("final_cmd", final_cmd)
+                .finish(),
+            CommandSpec::Subshell { runnable } => f
+                .debug_struct("Subshell")
+                .field("runnable", runnable)
+                .finish(),
+            CommandSpec::Redirect { runnable, target } => f
+                .debug_struct("Redirect")
+                .field("runnable", runnable)
+                .field("target", target)
+                .finish(),
+        }
+    }
+}
+
+/// Convert an ExecRequest to a CommandSpec with builtin resolution
+fn request_to_command_spec(request: &ExecRequest) -> CommandSpec {
+    match request {
+        ExecRequest::Program { name, args } => {
+            // Check if it's a builtin using get_builtin()
+            if let Some(func) = get_builtin(name) {
+                CommandSpec::Builtin {
+                    name: name.clone(),
+                    func,
+                    args: args.clone(),
+                }
+            } else {
+                CommandSpec::Command {
+                    program: name.clone(),
+                    args: args.clone(),
+                }
+            }
+        }
+        ExecRequest::Pipeline { stages } => {
+            // Convert all stages recursively
+            let specs: Vec<CommandSpec> = stages.iter().map(request_to_command_spec).collect();
+
+            // Split into predecessors and final command
+            let mut specs_iter = specs.into_iter();
+            let first = specs_iter
+                .next()
+                .expect("Pipeline must have at least one stage");
+            let rest: Vec<CommandSpec> = specs_iter.collect();
+
+            if rest.is_empty() {
+                // Single-stage pipeline is just the command itself
+                first
+            } else {
+                // Multi-stage pipeline
+                let mut predecessors = vec![first];
+                predecessors.extend(rest[..rest.len() - 1].iter().cloned());
+                let final_cmd = rest.last().unwrap().clone();
+
+                CommandSpec::Pipeline {
+                    predecessors,
+                    final_cmd: Box::new(final_cmd),
+                }
+            }
+        }
+        ExecRequest::Subshell { request } => CommandSpec::Subshell {
+            runnable: Box::new(request_to_command_spec(request)),
+        },
+        ExecRequest::Redirect { request, target } => CommandSpec::Redirect {
+            runnable: Box::new(request_to_command_spec(request)),
+            target: target.clone(),
+        },
+    }
+}
+
+/// Public interface: Execute an ExecRequest (command, pipeline, subshell, or redirect)
+pub fn execute(request: &ExecRequest) -> ShellResult {
+    let spec = request_to_command_spec(request);
+    execute_command_spec(&spec)
+}
+
+/// Internal execution: Execute a CommandSpec
+fn execute_command_spec(spec: &CommandSpec) -> ShellResult {
     match spec {
         CommandSpec::Command { program, args } => execute_command(program, args),
-        CommandSpec::Builtin { name, args } => execute_builtin(name, args, false), // Don't fork for direct REPL execution
+        CommandSpec::Builtin { func, args, .. } => {
+            // Execute builtin directly in parent process
+            let exit_code = func(args);
+            ShellResult {
+                exit_code: exit_code as u8,
+            }
+        }
         CommandSpec::Pipeline {
             predecessors,
             final_cmd,
@@ -101,78 +224,6 @@ fn execute_command(program: &str, args: &[String]) -> ShellResult {
     }
 }
 
-/// Execute a builtin command
-///
-/// If should_fork is true, runs in a subprocess (for pipelines/subshells).
-/// If false, runs directly in the current process (for REPL commands).
-fn execute_builtin(name: &str, args: &[String], should_fork: bool) -> ShellResult {
-    if should_fork {
-        // Fork for isolation (pipelines, subshells)
-        match unsafe { fork() } {
-            Ok(ForkResult::Parent { child }) => wait_for_child(child),
-            Ok(ForkResult::Child) => {
-                let exit_code = call_builtin_function(name, args);
-                std::process::exit(exit_code);
-            }
-            Err(e) => panic!("fork failed: {}", e),
-        }
-    } else {
-        // Run directly in parent process (REPL commands)
-        let exit_code = call_builtin_function(name, args);
-        ShellResult {
-            exit_code: exit_code as u8,
-        }
-    }
-}
-
-/// Helper function to call a Python builtin function
-fn call_builtin_function(name: &str, args: &[String]) -> i32 {
-    use pyo3::prelude::*;
-
-    Python::attach(|py| {
-        // Import shp.builtins module
-        let builtins = match py.import("shp.builtins") {
-            Ok(m) => m,
-            Err(e) => {
-                e.print(py);
-                return 1;
-            }
-        };
-
-        // Get the builtin function
-        let func = match builtins.getattr(name) {
-            Ok(f) => f,
-            Err(_) => {
-                eprintln!("{}: builtin not found", name);
-                return 127;
-            }
-        };
-
-        // Call the builtin with args - convert Vec<String> to Python tuple
-        let result = if args.is_empty() {
-            func.call0()
-        } else {
-            // Convert Vec<String> to Python tuple of strings for unpacking
-            use pyo3::types::PyTuple;
-            let py_args =
-                PyTuple::new(py, args.iter().map(|s| s.as_str())).expect("Failed to create tuple");
-            func.call1(py_args)
-        };
-
-        match result {
-            Ok(ret) => {
-                // Try to extract exit code as int
-                ret.extract::<i32>().unwrap_or(0)
-            }
-            Err(e) => {
-                // TODO: Smarter error mapping?
-                e.print(py);
-                1
-            }
-        }
-    })
-}
-
 /// Execute a pipeline
 fn execute_pipeline(predecessors: &[CommandSpec], final_cmd: &CommandSpec) -> ShellResult {
     run_pipeline(predecessors, final_cmd)
@@ -183,7 +234,7 @@ fn execute_subshell(spec: &CommandSpec) -> ShellResult {
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child }) => wait_for_child(child),
         Ok(ForkResult::Child) => {
-            let result = execute(spec); // Recursive!
+            let result = execute_command_spec(spec); // Recursive!
             std::process::exit(result.exit_code as i32);
         }
         Err(e) => panic!("fork failed: {}", e),
@@ -234,7 +285,7 @@ fn execute_redirect(spec: &CommandSpec, target: &RedirectTarget) -> ShellResult 
             }
 
             // Execute the inner command
-            let result = execute(spec);
+            let result = execute_command_spec(spec);
             std::process::exit(result.exit_code as i32);
         }
         Err(e) => panic!("fork failed: {}", e),
@@ -417,17 +468,17 @@ fn exec_pipeline_stage(spec: &CommandSpec) -> ! {
         }
         CommandSpec::Builtin { .. } => {
             // Execute the builtin in a subshell and exit with its result
-            let result = execute(spec);
+            let result = execute_command_spec(spec);
             std::process::exit(result.exit_code as i32);
         }
         CommandSpec::Subshell { runnable } => {
             // Execute the subshell and exit with its result
-            let result = execute(runnable);
+            let result = execute_command_spec(runnable);
             std::process::exit(result.exit_code as i32);
         }
         CommandSpec::Redirect { .. } => {
             // Execute the redirect and exit with its result
-            let result = execute(spec);
+            let result = execute_command_spec(spec);
             std::process::exit(result.exit_code as i32);
         }
         CommandSpec::Pipeline { .. } => {
@@ -481,37 +532,76 @@ fn run_pipeline(predecessors: &[CommandSpec], final_cmd: &CommandSpec) -> ShellR
         }
     }
 
-    // Fork and execute the last command
-    let last_child = match unsafe { fork() } {
-        Ok(ForkResult::Parent { child }) => child,
-        Ok(ForkResult::Child) => {
-            // Redirect stdin from last pipe
-            if num_pipes > 0 {
-                unsafe {
-                    libc::dup2(pipes[num_pipes - 1].0.as_raw_fd(), 0);
-                }
+    // Check if final command is a builtin - if so, execute in parent for efficiency
+
+    if let CommandSpec::Builtin { func, args, .. } = final_cmd {
+        // Save original stdin
+        let saved_stdin = unsafe { libc::dup(0) };
+        if saved_stdin == -1 {
+            panic!("Failed to save stdin");
+        }
+
+        // Redirect stdin from last pipe (if any)
+        if num_pipes > 0 {
+            unsafe {
+                libc::dup2(pipes[num_pipes - 1].0.as_raw_fd(), 0);
             }
-            // stdout inherits from parent (goes to terminal)
-
-            // Close all pipe file descriptors
-            drop(pipes);
-
-            // Execute the final command or subshell
-            exec_pipeline_stage(final_cmd);
         }
-        Err(e) => {
-            panic!("fork failed: {}", e);
+
+        // Close all pipe file descriptors
+        drop(pipes);
+
+        // Wait for all predecessor children before executing
+        for child_pid in child_pids {
+            waitpid(child_pid, None).ok();
         }
-    };
 
-    // Parent: close all pipe file descriptors (automatically dropped)
-    drop(pipes);
+        // Execute builtin directly in parent (no fork)
+        let exit_code = func(args);
+        let result = ShellResult {
+            exit_code: exit_code as u8,
+        };
 
-    // Wait for all predecessor children
-    for child_pid in child_pids {
-        waitpid(child_pid, None).ok();
+        // Restore original stdin
+        unsafe {
+            libc::dup2(saved_stdin, 0);
+            libc::close(saved_stdin);
+        }
+
+        result
+    } else {
+        // Fork and execute the last command (regular commands)
+        let last_child = match unsafe { fork() } {
+            Ok(ForkResult::Parent { child }) => child,
+            Ok(ForkResult::Child) => {
+                // Redirect stdin from last pipe
+                if num_pipes > 0 {
+                    unsafe {
+                        libc::dup2(pipes[num_pipes - 1].0.as_raw_fd(), 0);
+                    }
+                }
+                // stdout inherits from parent (goes to terminal)
+
+                // Close all pipe file descriptors
+                drop(pipes);
+
+                // Execute the final command or subshell
+                exec_pipeline_stage(final_cmd);
+            }
+            Err(e) => {
+                panic!("fork failed: {}", e);
+            }
+        };
+
+        // Parent: close all pipe file descriptors (automatically dropped)
+        drop(pipes);
+
+        // Wait for all predecessor children
+        for child_pid in child_pids {
+            waitpid(child_pid, None).ok();
+        }
+
+        // Wait for the last child and return its exit code
+        wait_for_child(last_child)
     }
-
-    // Wait for the last child and return its exit code
-    wait_for_child(last_child)
 }

@@ -1,3 +1,4 @@
+pub mod builtins;
 pub mod env;
 pub mod exec;
 
@@ -6,4 +7,4 @@ pub use env::{
     EnvValue, all_var_keys, all_vars, contains_var, get_var, init_from_parent, set_var, unset_var,
     var_count,
 };
-pub use exec::{CommandSpec, RedirectTarget, execute};
+pub use exec::{ExecRequest, RedirectTarget, execute};

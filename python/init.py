@@ -14,6 +14,8 @@ import shp
 import os
 from pathlib import Path
 
-# The only module we're going to import on the user's behalf is the ergo support or built-ins since
-# it is fundamental to the shell.  Everything else can be done in an RC file as desired.
+# Import core Python shell features (like source())
+from core import *
+
+# Import ergonomic wrappers for shell builtins
 from shp.ergo.builtins import *

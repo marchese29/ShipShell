@@ -95,9 +95,10 @@ impl EnvValue {
     }
 }
 
-/// The shell's environment, containing all environment variables
+/// The shell's environment, containing all environment variables and directory stack
 pub struct ShellEnvironment {
     env_vars: HashMap<String, EnvValue>,
+    dir_stack: Vec<PathBuf>,
 }
 
 impl ShellEnvironment {
@@ -105,6 +106,7 @@ impl ShellEnvironment {
     pub fn new() -> Self {
         Self {
             env_vars: HashMap::new(),
+            dir_stack: Vec::new(),
         }
     }
 
@@ -114,7 +116,10 @@ impl ShellEnvironment {
         for (key, value) in std::env::vars() {
             env_vars.insert(key, EnvValue::parse_from_string(&value));
         }
-        Self { env_vars }
+        Self {
+            env_vars,
+            dir_stack: Vec::new(),
+        }
     }
 
     /// Get an environment variable value
@@ -162,6 +167,21 @@ impl ShellEnvironment {
                 CString::new(format!("{}={}", key, value_str)).ok()
             })
             .collect()
+    }
+
+    /// Push a directory onto the directory stack
+    pub fn push_dir(&mut self, dir: PathBuf) {
+        self.dir_stack.push(dir);
+    }
+
+    /// Pop a directory from the directory stack
+    pub fn pop_dir(&mut self) -> Option<PathBuf> {
+        self.dir_stack.pop()
+    }
+
+    /// Get a reference to the directory stack
+    pub fn dir_stack(&self) -> &[PathBuf] {
+        &self.dir_stack
     }
 }
 

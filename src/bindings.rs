@@ -5,7 +5,7 @@ use pyo3::types::PyList;
 use std::ffi::CString;
 use std::sync::Arc;
 
-use crate::shell::{self, CommandSpec, EnvValue, execute};
+use crate::shell::{self, EnvValue, ExecRequest, execute};
 
 /// Execute a line of Python code in REPL mode with auto-run for ShipRunnable
 pub fn execute_repl_line(py: Python, line: &str) -> PyResult<()> {
@@ -145,18 +145,10 @@ pub mod shp {
     impl ShipProgram {
         #[pyo3(signature = (*args))]
         fn __call__(&self, args: Vec<String>) -> PyResult<ShipRunnable> {
-            // Check if this is a builtin
-            if is_builtin(&self.name) {
-                Ok(ShipRunnable(Arc::new(Runnable::Builtin {
-                    name: self.name.clone(),
-                    args,
-                })))
-            } else {
-                Ok(ShipRunnable(Arc::new(Runnable::Command {
-                    prog: self.clone(),
-                    args,
-                })))
-            }
+            Ok(ShipRunnable(Arc::new(Runnable::Command {
+                prog: self.clone(),
+                args,
+            })))
         }
     }
 
@@ -169,10 +161,6 @@ pub mod shp {
     enum Runnable {
         Command {
             prog: ShipProgram,
-            args: Vec<String>,
-        },
-        Builtin {
-            name: String,
             args: Vec<String>,
         },
         Pipeline {
@@ -188,13 +176,6 @@ pub mod shp {
         },
     }
 
-    /// Builtin command registry
-    const BUILTINS: &[&str] = &["cd", "pwd", "pushd", "popd", "dirs", "exit", "quit"];
-
-    fn is_builtin(name: &str) -> bool {
-        BUILTINS.contains(&name)
-    }
-
     #[derive(Clone)]
     enum RedirectTarget {
         FilePath { path: String, append: bool },
@@ -208,26 +189,24 @@ pub mod shp {
         pub exit_code: u8,
     }
 
-    impl From<&ShipRunnable> for CommandSpec {
+    impl From<&ShipRunnable> for ExecRequest {
         fn from(runnable: &ShipRunnable) -> Self {
             match runnable.0.as_ref() {
-                Runnable::Command { prog, args } => CommandSpec::Command {
-                    program: prog.name().to_string(),
-                    args: args.clone(),
-                },
-                Runnable::Builtin { name, args } => CommandSpec::Builtin {
-                    name: name.clone(),
+                Runnable::Command { prog, args } => ExecRequest::Program {
+                    name: prog.name().to_string(),
                     args: args.clone(),
                 },
                 Runnable::Pipeline {
                     predecessors,
                     final_cmd,
-                } => CommandSpec::Pipeline {
-                    predecessors: predecessors.iter().map(|p| p.into()).collect(),
-                    final_cmd: Box::new(final_cmd.into()),
-                },
-                Runnable::Subshell { runnable } => CommandSpec::Subshell {
-                    runnable: Box::new(runnable.into()),
+                } => {
+                    let mut stages: Vec<ExecRequest> =
+                        predecessors.iter().map(|p| p.into()).collect();
+                    stages.push(final_cmd.into());
+                    ExecRequest::Pipeline { stages }
+                }
+                Runnable::Subshell { runnable } => ExecRequest::Subshell {
+                    request: Box::new(runnable.into()),
                 },
                 Runnable::Redirect { runnable, target } => {
                     let shell_target = match target {
@@ -241,8 +220,8 @@ pub mod shp {
                             shell::RedirectTarget::FileDescriptor { fd: *fd }
                         }
                     };
-                    CommandSpec::Redirect {
-                        runnable: Box::new(runnable.into()),
+                    ExecRequest::Redirect {
+                        request: Box::new(runnable.into()),
                         target: shell_target,
                     }
                 }
@@ -270,13 +249,12 @@ pub mod shp {
 
                 // Atomic | Atomic -> Pipeline([lhs], rhs)
                 // (Command, Builtin, and Subshell are all atomic units)
-                (
-                    Command { .. } | Builtin { .. } | Subshell { .. },
-                    Command { .. } | Builtin { .. } | Subshell { .. },
-                ) => Arc::new(Pipeline {
-                    predecessors: vec![self.clone()],
-                    final_cmd: other.clone(),
-                }),
+                (Command { .. } | Subshell { .. }, Command { .. } | Subshell { .. }) => {
+                    Arc::new(Pipeline {
+                        predecessors: vec![self.clone()],
+                        final_cmd: other.clone(),
+                    })
+                }
 
                 // Pipeline | Atomic -> extend pipeline
                 (
@@ -284,7 +262,7 @@ pub mod shp {
                         predecessors,
                         final_cmd,
                     },
-                    Command { .. } | Builtin { .. } | Subshell { .. },
+                    Command { .. } | Subshell { .. },
                 ) => {
                     let mut new_predecessors = predecessors.clone();
                     new_predecessors.push(final_cmd.clone());
@@ -296,7 +274,7 @@ pub mod shp {
 
                 // Atomic | Pipeline -> prepend to pipeline
                 (
-                    Command { .. } | Builtin { .. } | Subshell { .. },
+                    Command { .. } | Subshell { .. },
                     Pipeline {
                         predecessors,
                         final_cmd,
@@ -335,8 +313,7 @@ pub mod shp {
         }
 
         fn __call__(&self) -> PyResult<ShipResult> {
-            let spec: CommandSpec = self.into();
-            let result = execute(&spec);
+            let result = execute(&self.into());
             Ok(ShipResult {
                 exit_code: result.exit_code,
             })
