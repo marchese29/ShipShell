@@ -16,7 +16,12 @@ use types::CommandSpec;
 /// Public interface: Execute an ExecRequest (command, pipeline, subshell, or redirect)
 pub fn execute(request: &ExecRequest) -> ShellResult {
     let spec = CommandSpec::from(request);
-    execute_command_spec(&spec)
+    let result = execute_command_spec(&spec);
+
+    // Update $? with the exit code
+    crate::shell::set_last_exit(result.exit_code);
+
+    result
 }
 
 /// Internal execution: Execute a CommandSpec

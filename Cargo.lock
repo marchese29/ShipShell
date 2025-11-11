@@ -300,6 +300,7 @@ name = "ship_shell"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "home",
  "nix",
  "pyo3",
  "rustyline",

@@ -3,6 +3,8 @@ use std::ffi::CString;
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
 
+use nix::unistd::{getcwd, getpid, getppid};
+
 /// Represents a value that can be stored in the shell environment
 #[derive(Debug, Clone, PartialEq)]
 pub enum EnvValue {
@@ -99,6 +101,8 @@ impl EnvValue {
 pub struct ShellEnvironment {
     env_vars: HashMap<String, EnvValue>,
     dir_stack: Vec<PathBuf>,
+    pub last_exit: EnvValue,
+    pid: EnvValue,
 }
 
 impl ShellEnvironment {
@@ -107,6 +111,8 @@ impl ShellEnvironment {
         Self {
             env_vars: HashMap::new(),
             dir_stack: Vec::new(),
+            last_exit: EnvValue::Integer(0),
+            pid: EnvValue::Integer(getpid().as_raw().into()),
         }
     }
 
@@ -119,12 +125,23 @@ impl ShellEnvironment {
         Self {
             env_vars,
             dir_stack: Vec::new(),
+            last_exit: EnvValue::Integer(0),
+            pid: EnvValue::Integer(getpid().as_raw().into()),
         }
     }
 
     /// Get an environment variable value
     pub fn get(&self, key: &str) -> Option<&EnvValue> {
-        self.env_vars.get(key)
+        match key {
+            // $? is exit status from most recent pipeline
+            "?" => Some(&self.last_exit),
+
+            // $$ Current shell's PID
+            "$" => Some(&self.pid),
+
+            // Defer to the actual environment
+            _ => self.env_vars.get(key),
+        }
     }
 
     /// Set an environment variable
@@ -242,19 +259,64 @@ pub fn all_vars() -> HashMap<String, EnvValue> {
     env_read.all_vars().clone()
 }
 
+/// Set the exit status of the last executed command
+pub fn set_last_exit(exit_code: u8) {
+    let env = get_shell_env();
+    let mut env_write = env.write().unwrap();
+    env_write.last_exit = EnvValue::Integer(exit_code as i64);
+}
+
 /// Initialize the shell environment from the parent process
-pub fn init_from_parent() {
+pub fn initialize() {
     let env = get_shell_env();
     let mut env_write = env.write().unwrap();
     *env_write = ShellEnvironment::from_parent();
 
-    // HOME is typically inherited from parent - no need to set it explicitly
-    // If HOME is not set, builtins like cd() can handle the error appropriately
+    // HOME is either inherited from the parent, or retrieved from the user database
+    let home_dir = match home::home_dir() {
+        Some(path) if !path.as_os_str().is_empty() => EnvValue::FilePath(path),
+        _ => EnvValue::None,
+    };
+    env_write.set("HOME".to_string(), home_dir.clone());
+
+    // PWD is the CWD, or we default to home if not set
+    if env_write.get("PWD").is_none() {
+        env_write.set(
+            "PWD".to_string(),
+            match getcwd() {
+                Ok(path) => EnvValue::FilePath(path),
+                Err(_) => home_dir,
+            },
+        );
+    }
+
+    // PPID is set to the parent's pid
+    env_write.set(
+        "PPID".to_string(),
+        EnvValue::Integer(getppid().as_raw().into()),
+    );
+
+    // Default path is /usr/bin:/bin (and /usr/sbin:/sbin on macOS)
+    if env_write.get("PATH").is_none() {
+        let mut default_paths = vec![
+            EnvValue::FilePath(PathBuf::from("/usr/bin")),
+            EnvValue::FilePath(PathBuf::from("/bin")),
+        ];
+
+        // On macOS, also include /usr/sbin and /sbin
+        #[cfg(target_os = "macos")]
+        {
+            default_paths.push(EnvValue::FilePath(PathBuf::from("/usr/sbin")));
+            default_paths.push(EnvValue::FilePath(PathBuf::from("/sbin")));
+        }
+
+        env_write.set("PATH".to_string(), EnvValue::List(default_paths));
+    }
 
     // Increment SHLVL (inheriting from parent if present)
     let current_shlvl = match env_write.get("SHLVL") {
         Some(EnvValue::Integer(i)) => *i + 1,
         _ => 0,
     };
-    env_write.set("SHLVL".to_string(), EnvValue::Integer(current_shlvl + 1));
+    env_write.set("SHLVL".to_string(), EnvValue::Integer(current_shlvl));
 }
