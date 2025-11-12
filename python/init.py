@@ -13,8 +13,8 @@ from core import *  # noqa: F403
 from shp.ergo.builtins import *  # noqa: F403
 
 
-# Load user rc file if it exists (after imports so rc file has access to everything)
-def _load_rc_file():
+# Load user init file if it exists (after imports so init file has access to everything)
+def load_user_init_file():
     from core import source
     from shp import env
 
@@ -22,26 +22,26 @@ def _load_rc_file():
     import sys
 
     # Respect XDG_CONFIG_HOME, falling back to ~/.config
-    _xdg_config_home = env.get("XDG_CONFIG_HOME")
-    if _xdg_config_home:
-        _config_init = Path(_xdg_config_home) / "ship" / "init.py"
+    xdg_config_home = env.get("XDG_CONFIG_HOME")
+    if xdg_config_home:
+        config_init = Path(xdg_config_home) / "ship" / "init.py"
     else:
-        _config_init = Path.home() / ".config" / "ship" / "init.py"
+        config_init = Path.home() / ".config" / "ship" / "init.py"
 
-    _home_init = Path.home() / "init.py"
+    home_init = Path.home() / "init.py"
 
     try:
-        if _config_init.exists():
-            source(_config_init)
-        elif _home_init.exists():
-            source(_home_init)
+        if config_init.exists():
+            source(config_init)
+        elif home_init.exists():
+            source(home_init)
     except Exception as e:
         # Log the error but continue - don't crash the shell on bad rc file
         print(f"Error loading rc file: {e}", file=sys.stderr)
 
 
 # Load RC file now that everything is imported
-_load_rc_file()
+load_user_init_file()
 
 # Remove things we don't want exposed in the global namespace
-del _load_rc_file
+del load_user_init_file
