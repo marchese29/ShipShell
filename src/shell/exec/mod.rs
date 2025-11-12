@@ -5,10 +5,12 @@ mod types;
 use nix::libc;
 use nix::sys::wait::{WaitStatus, waitpid};
 use nix::unistd::{ForkResult, Pid, fork};
+use std::collections::HashMap;
 
 // Re-export public types
 pub use types::{ExecRequest, RedirectTarget, ShellResult};
 
+use crate::shell::env::{EnvValue, get_shell_env};
 use pipeline::run_pipeline;
 use resolution::resolve_and_exec;
 use types::CommandSpec;
@@ -41,6 +43,10 @@ pub(crate) fn execute_command_spec(spec: &CommandSpec) -> ShellResult {
         } => run_pipeline(predecessors, final_cmd),
         CommandSpec::Subshell { runnable } => execute_subshell(runnable),
         CommandSpec::Redirect { runnable, target } => execute_redirect(runnable, target),
+        CommandSpec::WithEnv {
+            runnable,
+            env_overlay,
+        } => execute_with_env(runnable, env_overlay),
     }
 }
 
@@ -122,6 +128,45 @@ fn execute_redirect(spec: &CommandSpec, target: &types::RedirectTarget) -> Shell
         let result = execute_command_spec(spec);
         result.exit_code as i32
     })
+}
+
+/// Execute command with environment overlay
+fn execute_with_env(spec: &CommandSpec, overlay: &HashMap<String, EnvValue>) -> ShellResult {
+    // Save current environment state for variables in the overlay
+    let env = get_shell_env();
+    let saved_vars: HashMap<String, Option<EnvValue>> = {
+        let env_read = env.read().unwrap();
+        overlay
+            .keys()
+            .map(|k| (k.clone(), env_read.get(k).cloned()))
+            .collect()
+    };
+
+    // Apply overlay to environment
+    {
+        let mut env_write = env.write().unwrap();
+        for (key, value) in overlay {
+            env_write.set(key.clone(), value.clone());
+        }
+    }
+
+    // Execute wrapped command
+    let result = execute_command_spec(spec);
+
+    // Restore original environment
+    {
+        let mut env_write = env.write().unwrap();
+        for (key, original_value) in saved_vars {
+            match original_value {
+                Some(value) => env_write.set(key, value),
+                None => {
+                    env_write.unset(&key);
+                }
+            }
+        }
+    }
+
+    result
 }
 
 /// Wait for a child and convert its status to ShellResult

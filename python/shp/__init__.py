@@ -6,6 +6,8 @@ outside of the ShipShell environment. In actual ShipShell, these are
 replaced by Rust-native implementations.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 __all__ = [
@@ -38,11 +40,11 @@ class ShipRunnable:
         """Execute the command or pipeline."""
         raise NotImplementedError("ShipRunnable only works in ShipShell REPL")
 
-    def __or__(self, other: "ShipRunnable") -> "ShipRunnable":
+    def __or__(self, other: ShipRunnable) -> ShipRunnable:
         """Pipe this command's output to another command."""
         raise NotImplementedError("Piping only works in ShipShell REPL")
 
-    def __gt__(self, target: Any) -> "ShipRunnable":
+    def __gt__(self, target: Any) -> ShipRunnable:
         """Redirect output to a file (truncate mode).
 
         Args:
@@ -50,13 +52,45 @@ class ShipRunnable:
         """
         raise NotImplementedError("Output redirection only works in ShipShell REPL")
 
-    def __rshift__(self, target: Any) -> "ShipRunnable":
+    def __rshift__(self, target: Any) -> ShipRunnable:
         """Redirect output to a file (append mode).
 
         Args:
             target: Either a string path or a file-like object with fileno()
         """
         raise NotImplementedError("Output redirection only works in ShipShell REPL")
+
+    def with_env(self, **env_vars: Any) -> ShipRunnable:
+        """Apply environment variable overlay to this runnable.
+
+        The environment variables are only set for the execution of this specific
+        command and do not affect the parent shell's environment.
+
+        Args:
+            **env_vars: Environment variables to set. Supports str, int, bool,
+                       Path, list, and other EnvValue types.
+
+        Returns:
+            A new ShipRunnable with the environment overlay applied.
+
+        Examples:
+            # Set single variable
+            prog('printenv')('USER').with_env(USER='testuser')()
+
+            # Set multiple variables
+            prog('echo')('test').with_env(DEBUG='1', PATH='/custom/path')()
+
+            # Use dict splatting
+            env_dict = {'VAR1': 'value1', 'VAR2': 'value2'}
+            prog('cmd').with_env(**env_dict)()
+
+            # Stack overlays (they merge, later takes precedence)
+            prog('cmd').with_env(A='1').with_env(B='2')()
+
+            # Works on pipelines
+            (prog('echo')('hello') | prog('cat')()).with_env(DEBUG='1')()
+        """
+        raise NotImplementedError("with_env() only works in ShipShell REPL")
 
 
 class ShipProgram:

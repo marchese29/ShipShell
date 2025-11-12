@@ -1,7 +1,8 @@
 use nix::libc;
 use pyo3::exceptions::PyKeyError;
 use pyo3::prelude::*;
-use pyo3::types::PyList;
+use pyo3::types::{PyDict, PyList};
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::Arc;
 
@@ -174,6 +175,10 @@ pub mod shp {
             runnable: ShipRunnable,
             target: RedirectTarget,
         },
+        WithEnv {
+            runnable: ShipRunnable,
+            env_overlay: HashMap<String, EnvValue>,
+        },
     }
 
     #[derive(Clone)]
@@ -225,6 +230,13 @@ pub mod shp {
                         target: shell_target,
                     }
                 }
+                Runnable::WithEnv {
+                    runnable,
+                    env_overlay,
+                } => ExecRequest::WithEnv {
+                    request: Box::new(runnable.into()),
+                    env_overlay: env_overlay.clone(),
+                },
             }
         }
     }
@@ -248,13 +260,14 @@ pub mod shp {
                 }
 
                 // Atomic | Atomic -> Pipeline([lhs], rhs)
-                // (Command, Builtin, and Subshell are all atomic units)
-                (Command { .. } | Subshell { .. }, Command { .. } | Subshell { .. }) => {
-                    Arc::new(Pipeline {
-                        predecessors: vec![self.clone()],
-                        final_cmd: other.clone(),
-                    })
-                }
+                // (Command, Subshell, and WithEnv are all atomic units)
+                (
+                    Command { .. } | Subshell { .. } | WithEnv { .. },
+                    Command { .. } | Subshell { .. } | WithEnv { .. },
+                ) => Arc::new(Pipeline {
+                    predecessors: vec![self.clone()],
+                    final_cmd: other.clone(),
+                }),
 
                 // Pipeline | Atomic -> extend pipeline
                 (
@@ -262,7 +275,7 @@ pub mod shp {
                         predecessors,
                         final_cmd,
                     },
-                    Command { .. } | Subshell { .. },
+                    Command { .. } | Subshell { .. } | WithEnv { .. },
                 ) => {
                     let mut new_predecessors = predecessors.clone();
                     new_predecessors.push(final_cmd.clone());
@@ -274,7 +287,7 @@ pub mod shp {
 
                 // Atomic | Pipeline -> prepend to pipeline
                 (
-                    Command { .. } | Subshell { .. },
+                    Command { .. } | Subshell { .. } | WithEnv { .. },
                     Pipeline {
                         predecessors,
                         final_cmd,
@@ -380,6 +393,49 @@ pub mod shp {
                 runnable: self.clone(),
                 target: redirect_target,
             })))
+        }
+
+        /// Apply environment overlay to this runnable
+        ///
+        /// Usage:
+        ///   prog('echo')('Hello').with_env(DEBUG='1', PATH='/custom/path')()
+        ///   prog('myapp').with_env(**env_dict)()
+        #[pyo3(signature = (**kwargs))]
+        fn with_env(&self, kwargs: Option<Bound<PyDict>>) -> PyResult<ShipRunnable> {
+            let kwargs = kwargs.ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                    "with_env() requires keyword arguments",
+                )
+            })?;
+
+            // Convert **kwargs to HashMap<String, EnvValue>
+            let mut overlay = HashMap::new();
+            for (key, value) in kwargs.iter() {
+                let key_str: String = key.extract()?;
+                let env_value = py_to_env_value(&value)?;
+                overlay.insert(key_str, env_value);
+            }
+
+            // Check if we're already a WithEnv - if so, merge overlays
+            // New overlay takes precedence over existing overlay
+            if let Runnable::WithEnv {
+                runnable,
+                env_overlay: existing,
+            } = self.0.as_ref()
+            {
+                let mut merged = existing.clone();
+                merged.extend(overlay); // New values override old ones
+                Ok(ShipRunnable(Arc::new(Runnable::WithEnv {
+                    runnable: runnable.clone(),
+                    env_overlay: merged,
+                })))
+            } else {
+                // Wrap this runnable in WithEnv
+                Ok(ShipRunnable(Arc::new(Runnable::WithEnv {
+                    runnable: self.clone(),
+                    env_overlay: overlay,
+                })))
+            }
         }
     }
 

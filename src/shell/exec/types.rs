@@ -1,4 +1,6 @@
 use super::super::builtins::get_builtin;
+use super::super::env::EnvValue;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct ShellResult {
@@ -22,6 +24,10 @@ pub enum ExecRequest {
     Redirect {
         request: Box<ExecRequest>,
         target: RedirectTarget,
+    },
+    WithEnv {
+        request: Box<ExecRequest>,
+        env_overlay: HashMap<String, EnvValue>,
     },
 }
 
@@ -88,6 +94,10 @@ pub enum CommandSpec {
         runnable: Box<CommandSpec>,
         target: RedirectTarget,
     },
+    WithEnv {
+        runnable: Box<CommandSpec>,
+        env_overlay: HashMap<String, EnvValue>,
+    },
 }
 
 // Custom Debug impl since function pointers don't implement Debug
@@ -120,6 +130,14 @@ impl std::fmt::Debug for CommandSpec {
                 .debug_struct("Redirect")
                 .field("runnable", runnable)
                 .field("target", target)
+                .finish(),
+            CommandSpec::WithEnv {
+                runnable,
+                env_overlay,
+            } => f
+                .debug_struct("WithEnv")
+                .field("runnable", runnable)
+                .field("env_overlay", env_overlay)
                 .finish(),
         }
     }
@@ -176,6 +194,13 @@ impl From<&ExecRequest> for CommandSpec {
             ExecRequest::Redirect { request, target } => CommandSpec::Redirect {
                 runnable: Box::new(CommandSpec::from(request.as_ref())),
                 target: target.clone(),
+            },
+            ExecRequest::WithEnv {
+                request,
+                env_overlay,
+            } => CommandSpec::WithEnv {
+                runnable: Box::new(CommandSpec::from(request.as_ref())),
+                env_overlay: env_overlay.clone(),
             },
         }
     }
