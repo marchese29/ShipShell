@@ -103,9 +103,7 @@ fn main() -> Result<()> {
             "..... "
         };
 
-        let readline = rl.readline(prompt);
-
-        match readline {
+        match rl.readline(prompt) {
             Ok(line) => {
                 // Append line to buffer
                 if !buffer.is_empty() {

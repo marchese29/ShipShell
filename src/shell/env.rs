@@ -103,6 +103,11 @@ pub struct ShellEnvironment {
     dir_stack: Vec<PathBuf>,
     pub last_exit: EnvValue,
     pid: EnvValue,
+    ppid: EnvValue,
+    old_pwd: EnvValue,
+    ps1: EnvValue,
+    ps2: EnvValue,
+    ps4: EnvValue,
 }
 
 impl ShellEnvironment {
@@ -113,6 +118,11 @@ impl ShellEnvironment {
             dir_stack: Vec::new(),
             last_exit: EnvValue::Integer(0),
             pid: EnvValue::Integer(getpid().as_raw().into()),
+            ppid: EnvValue::Integer(getppid().as_raw().into()),
+            old_pwd: EnvValue::None,
+            ps1: EnvValue::None,
+            ps2: EnvValue::None,
+            ps4: EnvValue::None,
         }
     }
 
@@ -127,12 +137,32 @@ impl ShellEnvironment {
             dir_stack: Vec::new(),
             last_exit: EnvValue::Integer(0),
             pid: EnvValue::Integer(getpid().as_raw().into()),
+            ppid: EnvValue::Integer(getppid().as_raw().into()),
+            old_pwd: EnvValue::None,
+            ps1: EnvValue::None,
+            ps2: EnvValue::None,
+            ps4: EnvValue::None,
         }
     }
 
     /// Get an environment variable value
     pub fn get(&self, key: &str) -> Option<&EnvValue> {
+        // We don't deal with exporting in our shell because the environment is decoupled from the
+        // python namespace so we can blindly import everything.  Though there are a few things that
+        // should look like environment variables but not be passed to child processes
         match key {
+            // PPID is the parent process ID
+            "PPID" => Some(&self.ppid),
+
+            // Internal Shell Things
+            "OLDPWD" => Some(&self.old_pwd),
+            "PS1" => Some(&self.ps1),
+            "PS2" => Some(&self.ps2),
+            "PS4" => Some(&self.ps4),
+
+            // ENV not supported yet
+            "ENV" => panic!("ENV environment variable not supported yet"),
+
             // $? is exit status from most recent pipeline
             "?" => Some(&self.last_exit),
 
@@ -146,7 +176,24 @@ impl ShellEnvironment {
 
     /// Set an environment variable
     pub fn set(&mut self, key: String, value: EnvValue) {
-        self.env_vars.insert(key, value);
+        match key.as_ref() {
+            // I guess you can set this if you *really* wanted to
+            "PPID" => self.ppid = value,
+
+            // Internally-managed variables
+            "OLDPWD" => self.old_pwd = value,
+            "PS1" => self.ps1 = value,
+            "PS2" => self.ps2 = value,
+            "PS4" => self.ps4 = value,
+
+            // ENV not supported yet
+            "ENV" => panic!("ENV environment variable not supported yet"),
+
+            // Everything else comes from the environment
+            _ => {
+                self.env_vars.insert(key, value);
+            }
+        };
     }
 
     /// Remove an environment variable
@@ -289,12 +336,6 @@ pub fn initialize() {
             },
         );
     }
-
-    // PPID is set to the parent's pid
-    env_write.set(
-        "PPID".to_string(),
-        EnvValue::Integer(getppid().as_raw().into()),
-    );
 
     // Default path is /usr/bin:/bin (and /usr/sbin:/sbin on macOS)
     if env_write.get("PATH").is_none() {
