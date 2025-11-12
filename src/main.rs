@@ -70,7 +70,7 @@ fn main() -> Result<()> {
     Python::initialize();
 
     // Initialize shell environment from parent process
-    shell::initialize();
+    shell::initialize_environment();
 
     // Create rustyline editor for REPL
     let config = Config::builder().build();

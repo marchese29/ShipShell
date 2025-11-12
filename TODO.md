@@ -8,7 +8,7 @@
 - [ ] Support for writing command in $EDITOR
 
 **Core features to get to (synchronous shell only)**
-- [ ] RC file
+- [X] RC file
 - [ ] Collection of stdout and stderr on process result
 - [ ] Support for the ENV environment variable control at startup
 - [ ] Support for PS1, PS2, and PS4

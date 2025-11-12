@@ -314,7 +314,7 @@ pub fn set_last_exit(exit_code: u8) {
 }
 
 /// Initialize the shell environment from the parent process
-pub fn initialize() {
+pub fn initialize_environment() {
     let env = get_shell_env();
     let mut env_write = env.write().unwrap();
     *env_write = ShellEnvironment::from_parent();
