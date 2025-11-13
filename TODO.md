@@ -11,8 +11,8 @@
 - [X] RC file
 - [X] Run in scoped environment
   - [ ] Run arbitrary code in a scoped environment?
-- [ ] Collection of stdout and stderr on process result
-- [ ] Support for the ENV environment variable control at startup
+- [X] Collection of stdout and stderr on process result
+  - [ ] Probably need to clean up this code
 - [ ] Support for PS1, PS2, and PS4
 - [ ] Handling of traps
 - [ ] Enable export of shell-internal environment variables (if the user wants to)

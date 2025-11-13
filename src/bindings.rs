@@ -4,8 +4,12 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 use std::ffi::CString;
+use std::fs::File;
+use std::io::Read;
+use std::os::unix::io::FromRawFd;
 use std::sync::Arc;
 
+use crate::shell::exec::{ShellResult, execute_with_capture};
 use crate::shell::{self, EnvValue, ExecRequest, execute};
 
 /// Execute a line of Python code in REPL mode with auto-run for ShipRunnable
@@ -328,7 +332,7 @@ pub mod shp {
         fn __call__(&self) -> PyResult<ShipResult> {
             let result = execute(&self.into());
             Ok(ShipResult {
-                exit_code: result.exit_code,
+                exit_code: result.exit_code(),
             })
         }
 
@@ -478,6 +482,125 @@ pub mod shp {
     #[pyfunction]
     fn shexec(runnable: &ShipRunnable) -> PyResult<ShipResult> {
         runnable.__call__()
+    }
+
+    /// Result of capturing command output with file descriptors
+    #[pyclass]
+    pub struct CapturedResult {
+        #[pyo3(get)]
+        exit_code: u8,
+        stdout_fd: Option<i32>,
+        stderr_fd: Option<i32>,
+    }
+
+    #[pymethods]
+    impl CapturedResult {
+        /// Read all stdout, close FD, return as string. Can only call once.
+        fn read_stdout(&mut self) -> PyResult<String> {
+            let fd = self.stdout_fd.take().ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("stdout already consumed")
+            })?;
+
+            // Convert raw FD to File (takes ownership)
+            let mut file = unsafe { File::from_raw_fd(fd) };
+            let mut content = String::new();
+
+            file.read_to_string(&mut content).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                    "Failed to read stdout: {}",
+                    e
+                ))
+            })?;
+
+            // File is automatically closed when dropped
+            Ok(content)
+        }
+
+        /// Read all stderr, close FD, return as string. Can only call once.
+        fn read_stderr(&mut self) -> PyResult<String> {
+            let fd = self.stderr_fd.take().ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("stderr already consumed")
+            })?;
+
+            // Convert raw FD to File (takes ownership)
+            let mut file = unsafe { File::from_raw_fd(fd) };
+            let mut content = String::new();
+
+            file.read_to_string(&mut content).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                    "Failed to read stderr: {}",
+                    e
+                ))
+            })?;
+
+            // File is automatically closed when dropped
+            Ok(content)
+        }
+
+        /// Get raw stdout FD for manual streaming. YOU MUST CLOSE IT!
+        #[getter]
+        fn stdout_fd(&mut self) -> PyResult<i32> {
+            self.stdout_fd.take().ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("stdout already consumed")
+            })
+        }
+
+        /// Get raw stderr FD for manual streaming. YOU MUST CLOSE IT!
+        #[getter]
+        fn stderr_fd(&mut self) -> PyResult<i32> {
+            self.stderr_fd.take().ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("stderr already consumed")
+            })
+        }
+
+        fn __del__(&mut self) {
+            // Safety: close unclosed FDs to prevent FD leaks
+            if let Some(fd) = self.stdout_fd {
+                unsafe {
+                    libc::close(fd);
+                }
+            }
+            if let Some(fd) = self.stderr_fd {
+                unsafe {
+                    libc::close(fd);
+                }
+            }
+        }
+    }
+
+    /// Execute a runnable and capture its stdout and stderr
+    #[pyfunction]
+    fn capture(runnable: &ShipRunnable) -> PyResult<CapturedResult> {
+        let result = execute_with_capture(&runnable.into());
+
+        match result {
+            ShellResult::Captured {
+                exit_code,
+                stdout_fd,
+                stderr_fd,
+            } => Ok(CapturedResult {
+                exit_code,
+                stdout_fd: Some(stdout_fd),
+                stderr_fd: Some(stderr_fd),
+            }),
+            ShellResult::ExitOnly { .. } => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "Expected captured result but got exit-only result",
+            )),
+        }
+    }
+
+    /// Convenience function: execute and return just stdout as a string
+    #[pyfunction]
+    fn get_stdout(runnable: &ShipRunnable) -> PyResult<String> {
+        let mut result = capture(runnable)?;
+        result.read_stdout()
+    }
+
+    /// Convenience function: execute and return just stderr as a string
+    #[pyfunction]
+    fn get_stderr(runnable: &ShipRunnable) -> PyResult<String> {
+        let mut result = capture(runnable)?;
+        result.read_stderr()
     }
 
     /// Get an environment variable

@@ -3,8 +3,25 @@ use super::super::env::EnvValue;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
-pub struct ShellResult {
-    pub exit_code: u8,
+pub enum ShellResult {
+    ExitOnly {
+        exit_code: u8,
+    },
+    Captured {
+        exit_code: u8,
+        stdout_fd: i32,
+        stderr_fd: i32,
+    },
+}
+
+impl ShellResult {
+    /// Get the exit code regardless of variant
+    pub fn exit_code(&self) -> u8 {
+        match self {
+            ShellResult::ExitOnly { exit_code } => *exit_code,
+            ShellResult::Captured { exit_code, .. } => *exit_code,
+        }
+    }
 }
 
 /// Public interface for executing commands from Python bindings

@@ -14,12 +14,16 @@ __all__ = [
     "ShipProgram",
     "ShipRunnable",
     "ShipResult",
+    "CapturedResult",
     "ShipEnv",
     "prog",
     "cmd",
     "pipe",
     "sub",
     "shexec",
+    "capture",
+    "get_stdout",
+    "get_stderr",
     "get_env",
     "set_env",
     "env",
@@ -31,6 +35,130 @@ class ShipResult:
 
     def __init__(self, exit_code: int = 0) -> None:
         self.exit_code = exit_code
+
+
+class CapturedResult:
+    """Result of capturing command output with file descriptors.
+
+    This class manages the lifecycle of file descriptors for captured stdout
+    and stderr. Each FD can only be consumed once - either by reading it as
+    a string or by taking the raw FD for manual streaming.
+
+    Attributes:
+        exit_code: The exit code of the executed command.
+
+    Examples:
+        # Read stdout and stderr as strings
+        result = capture(prog('ls')('/'))
+        print(f"Exit code: {result.exit_code}")
+        stdout = result.read_stdout()
+        stderr = result.read_stderr()
+
+        # Get raw file descriptors for streaming
+        result = capture(prog('tail')('-f', 'logfile.txt'))
+        stdout_fd = result.stdout_fd  # You must close this FD!
+        # ... use os.read(stdout_fd, size) for streaming
+        os.close(stdout_fd)
+    """
+
+    def __init__(self, exit_code: int = 0) -> None:
+        """Initialize a captured result.
+
+        Args:
+            exit_code: The exit code of the command.
+        """
+        self.exit_code = exit_code
+
+    def read_stdout(self) -> str:
+        """Read all stdout and return as a string.
+
+        This method consumes the stdout file descriptor and can only be
+        called once. Subsequent calls will raise an error.
+
+        Returns:
+            The complete stdout content as a string.
+
+        Raises:
+            RuntimeError: If stdout has already been consumed.
+
+        Examples:
+            result = capture(prog('echo')('hello'))
+            output = result.read_stdout()
+            print(output)  # 'hello\\n'
+        """
+        raise NotImplementedError("CapturedResult only works in ShipShell REPL")
+
+    def read_stderr(self) -> str:
+        """Read all stderr and return as a string.
+
+        This method consumes the stderr file descriptor and can only be
+        called once. Subsequent calls will raise an error.
+
+        Returns:
+            The complete stderr content as a string.
+
+        Raises:
+            RuntimeError: If stderr has already been consumed.
+
+        Examples:
+            result = capture(prog('ls')('/nonexistent'))
+            errors = result.read_stderr()
+            print(f"Errors: {errors}")
+        """
+        raise NotImplementedError("CapturedResult only works in ShipShell REPL")
+
+    @property
+    def stdout_fd(self) -> int:
+        """Get the raw stdout file descriptor for manual streaming.
+
+        The FD will be automatically closed when the CapturedResult object
+        is destroyed, but you may close it earlier if desired for resource
+        management. This property consumes the FD and can only be accessed once.
+
+        Returns:
+            The raw file descriptor for stdout.
+
+        Raises:
+            RuntimeError: If stdout has already been consumed.
+
+        Examples:
+            import os
+            result = capture(prog('cat')('largefile.txt'))
+            fd = result.stdout_fd
+            # Stream the output
+            while True:
+                chunk = os.read(fd, 4096)
+                if not chunk:
+                    break
+                # Process chunk...
+            # Optional: close early for explicit cleanup
+            os.close(fd)
+        """
+        raise NotImplementedError("CapturedResult only works in ShipShell REPL")
+
+    @property
+    def stderr_fd(self) -> int:
+        """Get the raw stderr file descriptor for manual streaming.
+
+        The FD will be automatically closed when the CapturedResult object
+        is destroyed, but you may close it earlier if desired for resource
+        management. This property consumes the FD and can only be accessed once.
+
+        Returns:
+            The raw file descriptor for stderr.
+
+        Raises:
+            RuntimeError: If stderr has already been consumed.
+
+        Examples:
+            import os
+            result = capture(prog('command')())
+            fd = result.stderr_fd
+            # Read errors as they come
+            error_data = os.read(fd, 1024)
+            # FD will be auto-closed when result is garbage collected
+        """
+        raise NotImplementedError("CapturedResult only works in ShipShell REPL")
 
 
 class ShipRunnable:
@@ -185,6 +313,90 @@ def sub(runnable: ShipRunnable) -> ShipRunnable:
 def shexec(runnable: ShipRunnable) -> ShipResult:
     """Explicitly execute a runnable command."""
     return runnable()
+
+
+def capture(runnable: ShipRunnable) -> CapturedResult:
+    """Execute a runnable and capture its stdout and stderr.
+
+    This function executes the command and returns a CapturedResult object
+    with file descriptors for both stdout and stderr. The streams are captured
+    independently and can be read separately.
+
+    Args:
+        runnable: The ShipRunnable to execute (command, pipeline, etc.)
+
+    Returns:
+        A CapturedResult containing exit_code and file descriptors for stdout/stderr.
+
+    Examples:
+        # Capture both streams
+        result = capture(prog('ls')('/'))
+        print(f"Exit: {result.exit_code}")
+        print(f"Output: {result.read_stdout()}")
+        print(f"Errors: {result.read_stderr()}")
+
+        # Capture pipeline output
+        result = capture(prog('echo')('hello\\nworld') | prog('grep')('world'))
+        output = result.read_stdout()
+
+        # Capture with environment overlay
+        result = capture(prog('sh')('-c', 'echo $VAR').with_env(VAR='value'))
+        print(result.read_stdout())
+    """
+    raise NotImplementedError("capture() only works in ShipShell REPL")
+
+
+def get_stdout(runnable: ShipRunnable) -> str:
+    """Execute a runnable and return its stdout as a string.
+
+    This is a convenience function that executes the command, captures stdout,
+    reads it as a string, and discards stderr. Equivalent to:
+        capture(runnable).read_stdout()
+
+    Args:
+        runnable: The ShipRunnable to execute.
+
+    Returns:
+        The complete stdout output as a string.
+
+    Examples:
+        # Get command output
+        output = get_stdout(prog('echo')('Hello World'))
+        print(output)  # 'Hello World\\n'
+
+        # Capture pipeline
+        lines = get_stdout(prog('ls')('-1') | prog('head')('-n', '5'))
+
+        # With environment
+        path = get_stdout(prog('sh')('-c', 'echo $PATH').with_env(PATH='/usr/bin'))
+    """
+    raise NotImplementedError("get_stdout() only works in ShipShell REPL")
+
+
+def get_stderr(runnable: ShipRunnable) -> str:
+    """Execute a runnable and return its stderr as a string.
+
+    This is a convenience function that executes the command, captures stderr,
+    reads it as a string, and discards stdout. Equivalent to:
+        capture(runnable).read_stderr()
+
+    Args:
+        runnable: The ShipRunnable to execute.
+
+    Returns:
+        The complete stderr output as a string.
+
+    Examples:
+        # Get error output
+        errors = get_stderr(prog('ls')('/nonexistent'))
+        print(errors)
+
+        # Check for warnings
+        warnings = get_stderr(prog('some_command')('--verbose'))
+        if warnings:
+            print(f"Warnings: {warnings}")
+    """
+    raise NotImplementedError("get_stderr() only works in ShipShell REPL")
 
 
 def get_env(key: str) -> Any:

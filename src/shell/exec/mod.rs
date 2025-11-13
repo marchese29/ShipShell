@@ -1,3 +1,4 @@
+mod capture;
 mod pipeline;
 mod resolution;
 mod types;
@@ -21,7 +22,19 @@ pub fn execute(request: &ExecRequest) -> ShellResult {
     let result = execute_command_spec(&spec);
 
     // Update $? with the exit code
-    crate::shell::set_last_exit(result.exit_code);
+    crate::shell::set_last_exit(result.exit_code());
+
+    result
+}
+
+/// Public interface: Execute an ExecRequest and capture stdout/stderr
+/// Returns file descriptors that the caller must close
+pub fn execute_with_capture(request: &ExecRequest) -> ShellResult {
+    let spec = CommandSpec::from(request);
+    let result = capture::execute_command_spec_with_capture(&spec);
+
+    // Update $? with the exit code
+    crate::shell::set_last_exit(result.exit_code());
 
     result
 }
@@ -33,7 +46,7 @@ pub(crate) fn execute_command_spec(spec: &CommandSpec) -> ShellResult {
         CommandSpec::Builtin { func, args, .. } => {
             // Execute builtin directly in parent process
             let exit_code = func(args);
-            ShellResult {
+            ShellResult::ExitOnly {
                 exit_code: exit_code as u8,
             }
         }
@@ -79,12 +92,12 @@ fn execute_command(program: &str, args: &[String]) -> ShellResult {
 fn execute_subshell(spec: &CommandSpec) -> ShellResult {
     fork_and_run(|| {
         let result = execute_command_spec(spec); // Recursive!
-        result.exit_code as i32
+        result.exit_code() as i32
     })
 }
 
 /// Execute command with output redirection
-fn execute_redirect(spec: &CommandSpec, target: &types::RedirectTarget) -> ShellResult {
+pub(super) fn execute_redirect(spec: &CommandSpec, target: &types::RedirectTarget) -> ShellResult {
     fork_and_run(|| {
         // Set up the output redirection
         match target {
@@ -126,7 +139,7 @@ fn execute_redirect(spec: &CommandSpec, target: &types::RedirectTarget) -> Shell
 
         // Execute the inner command
         let result = execute_command_spec(spec);
-        result.exit_code as i32
+        result.exit_code() as i32
     })
 }
 
@@ -172,10 +185,10 @@ fn execute_with_env(spec: &CommandSpec, overlay: &HashMap<String, EnvValue>) -> 
 /// Wait for a child and convert its status to ShellResult
 pub(crate) fn wait_for_child(child: Pid) -> ShellResult {
     match waitpid(child, None) {
-        Ok(WaitStatus::Exited(_pid, exit_code)) => ShellResult {
+        Ok(WaitStatus::Exited(_pid, exit_code)) => ShellResult::ExitOnly {
             exit_code: exit_code as u8,
         },
-        Ok(WaitStatus::Signaled(_pid, signal, _core_dump)) => ShellResult {
+        Ok(WaitStatus::Signaled(_pid, signal, _core_dump)) => ShellResult::ExitOnly {
             exit_code: 128 + (signal as i32) as u8,
         },
         Ok(status) => {
