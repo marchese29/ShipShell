@@ -5,8 +5,9 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
+crossterm = "0.29.0"
 home = "0.5.12"
-nix = "0.30.1"
+nix = { version = "0.30.1", features = ["fs", "process"] }
 pyo3 = { version = "0.27.1", features = ["anyhow", "auto-initialize"] }
-rustyline = "17.0.2"
+reedline = "0.43.0"
 signal-hook = "0.3.18"

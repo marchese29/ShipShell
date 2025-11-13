@@ -4,8 +4,10 @@ mod shell;
 use anyhow::Result;
 use bindings::shp;
 use pyo3::prelude::*;
-use rustyline::error::ReadlineError;
-use rustyline::{Config, Editor};
+use reedline::{
+    Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, Reedline, Signal,
+};
+use std::borrow::Cow;
 use std::ffi::CString;
 
 // Embed Python modules at compile time
@@ -30,6 +32,57 @@ fn is_complete_python_statement(code: &str) -> bool {
             Err(_) => true,                    // Syntax error = let Python report it
         }
     })
+}
+
+/// Custom prompt for ShipShell with support for continuation lines and right prompt
+struct ShipPrompt {
+    is_continuation: bool,
+    right_prompt: Option<String>,
+}
+
+impl ShipPrompt {
+    fn new() -> Self {
+        Self {
+            is_continuation: false,
+            right_prompt: None,
+        }
+    }
+}
+
+impl Prompt for ShipPrompt {
+    fn render_prompt_left(&self) -> Cow<'_, str> {
+        if self.is_continuation {
+            Cow::Borrowed("..... ")
+        } else {
+            Cow::Borrowed("ship> ")
+        }
+    }
+
+    fn render_prompt_right(&self) -> Cow<'_, str> {
+        self.right_prompt
+            .as_deref()
+            .map(Cow::Borrowed)
+            .unwrap_or(Cow::Borrowed(""))
+    }
+
+    fn render_prompt_indicator(&self, _mode: PromptEditMode) -> Cow<'_, str> {
+        Cow::Borrowed("")
+    }
+
+    fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
+        Cow::Borrowed("")
+    }
+
+    fn render_prompt_history_search_indicator(
+        &self,
+        history_search: PromptHistorySearch,
+    ) -> Cow<'_, str> {
+        let prefix = match history_search.status {
+            PromptHistorySearchStatus::Passing => "",
+            PromptHistorySearchStatus::Failing => "failing ",
+        };
+        Cow::Owned(format!("({}reverse search) ", prefix))
+    }
 }
 
 /// Register embedded Python modules in sys.modules
@@ -72,9 +125,8 @@ fn main() -> Result<()> {
     // Initialize shell environment from parent process
     shell::initialize_environment();
 
-    // Create rustyline editor for REPL
-    let config = Config::builder().build();
-    let mut rl: Editor<(), _> = Editor::with_config(config)?;
+    // Create reedline editor with in-memory history (default)
+    let mut line_editor = Reedline::create();
 
     println!("ShipShell Python REPL");
     println!("Type 'exit()' or press Ctrl+D to quit");
@@ -95,16 +147,19 @@ fn main() -> Result<()> {
 
     // Main REPL loop
     let mut buffer = String::new();
-    loop {
-        // Use different prompt for continuation lines
-        let prompt = if buffer.is_empty() {
-            "ship> "
-        } else {
-            "..... "
-        };
+    let mut prompt = ShipPrompt::new();
 
-        match rl.readline(prompt) {
-            Ok(line) => {
+    loop {
+        // Update prompt state based on whether we're in continuation mode
+        prompt.is_continuation = !buffer.is_empty();
+
+        // Example: Set a right prompt (can be customized later)
+        // prompt.right_prompt = Some(format!("🐍 Python"));
+
+        let sig = line_editor.read_line(&prompt);
+
+        match sig {
+            Ok(Signal::Success(line)) => {
                 // Append line to buffer
                 if !buffer.is_empty() {
                     buffer.push('\n');
@@ -113,9 +168,6 @@ fn main() -> Result<()> {
 
                 // Check if statement is complete
                 if is_complete_python_statement(&buffer) {
-                    // Add complete statement to history
-                    let _ = rl.add_history_entry(buffer.as_str());
-
                     // Skip empty statements
                     if !buffer.trim().is_empty() {
                         // Execute Python code with auto-run for ShipRunnable
@@ -130,12 +182,13 @@ fn main() -> Result<()> {
                     buffer.clear();
                 }
             }
-            Err(ReadlineError::Interrupted) => {
-                // Ctrl+C - continue REPL
+            Ok(Signal::CtrlC) => {
+                // Ctrl+C - clear buffer and continue REPL
                 println!("^C");
+                buffer.clear();
                 continue;
             }
-            Err(ReadlineError::Eof) => {
+            Ok(Signal::CtrlD) => {
                 // Ctrl+D - exit REPL
                 println!("Exiting...");
                 break;
