@@ -16,6 +16,6 @@
 - [X] Ergonomic wrappers for the common unix programs (got the ones from the standard)
   - [X] Get others outside the standard (like which and echo)
 - [X] Python-REPL integrations and custom prompts
-- [ ] More shell builtins
+- [X] More shell builtins
 - [ ] Handling of traps
 - [ ] Enable export of shell-internal environment variables (if the user wants to)

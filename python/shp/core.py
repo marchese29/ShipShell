@@ -25,3 +25,29 @@ def source(file: str | Path | IO[str]) -> None:
         source(Path('/etc/shipshell/config.py'))
     """
     ...
+
+
+def wire_path_programs() -> None:
+    """
+    Auto-wire executable programs from PATH as callable Python functions.
+
+    Scans all directories in shp.env['PATH'] and creates lambda wrappers
+    for each executable program with a valid Python identifier name (that
+    is not a Python reserved word).
+
+    Each program is wired up as: {name} = lambda *args: prog('{name}')(*args)
+
+    This makes system commands directly callable without needing to use prog()
+    explicitly each time.
+
+    Note: Built-in commands are skipped to preserve their ergonomic wrappers
+    that are set up before user initialization scripts run.
+
+    Example:
+        wire_path_programs()
+        # Now you can use commands directly:
+        ls('-la')
+        cat('file.txt')
+        grep('pattern', 'file.txt')
+    """
+    ...
