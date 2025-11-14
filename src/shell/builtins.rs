@@ -1,6 +1,9 @@
 use std::env;
 use std::path::PathBuf;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use super::env::{EnvValue, get_shell_env, get_var};
 
 /// Get a builtin function by name
@@ -16,6 +19,7 @@ pub fn get_builtin(name: &str) -> Option<fn(&[String]) -> i32> {
         "dirs" => Some(dirs),
         "exit" => Some(exit_builtin),
         "quit" => Some(quit),
+        "which" => Some(which),
         _ => None,
     }
 }
@@ -291,4 +295,134 @@ pub fn exit_builtin(args: &[String]) -> i32 {
 ///   - [code] -> exit with specified code
 pub fn quit(args: &[String]) -> i32 {
     exit_builtin(args)
+}
+
+/// Locate a program file in the user's path
+///
+/// Args:
+///   - [-a] -> list all instances found (instead of just the first)
+///   - [-s] -> silent mode, no output, just return exit code
+///   - [program ...] -> one or more program names to locate
+///
+/// Returns:
+///   - 0 if all programs found
+///   - 1 if any program not found
+pub fn which(args: &[String]) -> i32 {
+    // Parse options and program names
+    let mut show_all = false;
+    let mut silent = false;
+    let mut programs = Vec::new();
+
+    for arg in args {
+        match arg.as_str() {
+            "-a" => show_all = true,
+            "-s" => silent = true,
+            _ => programs.push(arg.as_str()),
+        }
+    }
+
+    if programs.is_empty() {
+        if !silent {
+            eprintln!("which: missing argument");
+        }
+        return 1;
+    }
+
+    let mut all_found = true;
+
+    for program in programs {
+        let paths = find_in_path(program, show_all);
+
+        if paths.is_empty() {
+            all_found = false;
+        } else if !silent {
+            for path in paths {
+                println!("{}", path.display());
+            }
+        }
+    }
+
+    if all_found { 0 } else { 1 }
+}
+
+/// Find a program in PATH
+///
+/// Searches the PATH environment variable for executable files matching the program name.
+///
+/// Args:
+///   - program: The program name to search for
+///   - find_all: If true, returns all instances found; if false, returns only the first
+///
+/// Returns:
+///   - Vec of PathBuf containing all matching executable paths (empty if not found)
+fn find_in_path(program: &str, find_all: bool) -> Vec<PathBuf> {
+    let mut results = Vec::new();
+
+    // Extract PATH directories, supporting both List and String variants
+    let path_dirs: Vec<String> = match get_var("PATH") {
+        Some(EnvValue::List(items)) => {
+            // PATH is a list - convert items to strings
+            let mut dirs = Vec::new();
+            for item in items {
+                match item {
+                    EnvValue::String(s) => dirs.push(s),
+                    EnvValue::FilePath(p) => dirs.push(p.to_string_lossy().to_string()),
+                    _ => continue,
+                }
+            }
+            dirs
+        }
+        Some(EnvValue::String(s)) => {
+            // PATH is a colon-separated string (traditional format)
+            s.split(':').map(String::from).collect()
+        }
+        Some(EnvValue::FilePath(p)) => {
+            // PATH is a single FilePath - treat as single directory
+            vec![p.to_string_lossy().to_string()]
+        }
+        _ => {
+            // PATH not set or invalid - use default PATH
+            vec![
+                "/usr/local/bin".to_string(),
+                "/usr/bin".to_string(),
+                "/bin".to_string(),
+            ]
+        }
+    };
+
+    // Search each directory in PATH
+    for dir in &path_dirs {
+        if dir.is_empty() {
+            continue;
+        }
+
+        let candidate = PathBuf::from(dir).join(program);
+
+        // Check if file exists and is executable
+        if candidate.exists() {
+            #[cfg(unix)]
+            {
+                if let Ok(metadata) = std::fs::metadata(&candidate) {
+                    let permissions = metadata.permissions();
+                    // Check if any execute bit is set
+                    if permissions.mode() & 0o111 != 0 {
+                        results.push(candidate);
+                        if !find_all {
+                            break;
+                        }
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                // On non-Unix systems, just check existence
+                results.push(candidate);
+                if !find_all {
+                    break;
+                }
+            }
+        }
+    }
+
+    results
 }

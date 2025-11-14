@@ -10,7 +10,7 @@ from pathlib import Path
 from shp import prog, ShipRunnable
 
 # Control what gets exported with "from ... import *"
-__all__ = ["cd", "pwd", "pushd", "popd", "dirs", "exit", "quit"]
+__all__ = ["cd", "pwd", "pushd", "popd", "dirs", "exit", "quit", "which"]
 
 
 # Builtin command wrappers using prog() for composability
@@ -56,3 +56,32 @@ def quit(code: int = 0) -> ShipRunnable:
         return prog("quit")()
     else:
         return prog("quit")(str(code))
+
+
+def which(*programs: str, show_all: bool = False, silent: bool = False) -> ShipRunnable:
+    """
+    Locate a program file in the user's path.
+
+    Args:
+        *programs: One or more program names to search for
+        show_all: If True, list all instances found (instead of just the first)
+        silent: If True, silent mode - no output, just return exit code
+
+    Returns:
+        ShipRunnable that when executed prints the full path(s) to the program(s)
+        Exit code: 0 if all programs found, 1 if any not found
+
+    Examples:
+        which("ls")                          # Find ls
+        which("ls", "cat", "grep")           # Find multiple programs
+        which("python3", show_all=True)      # Find all instances of python3
+        which("grep", silent=True)           # Silent mode, check if exists
+    """
+    args = []
+    if show_all:
+        args.append("-a")
+    if silent:
+        args.append("-s")
+    args.extend(programs)
+
+    return prog("which")(*args)

@@ -61,6 +61,9 @@ def wire_path_programs() -> None:
     This makes system commands directly callable without needing to use prog()
     explicitly each time.
 
+    Note: Built-in commands are skipped to preserve their ergonomic wrappers
+    that are set up before user initialization scripts run.
+
     Example:
         wire_path_programs()
         # Now you can use commands directly:
@@ -70,6 +73,10 @@ def wire_path_programs() -> None:
     """
     # Import shp here to avoid potential circular dependencies
     import shp
+
+    # Skip shell built-ins that have ergonomic wrappers in shp.ergo.builtins
+    # These are special because they're wired up before user init scripts run
+    SKIP_BUILTINS = {"cd", "pwd", "pushd", "popd", "dirs", "exit", "quit", "which"}
 
     # Get PATH from environment
     path_list = shp.env.get("PATH", [])
@@ -122,9 +129,12 @@ def wire_path_programs() -> None:
             continue
 
     # Build Python code string with lambda definitions
+    # Skip built-ins to preserve their ergonomic wrappers
     code_lines = []
     for var_name, prog_name in sorted(executables.items()):
-        code_lines.append(f"{var_name} = lambda *args: prog('{prog_name}')(*args)")
+        # Skip if this is a builtin command
+        if var_name not in SKIP_BUILTINS:
+            code_lines.append(f"{var_name} = lambda *args: prog('{prog_name}')(*args)")
 
     # Execute the generated code via source()
     if code_lines:
