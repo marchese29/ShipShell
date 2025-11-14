@@ -10,7 +10,6 @@ const CORE: &str = include_str!("../../python/core.py");
 const PYTHON_INIT: &str = include_str!("../../python/init.py");
 const SHIP_SHELL_MARKER: &str = include_str!("../../python/ship_shell_marker.py");
 const SHP_ERGO_BUILTINS: &str = include_str!("../../python/shp/ergo/builtins.py");
-const SHP_ERGO_POSIX: &str = include_str!("../../python/shp/ergo/posix.py");
 const SHP_ERGO_INIT: &str = include_str!("../../python/shp/ergo/__init__.py");
 
 /// Register embedded Python modules in sys.modules
@@ -38,7 +37,6 @@ fn register_embedded_modules(py: Python) -> PyResult<()> {
     register("core", CORE, None)?;
     register("ship_shell_marker", SHIP_SHELL_MARKER, None)?;
     register("shp.ergo.builtins", SHP_ERGO_BUILTINS, Some("shp.ergo"))?;
-    register("shp.ergo.posix", SHP_ERGO_POSIX, Some("shp.ergo"))?;
     register("shp.ergo", SHP_ERGO_INIT, Some("shp.ergo"))?;
 
     Ok(())

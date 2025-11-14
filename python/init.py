@@ -9,9 +9,8 @@ shell environment.
 from shp import *  # noqa: F403
 from core import *  # noqa: F403
 
-# Import ergonomic wrappers for shell builtins and POSIX utilities
+# Import ergonomic wrappers for shell builtins
 from shp.ergo.builtins import *  # noqa: F403
-from shp.ergo.posix import *  # noqa: F403
 
 
 # Load user init file if it exists (after imports so init file has access to everything)
