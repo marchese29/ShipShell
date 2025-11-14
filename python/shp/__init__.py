@@ -27,7 +27,11 @@ __all__ = [
     "get_env",
     "set_env",
     "env",
+    "repl",
 ]
+
+# Import repl submodule for IDE support
+from . import repl
 
 
 class ShipResult:

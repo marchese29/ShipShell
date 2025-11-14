@@ -105,9 +105,6 @@ pub struct ShellEnvironment {
     pid: EnvValue,
     ppid: EnvValue,
     old_pwd: EnvValue,
-    ps1: EnvValue,
-    ps2: EnvValue,
-    ps4: EnvValue,
 }
 
 impl ShellEnvironment {
@@ -120,9 +117,6 @@ impl ShellEnvironment {
             pid: EnvValue::Integer(getpid().as_raw().into()),
             ppid: EnvValue::Integer(getppid().as_raw().into()),
             old_pwd: EnvValue::None,
-            ps1: EnvValue::None,
-            ps2: EnvValue::None,
-            ps4: EnvValue::None,
         }
     }
 
@@ -139,9 +133,6 @@ impl ShellEnvironment {
             pid: EnvValue::Integer(getpid().as_raw().into()),
             ppid: EnvValue::Integer(getppid().as_raw().into()),
             old_pwd: EnvValue::None,
-            ps1: EnvValue::None,
-            ps2: EnvValue::None,
-            ps4: EnvValue::None,
         }
     }
 
@@ -156,9 +147,6 @@ impl ShellEnvironment {
 
             // Internal Shell Things
             "OLDPWD" => Some(&self.old_pwd),
-            "PS1" => Some(&self.ps1),
-            "PS2" => Some(&self.ps2),
-            "PS4" => Some(&self.ps4),
 
             // ENV not supported yet
             "ENV" => panic!("ENV environment variable not supported yet"),
@@ -182,9 +170,6 @@ impl ShellEnvironment {
 
             // Internally-managed variables
             "OLDPWD" => self.old_pwd = value,
-            "PS1" => self.ps1 = value,
-            "PS2" => self.ps2 = value,
-            "PS4" => self.ps4 = value,
 
             // ENV not supported yet
             "ENV" => panic!("ENV environment variable not supported yet"),
