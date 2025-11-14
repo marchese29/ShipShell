@@ -13,7 +13,8 @@
   - [ ] Run arbitrary code in a scoped environment?
 - [X] Collection of stdout and stderr on process result
   - [ ] Probably need to clean up this code
-- [ ] Ergonomic wrappers for the common unix programs
-- [ ] Support for PS1, PS2, and PS4
+- [X] Ergonomic wrappers for the common unix programs (got the ones from the standard)
+  - [ ] Get others outside the standard (like which and echo)
+- [X] Python-REPL integrations and custom prompts
 - [ ] Handling of traps
 - [ ] Enable export of shell-internal environment variables (if the user wants to)
