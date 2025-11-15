@@ -25,7 +25,7 @@ except ImportError:
 __all__ = ["source", "wire_path_programs"]
 
 
-def source(file: str | Path | IO[str]) -> None:
+def source(file: str | Path | IO[str], scope: str | None = None) -> None:
     """
     Execute Python code from a file or file-like object in the REPL's namespace.
 
@@ -33,6 +33,7 @@ def source(file: str | Path | IO[str]) -> None:
 
     Args:
         file: Path to a Python file, or a file-like object with a read() method
+        scope: Optional module to run the code in
 
     Example:
         source('~/.shipshellrc')
@@ -48,7 +49,7 @@ def source(file: str | Path | IO[str]) -> None:
         exec(file.read(), __main__.__dict__)
 
 
-def wire_path_programs() -> None:
+def wire_path_programs(module: str | None = None) -> None:
     """
     Auto-wire executable programs from PATH as callable Python functions.
 
@@ -76,7 +77,17 @@ def wire_path_programs() -> None:
 
     # Skip shell built-ins that have ergonomic wrappers in shp.ergo.builtins
     # These are special because they're wired up before user init scripts run
-    SKIP_BUILTINS = {"cd", "pwd", "pushd", "popd", "dirs", "exit", "quit", "which"}
+    SKIP_BUILTINS = {
+        "cd",
+        "pwd",
+        "pushd",
+        "popd",
+        "dirs",
+        "exit",
+        "quit",
+        "which",
+        "source",
+    }
 
     # Get PATH from environment
     path_list = shp.env.get("PATH", [])
@@ -113,12 +124,12 @@ def wire_path_programs() -> None:
                 prog_name = entry.name
 
                 # Check if name is a valid Python identifier
-                if prog_name.isidentifier():
+                if prog_name.replace("-", "_").isidentifier():
                     # If it's a reserved word, append underscore
                     if prog_name in reserved_words:
-                        var_name = prog_name + "_"
+                        var_name = prog_name.replace("-", "_") + "_"
                     else:
-                        var_name = prog_name
+                        var_name = prog_name.replace("-", "_")
 
                     # Only add if we haven't seen this var_name yet (PATH order)
                     if var_name not in executables:
@@ -139,4 +150,4 @@ def wire_path_programs() -> None:
     # Execute the generated code via source()
     if code_lines:
         code_str = "\n".join(code_lines)
-        source(io.StringIO(code_str))
+        source(io.StringIO(code_str), module)

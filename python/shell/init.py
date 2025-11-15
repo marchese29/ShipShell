@@ -5,10 +5,6 @@ NOTE: This code is run directly in the shell REPL - whatever you do in here will
 shell environment.
 """
 
-# Add the main shp module and core directly to the namespace
-from shp import *  # noqa: F403
-from core import *  # noqa: F403
-
 
 # Load user init file if it exists (after imports so init file has access to everything)
 def load_user_init_file():
