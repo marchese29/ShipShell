@@ -334,7 +334,7 @@ pub fn which(args: &[String]) -> i32 {
         let mut found_anything = false;
 
         // Check if it's a shell built-in
-        let is_builtin = get_builtin(program).is_some();
+        let is_builtin = get_builtin(program).is_some() || program == "source";
         if is_builtin {
             if !silent {
                 println!("{}: shell built-in command", program);
