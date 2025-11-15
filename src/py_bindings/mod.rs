@@ -6,11 +6,9 @@ use pyo3::prelude::*;
 use std::ffi::CString;
 
 // Embed Python modules at compile time
-const CORE: &str = include_str!("../../python/core.py");
-const PYTHON_INIT: &str = include_str!("../../python/init.py");
-const SHIP_SHELL_MARKER: &str = include_str!("../../python/ship_shell_marker.py");
-const SHP_ERGO_BUILTINS: &str = include_str!("../../python/shp/ergo/builtins.py");
-const SHP_ERGO_INIT: &str = include_str!("../../python/shp/ergo/__init__.py");
+const CORE: &str = include_str!("../../python/shell/core.py");
+const PYTHON_INIT: &str = include_str!("../../python/shell/init.py");
+const SHP_BUILTINS: &str = include_str!("../../python/shell/builtins.py");
 
 /// Register embedded Python modules in sys.modules
 fn register_embedded_modules(py: Python) -> PyResult<()> {
@@ -35,9 +33,7 @@ fn register_embedded_modules(py: Python) -> PyResult<()> {
     // Note: We DON'T register the Python shp stub - the Rust native module is already registered
     // The shp/__init__.py file is only for external IDE/script support
     register("core", CORE, None)?;
-    register("ship_shell_marker", SHIP_SHELL_MARKER, None)?;
-    register("shp.ergo.builtins", SHP_ERGO_BUILTINS, Some("shp.ergo"))?;
-    register("shp.ergo", SHP_ERGO_INIT, Some("shp.ergo"))?;
+    register("shp.builtins", SHP_BUILTINS, Some("shp"))?;
 
     Ok(())
 }

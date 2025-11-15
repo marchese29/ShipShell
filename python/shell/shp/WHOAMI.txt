@@ -1,0 +1,1 @@
+This folder is here as a copy from the library so I can have my IDE work

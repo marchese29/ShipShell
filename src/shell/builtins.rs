@@ -331,14 +331,36 @@ pub fn which(args: &[String]) -> i32 {
     let mut all_found = true;
 
     for program in programs {
+        let mut found_anything = false;
+
+        // Check if it's a shell built-in
+        let is_builtin = get_builtin(program).is_some();
+        if is_builtin {
+            if !silent {
+                println!("{}: shell built-in command", program);
+            }
+            found_anything = true;
+
+            // If not showing all, skip searching PATH
+            if !show_all {
+                continue;
+            }
+        }
+
+        // Search in PATH (either not a built-in, or show_all is requested)
         let paths = find_in_path(program, show_all);
 
-        if paths.is_empty() {
-            all_found = false;
-        } else if !silent {
-            for path in paths {
-                println!("{}", path.display());
+        if !paths.is_empty() {
+            found_anything = true;
+            if !silent {
+                for path in paths {
+                    println!("{}", path.display());
+                }
             }
+        }
+
+        if !found_anything {
+            all_found = false;
         }
     }
 
