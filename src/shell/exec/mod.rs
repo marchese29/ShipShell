@@ -60,6 +60,7 @@ pub(crate) fn execute_command_spec(spec: &CommandSpec) -> ShellResult {
             runnable,
             env_overlay,
         } => execute_with_env(runnable, env_overlay),
+        CommandSpec::ScriptExec { code } => execute_script(code),
     }
 }
 
@@ -141,6 +142,20 @@ pub(super) fn execute_redirect(spec: &CommandSpec, target: &types::RedirectTarge
         let result = execute_command_spec(spec);
         result.exit_code() as i32
     })
+}
+
+/// Execute Python script code using the global CODE_EXECUTOR
+fn execute_script(code: &str) -> ShellResult {
+    // Get the code executor from the REPL module
+    if let Some(executor) = crate::repl::get_code_executor() {
+        match executor(code) {
+            Ok(()) => ShellResult::ExitOnly { exit_code: 0 },
+            Err(_) => ShellResult::ExitOnly { exit_code: 1 },
+        }
+    } else {
+        eprintln!("Error: Python code executor not initialized");
+        ShellResult::ExitOnly { exit_code: 1 }
+    }
 }
 
 /// Execute command with environment overlay

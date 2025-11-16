@@ -8,47 +8,13 @@ The actual implementation is in python/core.py and is loaded at runtime.
 from pathlib import Path
 from typing import IO
 
-__all__ = ["source"]
+__all__ = ["source", "wire_path_programs"]
 
 
-def source(file: str | Path | IO[str], scope: str | None = None) -> None:
-    """
-    Execute Python code from a file or file-like object in the REPL's namespace.
-
-    This is a Python-specific feature, not a shell builtin.
-
-    Args:
-        file: Path to a Python file, or a file-like object with a read() method
-        scope: Optional module to run the code in
-
-    Example:
-        source('~/.shipshellrc')
-        source(Path('/etc/shipshell/config.py'))
-    """
-    ...
+def source(file: str | Path | IO[str], scope: str | None = None) -> None: ...
 
 
-def wire_path_programs() -> None:
-    """
-    Auto-wire executable programs from PATH as callable Python functions.
+def wire_module(module: str, target: str | None = None) -> None: ...
 
-    Scans all directories in shp.env['PATH'] and creates lambda wrappers
-    for each executable program with a valid Python identifier name (that
-    is not a Python reserved word).
 
-    Each program is wired up as: {name} = lambda *args: prog('{name}')(*args)
-
-    This makes system commands directly callable without needing to use prog()
-    explicitly each time.
-
-    Note: Built-in commands are skipped to preserve their ergonomic wrappers
-    that are set up before user initialization scripts run.
-
-    Example:
-        wire_path_programs()
-        # Now you can use commands directly:
-        ls('-la')
-        cat('file.txt')
-        grep('pattern', 'file.txt')
-    """
-    ...
+def wire_path_programs() -> None: ...

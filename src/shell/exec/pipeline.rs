@@ -14,8 +14,9 @@ pub fn exec_pipeline_stage(spec: &CommandSpec) -> ! {
         }
         CommandSpec::Builtin { .. }
         | CommandSpec::Redirect { .. }
-        | CommandSpec::WithEnv { .. } => {
-            // Execute the builtin in a subshell and exit with its result
+        | CommandSpec::WithEnv { .. }
+        | CommandSpec::ScriptExec { .. } => {
+            // Execute the builtin/script in a subshell and exit with its result
             let result = super::execute_command_spec(spec);
             std::process::exit(result.exit_code() as i32);
         }

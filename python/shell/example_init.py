@@ -8,10 +8,6 @@ This file is the creator's current init.py
 
 # For the Shell
 import shp
-from shp import *  # noqa: F403
-from core import *  # noqa: F403
-from shp import repl  # noqa: F401
-from shp.builtins import *  # noqa: F403
 
 # Other conveniences
 from pathlib import Path
@@ -65,3 +61,25 @@ shp.env["PATH"].append(
 shp.env["PATH"].insert(0, Path.home() / ".cargo" / "bin")
 
 # TODO: NVM with bash compatibility
+
+##############
+# ERGONOMICS #
+##############
+
+
+def wire():
+    """
+    Wires up all of the ergonomic calling functions
+
+    I personally like to put everything in a "c" module so that I don't have thousands of
+    things in my global namespace.
+    """
+    import core
+
+    core.wire_path_programs("c")
+    core.wire_module("shp.builtins", "c")
+    core.wire_module("core", "c")
+    core.wire_module("shp", "c")
+
+
+wire()

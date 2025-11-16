@@ -46,6 +46,9 @@ pub enum ExecRequest {
         request: Box<ExecRequest>,
         env_overlay: HashMap<String, EnvValue>,
     },
+    ScriptExec {
+        code: String,
+    },
 }
 
 /// Represents errors that can occur during program path resolution
@@ -115,6 +118,9 @@ pub enum CommandSpec {
         runnable: Box<CommandSpec>,
         env_overlay: HashMap<String, EnvValue>,
     },
+    ScriptExec {
+        code: String,
+    },
 }
 
 // Custom Debug impl since function pointers don't implement Debug
@@ -155,6 +161,13 @@ impl std::fmt::Debug for CommandSpec {
                 .debug_struct("WithEnv")
                 .field("runnable", runnable)
                 .field("env_overlay", env_overlay)
+                .finish(),
+            CommandSpec::ScriptExec { code } => f
+                .debug_struct("ScriptExec")
+                .field(
+                    "code",
+                    &format!("{}...", &code.chars().take(50).collect::<String>()),
+                )
                 .finish(),
         }
     }
@@ -219,6 +232,7 @@ impl From<&ExecRequest> for CommandSpec {
                 runnable: Box::new(CommandSpec::from(request.as_ref())),
                 env_overlay: env_overlay.clone(),
             },
+            ExecRequest::ScriptExec { code } => CommandSpec::ScriptExec { code: code.clone() },
         }
     }
 }

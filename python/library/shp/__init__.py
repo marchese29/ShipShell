@@ -20,7 +20,7 @@ __all__ = [
     "cmd",
     "pipe",
     "sub",
-    "shexec",
+    "shpexec",
     "capture",
     "get_stdout",
     "get_stderr",
@@ -314,9 +314,31 @@ def sub(runnable: ShipRunnable) -> ShipRunnable:
     raise NotImplementedError("sub() only works in ShipShell REPL")
 
 
-def shexec(runnable: ShipRunnable) -> ShipResult:
-    """Explicitly execute a runnable command."""
-    return runnable()
+def shpexec(file: str | Any, *args: str) -> ShipRunnable:
+    """Execute a Python script file in the shell's embedded interpreter.
+
+    The script runs in an isolated namespace with access to shell functionality
+    through the 'shp' module. Arguments are passed via sys.argv.
+
+    Args:
+        file: Path to Python script file (supports ~ expansion and relative paths).
+              Can be a string, Path object, or file-like object with fileno().
+        *args: Command-line arguments to pass to the script (sys.argv[1:])
+
+    Returns:
+        ShipRunnable that when executed runs the Python script
+
+    Examples:
+        # Run a Python script
+        shpexec('script.py')()
+
+        # Run with arguments
+        shpexec('process.py', 'input.txt', 'output.txt')()
+
+        # Use in pipelines
+        prog('cat')('data.txt') | shpexec('filter.py') | prog('sort')()
+    """
+    raise NotImplementedError("shpexec() only works in ShipShell REPL")
 
 
 def capture(runnable: ShipRunnable) -> CapturedResult:

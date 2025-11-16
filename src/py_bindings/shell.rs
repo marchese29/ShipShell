@@ -164,6 +164,9 @@ enum Runnable {
         runnable: ShipRunnable,
         env_overlay: HashMap<String, EnvValue>,
     },
+    ScriptExec {
+        code: String,
+    },
 }
 
 #[derive(Clone)]
@@ -219,6 +222,7 @@ impl From<&ShipRunnable> for ExecRequest {
                 request: Box::new(runnable.into()),
                 env_overlay: env_overlay.clone(),
             },
+            Runnable::ScriptExec { code } => ExecRequest::ScriptExec { code: code.clone() },
         }
     }
 }
@@ -242,10 +246,10 @@ impl ShipRunnable {
             }
 
             // Atomic | Atomic -> Pipeline([lhs], rhs)
-            // (Command, Subshell, and WithEnv are all atomic units)
+            // (Command, Subshell, WithEnv, and ScriptExec are all atomic units)
             (
-                Command { .. } | Subshell { .. } | WithEnv { .. },
-                Command { .. } | Subshell { .. } | WithEnv { .. },
+                Command { .. } | Subshell { .. } | WithEnv { .. } | ScriptExec { .. },
+                Command { .. } | Subshell { .. } | WithEnv { .. } | ScriptExec { .. },
             ) => Arc::new(Pipeline {
                 predecessors: vec![self.clone()],
                 final_cmd: other.clone(),
@@ -257,7 +261,7 @@ impl ShipRunnable {
                     predecessors,
                     final_cmd,
                 },
-                Command { .. } | Subshell { .. } | WithEnv { .. },
+                Command { .. } | Subshell { .. } | WithEnv { .. } | ScriptExec { .. },
             ) => {
                 let mut new_predecessors = predecessors.clone();
                 new_predecessors.push(final_cmd.clone());
@@ -269,7 +273,7 @@ impl ShipRunnable {
 
             // Atomic | Pipeline -> prepend to pipeline
             (
-                Command { .. } | Subshell { .. } | WithEnv { .. },
+                Command { .. } | Subshell { .. } | WithEnv { .. } | ScriptExec { .. },
                 Pipeline {
                     predecessors,
                     final_cmd,
@@ -455,9 +459,122 @@ pub fn sub(runnable: ShipRunnable) -> PyResult<ShipRunnable> {
     Ok(ShipRunnable(Arc::new(Runnable::Subshell { runnable })))
 }
 
+/// Execute a Python script file in the embedded interpreter (in a subshell)
+///
+/// This is like the shell's "exec" builtin - runs the script with access to
+/// shell functionality (shp, prog, env, etc.) but in an isolated namespace.
+///
+/// Usage:
+///   shpexec('script.py')()
+///   shpexec('script.py', 'arg1', 'arg2')()
+///   shpexec('gen_data.py')() | prog('grep')('pattern')
 #[pyfunction]
-pub fn shexec(runnable: &ShipRunnable) -> PyResult<ShipResult> {
-    runnable.__call__()
+#[pyo3(signature = (file, *args))]
+pub fn shpexec(file: Bound<PyAny>, args: Vec<String>) -> PyResult<ShipRunnable> {
+    use std::path::PathBuf;
+
+    // Extract file path from various input types (str, Path, or file-like object)
+    let path_str = if let Ok(s) = file.extract::<String>() {
+        s
+    } else if file.hasattr("__fspath__")? {
+        // pathlib.Path or similar
+        let path_method = file.getattr("__fspath__")?;
+        path_method.call0()?.extract::<String>()?
+    } else if file.hasattr("name")? {
+        // File-like object with a name attribute
+        file.getattr("name")?.extract::<String>()?
+    } else {
+        return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "file must be a string path, Path object, or file-like object with a name",
+        ));
+    };
+
+    // Expand ~ to home directory if needed
+    let path_str = if path_str.starts_with('~') {
+        if let Some(home_val) = shell::get_var("HOME") {
+            let home = match home_val {
+                EnvValue::String(s) => s,
+                EnvValue::FilePath(p) => p.to_string_lossy().to_string(),
+                _ => path_str.clone(),
+            };
+            if path_str == "~" {
+                home
+            } else if let Some(rest) = path_str.strip_prefix("~/") {
+                format!("{}/{}", home, rest)
+            } else {
+                path_str
+            }
+        } else {
+            path_str
+        }
+    } else {
+        path_str
+    };
+
+    // Resolve to absolute path using shell's PWD
+    let path = PathBuf::from(&path_str);
+    let abs_path = if path.is_absolute() {
+        path
+    } else {
+        // Get current directory from shell environment
+        let cwd = if let Some(pwd_val) = shell::get_var("PWD") {
+            match pwd_val {
+                EnvValue::FilePath(p) => p,
+                EnvValue::String(s) => PathBuf::from(s),
+                _ => std::env::current_dir().map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyOSError, _>(format!(
+                        "Failed to get current directory: {}",
+                        e
+                    ))
+                })?,
+            }
+        } else {
+            std::env::current_dir().map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyOSError, _>(format!(
+                    "Failed to get current directory: {}",
+                    e
+                ))
+            })?
+        };
+        cwd.join(path)
+    };
+
+    let abs_path = abs_path.canonicalize().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyFileNotFoundError, _>(format!(
+            "Cannot find file '{}': {}",
+            path_str, e
+        ))
+    })?;
+
+    let abs_path_str = abs_path.to_string_lossy().to_string();
+
+    // Read the Python script
+    let script_code = std::fs::read_to_string(&abs_path).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+            "Failed to read '{}': {}",
+            abs_path_str, e
+        ))
+    })?;
+
+    // Build sys.argv list
+    let mut argv = vec![abs_path_str.clone()];
+    argv.extend(args);
+
+    // Create Python code that sets up environment and executes the script
+    let wrapper_code = format!(
+        r#"import sys
+sys.argv = {argv:?}
+
+# Execute script with proper __name__ and __file__
+exec(compile({script_code:?}, {abs_path_str:?}, 'exec'), {{'__name__': '__main__', '__file__': {abs_path_str:?}}})"#
+    );
+
+    // Create ScriptExec runnable wrapped in a Subshell for isolation
+    let script_exec = ShipRunnable(Arc::new(Runnable::ScriptExec { code: wrapper_code }));
+
+    Ok(ShipRunnable(Arc::new(Runnable::Subshell {
+        runnable: script_exec,
+    })))
 }
 
 /// Result of capturing command output with file descriptors

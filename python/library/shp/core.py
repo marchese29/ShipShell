@@ -8,7 +8,7 @@ The actual implementation is in python/core.py and is loaded at runtime.
 from pathlib import Path
 from typing import IO
 
-__all__ = ["source"]
+__all__ = ["source", "wire_module", "wire_path_programs"]
 
 
 def source(file: str | Path | IO[str], scope: str | None = None) -> None:
@@ -19,16 +19,45 @@ def source(file: str | Path | IO[str], scope: str | None = None) -> None:
 
     Args:
         file: Path to a Python file, or a file-like object with a read() method
-        scope: Optional module to run the code in
+        scope: Optional module name to execute the code in. If provided, creates
+               a module object and makes it accessible as __main__.{scope}
 
     Example:
         source('~/.shipshellrc')
         source(Path('/etc/shipshell/config.py'))
+
+        # Execute in a module namespace
+        source(some_file, scope='mymod')
+        # Now accessible as mymod.* in __main__
     """
     ...
 
 
-def wire_path_programs() -> None:
+def wire_module(module: str, target: str | None = None) -> None:
+    """
+    Wire all exported contents from a source module into a target module namespace.
+
+    This function imports all contents (respecting __all__ if present) from a
+    source module and makes them available in the target module namespace.
+
+    Args:
+        module: The module to import from (e.g., 'shp.builtins')
+        target: The target module namespace to wire into (defaults to __main__)
+
+    Example:
+        # Wire shell builtins into 'c' module
+        wire_module_contents('shp.builtins', 'c')
+        c.cd('/tmp')
+        c.pwd()
+
+        # Wire custom utilities
+        wire_module_contents('my_tools', 'utils')
+        utils.my_function()
+    """
+    ...
+
+
+def wire_path_programs(module: str | None = None) -> None:
     """
     Auto-wire executable programs from PATH as callable Python functions.
 
@@ -44,11 +73,20 @@ def wire_path_programs() -> None:
     Note: Built-in commands are skipped to preserve their ergonomic wrappers
     that are set up before user initialization scripts run.
 
+    Args:
+        module: Optional module name to wire programs into. If provided, all
+                programs will be accessible as {module}.{program} instead of
+                directly in the global namespace.
+
     Example:
+        # Wire directly into global namespace
         wire_path_programs()
-        # Now you can use commands directly:
         ls('-la')
         cat('file.txt')
-        grep('pattern', 'file.txt')
+
+        # Wire into a module to avoid namespace pollution
+        wire_path_programs('cmd')
+        cmd.ls('-la')
+        cmd.grep('pattern', 'file.txt')
     """
     ...

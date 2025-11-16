@@ -9,6 +9,7 @@ import io
 import keyword
 import os
 import sys
+import types
 from pathlib import Path
 from typing import IO
 
@@ -22,7 +23,7 @@ except ImportError:
     )
     sys.exit(1)
 
-__all__ = ["source", "wire_path_programs"]
+__all__ = ["source", "wire_module", "wire_path_programs"]
 
 
 def source(file: str | Path | IO[str], scope: str | None = None) -> None:
@@ -33,20 +34,70 @@ def source(file: str | Path | IO[str], scope: str | None = None) -> None:
 
     Args:
         file: Path to a Python file, or a file-like object with a read() method
-        scope: Optional module to run the code in
+        scope: Optional module name to execute the code in. If provided, creates
+               a module object and makes it accessible as __main__.{scope}
 
     Example:
         source('~/.shipshellrc')
         source(Path('/etc/shipshell/config.py'))
+
+        # Execute in a module namespace
+        source(some_file, scope='mymod')
+        # Now accessible as mymod.* in __main__
     """
+    # Read the code
     if isinstance(file, (str, Path)):
         # Resolve to absolute path so cd() calls in the file don't break relative paths
         abs_path = Path(file).expanduser().resolve()
         with open(abs_path) as f:
-            exec(f.read(), __main__.__dict__)
+            code = f.read()
     else:
         # File-like object
-        exec(file.read(), __main__.__dict__)
+        code = file.read()
+
+    # Execute in appropriate namespace
+    if scope is None:
+        # Default: execute in __main__ namespace
+        exec(code, __main__.__dict__)
+    else:
+        # Create or get module object
+        if hasattr(__main__, scope):
+            module = getattr(__main__, scope)
+            if not isinstance(module, types.ModuleType):
+                raise ValueError(
+                    f"'{scope}' already exists in __main__ but is not a module"
+                )
+        else:
+            # Create new module
+            module = types.ModuleType(scope)
+            setattr(__main__, scope, module)
+
+        # Execute code in the module's namespace
+        exec(code, module.__dict__)
+
+
+def wire_module(module: str, target: str | None = None) -> None:
+    """
+    Wire all exported contents from a source module into a target module namespace.
+
+    This function imports all contents (respecting __all__ if present) from a
+    source module and makes them available in the target module namespace.
+
+    Args:
+        module: The module to import from (e.g., 'shp.builtins')
+        target: The target module namespace to wire into (defaults to __main__)
+
+    Example:
+        # Wire shell builtins into 'c' module
+        wire_module_contents('shp.builtins', 'c')
+        c.cd('/tmp')
+        c.pwd()
+
+        # Wire custom utilities
+        wire_module_contents('my_tools', 'utils')
+        utils.my_function()
+    """
+    source(io.StringIO(f"from {module} import *"), scope=target)
 
 
 def wire_path_programs(module: str | None = None) -> None:

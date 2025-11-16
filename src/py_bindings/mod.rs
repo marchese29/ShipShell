@@ -113,7 +113,7 @@ pub mod shp {
         m.add_function(wrap_pyfunction!(shell::cmd, m)?)?;
         m.add_function(wrap_pyfunction!(shell::pipe, m)?)?;
         m.add_function(wrap_pyfunction!(shell::sub, m)?)?;
-        m.add_function(wrap_pyfunction!(shell::shexec, m)?)?;
+        m.add_function(wrap_pyfunction!(shell::shpexec, m)?)?;
         m.add_function(wrap_pyfunction!(shell::capture, m)?)?;
         m.add_function(wrap_pyfunction!(shell::get_stdout, m)?)?;
         m.add_function(wrap_pyfunction!(shell::get_stderr, m)?)?;

@@ -68,6 +68,7 @@ pub(super) fn execute_command_spec_with_capture(spec: &CommandSpec) -> ShellResu
             runnable,
             env_overlay,
         } => execute_with_env_captured(runnable, env_overlay),
+        CommandSpec::ScriptExec { code } => execute_script_captured(code),
     }
 }
 
@@ -226,4 +227,54 @@ fn execute_with_env_captured(
     }
 
     result
+}
+
+/// Execute Python script with stdout/stderr capture
+fn execute_script_captured(code: &str) -> ShellResult {
+    // Create pipes for stdout and stderr
+    let (stdout_read, stdout_write) = pipe().expect("Failed to create stdout pipe");
+    let (stderr_read, stderr_write) = pipe().expect("Failed to create stderr pipe");
+
+    // Save original stdout and stderr
+    let saved_stdout = unsafe { libc::dup(1) };
+    let saved_stderr = unsafe { libc::dup(2) };
+    if saved_stdout == -1 || saved_stderr == -1 {
+        panic!("Failed to save stdout/stderr");
+    }
+
+    // Redirect stdout and stderr to pipes
+    unsafe {
+        libc::dup2(stdout_write.as_raw_fd(), 1);
+        libc::dup2(stderr_write.as_raw_fd(), 2);
+    }
+
+    // Close write ends (dup2 created copies at fd 1 and 2)
+    drop(stdout_write);
+    drop(stderr_write);
+
+    // Execute the script using the code executor
+    let exit_code = if let Some(executor) = crate::repl::get_code_executor() {
+        match executor(code) {
+            Ok(()) => 0,
+            Err(_) => 1,
+        }
+    } else {
+        eprintln!("Error: Python code executor not initialized");
+        1
+    };
+
+    // Restore original stdout and stderr
+    unsafe {
+        libc::dup2(saved_stdout, 1);
+        libc::dup2(saved_stderr, 2);
+        libc::close(saved_stdout);
+        libc::close(saved_stderr);
+    }
+
+    // Leak read ends and return
+    ShellResult::Captured {
+        exit_code,
+        stdout_fd: stdout_read.into_raw_fd(),
+        stderr_fd: stderr_read.into_raw_fd(),
+    }
 }

@@ -332,6 +332,10 @@ pub fn set_code_executor(executor: CodeExecutor) {
     CODE_EXECUTOR.set(executor).ok();
 }
 
+pub fn get_code_executor() -> Option<&'static CodeExecutor> {
+    CODE_EXECUTOR.get()
+}
+
 /// Main REPL loop - completely Python-agnostic
 pub fn run() -> anyhow::Result<()> {
     // Create reedline editor (default: white text, no syntax highlighting)
