@@ -1,7 +1,7 @@
 **For feature ideas that are not core shell functionalities**
-- [ ] "ergo" module with more intuitive python bindings for common programs (like builtins and git)
+- [X] "ergo" module with more intuitive python bindings for common programs (like builtins and git)
 - [ ] DEEP uv integration so people can use any python library they want directly from the shell
-  - [ ] Standardized location for shell's python environment (like installed libraries)
+  - [X] Standardized location for shell's python environment (like installed libraries)
 - [ ] Translation layer from bash -> shp-python for easy compatibility
 - [ ] Syntax highlighting (and customization?)
 - [ ] Auto-Complete via LSP
