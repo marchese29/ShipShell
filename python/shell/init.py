@@ -7,13 +7,21 @@ shell environment.
 
 
 # Load user init file if it exists (after imports so init file has access to everything)
-def load_user_init_file():
+def _shp_initialize():
+    import shp
     from core import source
 
     from pathlib import Path
     import sys
 
-    config_init = Path.home() / ".config" / "ship" / "init.py"
+    # Get (or set) the SHIP_CONFIG_DIR
+    shp_config_dir: Path | None = shp.env.get("SHIP_CONFIG_DIR", None)
+    if shp_config_dir is None:
+        shp_config_dir = Path.home() / ".config" / "ship"
+        shp.env["SHIP_CONFIG_DIR"] = shp_config_dir
+
+    # We'll look either in the ship configuration directory, or the home directory
+    config_init = shp_config_dir / "init.py"
     home_init = Path.home() / "init.py"
 
     try:
@@ -26,8 +34,7 @@ def load_user_init_file():
         print(f"Error loading init file: {e}", file=sys.stderr)
 
 
-# Load RC file now that everything is imported
-load_user_init_file()
+_shp_initialize()
 
-# Remove things we don't want exposed in the global namespace
-del load_user_init_file
+# Remove so we don't pollute the global namespace
+del _shp_initialize

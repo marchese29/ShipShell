@@ -62,6 +62,20 @@ shp.env["PATH"].insert(0, Path.home() / ".cargo" / "bin")
 
 # TODO: NVM with bash compatibility
 
+#############################
+# Package Environment Setup #
+#############################
+
+
+def initialize_pyenv():
+    from shp import py_env
+
+    py_env.initialize_shell_venv()
+
+
+initialize_pyenv()
+
+
 ##############
 # ERGONOMICS #
 ##############
@@ -80,6 +94,9 @@ def wire():
     core.wire_module("shp.builtins", "c")
     core.wire_module("core", "c")
     core.wire_module("shp", "c")
+
+    # Package management goes into the "p" namespace
+    core.wire_module("shp.py_env", "p")
 
 
 wire()

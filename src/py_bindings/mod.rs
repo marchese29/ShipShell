@@ -9,6 +9,7 @@ use std::ffi::CString;
 const CORE: &str = include_str!("../../python/shell/core.py");
 const SHP_BUILTINS: &str = include_str!("../../python/shell/builtins.py");
 const SHP_SHELL_MARKER: &str = include_str!("../../python/shell/shell_marker.py");
+const SHP_PY_ENV: &str = include_str!("../../python/shell/py_env.py");
 const PYTHON_INIT: &str = include_str!("../../python/shell/init.py");
 
 /// Register embedded Python modules in sys.modules
@@ -35,6 +36,7 @@ fn register_embedded_modules(py: Python) -> PyResult<()> {
     // The shp/__init__.py file is only for external IDE/script support
     register("core", CORE, None)?;
     register("shp.builtins", SHP_BUILTINS, Some("shp"))?;
+    register("shp.py_env", SHP_PY_ENV, Some("shp"))?;
     register("shp.shell_marker", SHP_SHELL_MARKER, Some("shp"))?;
 
     Ok(())
