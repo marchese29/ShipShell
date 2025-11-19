@@ -12,29 +12,14 @@ use std::sync::Arc;
 use crate::shell::exec::{ShellResult, execute_with_capture};
 use crate::shell::{self, EnvValue, ExecRequest, execute};
 
-/// Execute a line of Python code in REPL mode with auto-run for ShipRunnable
-pub fn execute_repl_code(py: Python, repl_string: &str) -> anyhow::Result<()> {
-    let code = CString::new(repl_string)?;
-
-    // Try to evaluate as an expression first
-    match py.eval(code.as_c_str(), None, None) {
-        // Successfully evaluated as expression
-        Ok(result) if result.is_instance_of::<ShipRunnable>() => {
-            // ShipRunnable - auto-run it
-            result.call0()?;
-        }
-        Ok(result) if !result.is_none() => {
-            // Print the result
-            println!("{}", result.repr()?);
-        }
-        Ok(_) => {} // None result - do nothing
-        // If eval fails, try running as a statement
-        Err(_) => {
-            py.run(code.as_c_str(), None, None)?;
-        }
-    }
-
-    Ok(())
+/// Execute Python code (for ScriptExec)
+/// This is used by the shell execution system to run Python scripts
+pub fn execute_python_code(code: &str) -> anyhow::Result<()> {
+    pyo3::Python::attach(|py| {
+        let code_cstr = CString::new(code)?;
+        py.run(code_cstr.as_c_str(), None, None)?;
+        Ok(())
+    })
 }
 
 /// Convert a Python object to an EnvValue with strict type checking (no coercion)

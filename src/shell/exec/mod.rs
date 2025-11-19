@@ -144,16 +144,15 @@ pub(super) fn execute_redirect(spec: &CommandSpec, target: &types::RedirectTarge
     })
 }
 
-/// Execute Python script code using the global CODE_EXECUTOR
+/// Execute Script code using the global CODE_EXECUTOR
 fn execute_script(code: &str) -> ShellResult {
-    // Get the code executor from the REPL module
-    if let Some(executor) = crate::repl::get_code_executor() {
+    if let Some(executor) = crate::shell::get_code_executor() {
         match executor(code) {
             Ok(()) => ShellResult::ExitOnly { exit_code: 0 },
             Err(_) => ShellResult::ExitOnly { exit_code: 1 },
         }
     } else {
-        eprintln!("Error: Python code executor not initialized");
+        eprintln!("Error: Code executor not initialized");
         ShellResult::ExitOnly { exit_code: 1 }
     }
 }

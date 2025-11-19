@@ -253,7 +253,7 @@ fn execute_script_captured(code: &str) -> ShellResult {
     drop(stderr_write);
 
     // Execute the script using the code executor
-    let exit_code = if let Some(executor) = crate::repl::get_code_executor() {
+    let exit_code = if let Some(executor) = crate::shell::get_code_executor() {
         match executor(code) {
             Ok(()) => 0,
             Err(_) => 1,

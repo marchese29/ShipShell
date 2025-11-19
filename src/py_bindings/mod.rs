@@ -1,4 +1,3 @@
-pub mod repl;
 pub mod shell;
 
 use anyhow::Result;
@@ -11,6 +10,7 @@ const SHP_BUILTINS: &str = include_str!("../../python/shell/builtins.py");
 const SHP_SHELL_MARKER: &str = include_str!("../../python/shell/shell_marker.py");
 const SHP_PY_ENV: &str = include_str!("../../python/shell/py_env.py");
 const PYTHON_INIT: &str = include_str!("../../python/shell/init.py");
+const REPL: &str = include_str!("../../python/shell/repl.py");
 
 /// Register embedded Python modules in sys.modules
 fn register_embedded_modules(py: Python) -> PyResult<()> {
@@ -34,10 +34,12 @@ fn register_embedded_modules(py: Python) -> PyResult<()> {
     // Register all embedded modules
     // Note: We DON'T register the Python shp stub - the Rust native module is already registered
     // The shp/__init__.py file is only for external IDE/script support
+    // Register shp.* modules first since repl depends on shp.py_env
     register("core", CORE, None)?;
     register("shp.builtins", SHP_BUILTINS, Some("shp"))?;
     register("shp.py_env", SHP_PY_ENV, Some("shp"))?;
     register("shp.shell_marker", SHP_SHELL_MARKER, Some("shp"))?;
+    register("repl", REPL, None)?;
 
     Ok(())
 }
@@ -54,9 +56,9 @@ pub fn initialize_runtime() -> Result<()> {
     Ok(())
 }
 
-/// Stage 2: Configure Python environment and register REPL dependencies
+/// Stage 2: Configure Python environment
 /// Call this AFTER shell::initialize_environment()
-pub fn configure_repl() -> Result<()> {
+pub fn configure_python_env() -> Result<()> {
     // Register embedded Python modules and run initialization script
     Python::attach(|py| {
         register_embedded_modules(py)?;
@@ -67,28 +69,19 @@ pub fn configure_repl() -> Result<()> {
         Ok::<(), PyErr>(())
     })?;
 
-    // Register statement checker with REPL
-    crate::repl::set_statement_checker(Box::new(|code: &str| {
-        Python::attach(|py| {
-            // Import codeop module and get compile_command function
-            let result = py
-                .import("codeop")
-                .and_then(|codeop| codeop.getattr("compile_command"))
-                .and_then(|compile_cmd| compile_cmd.call1((code,)));
+    // Register code executor with shell
+    crate::shell::set_code_executor(Box::new(|code: &str| shell::execute_python_code(code)));
 
-            match result {
-                Ok(obj) if obj.is_none() => false, // None = incomplete
-                Ok(_) => true,                     // Code object = complete
-                Err(_) => true,                    // Syntax error = let Python report it
-            }
-        })
-    }));
+    Ok(())
+}
 
-    // Register code executor with REPL
-    crate::repl::set_code_executor(Box::new(|code: &str| {
-        Python::attach(|py| shell::execute_repl_code(py, code))
-    }));
-
+/// Run the Python-based REPL
+pub fn run_python_repl() -> Result<()> {
+    Python::attach(|py| {
+        let repl = py.import("repl")?;
+        repl.getattr("run_repl")?.call0()?;
+        Ok::<(), PyErr>(())
+    })?;
     Ok(())
 }
 
@@ -97,7 +90,7 @@ pub fn configure_repl() -> Result<()> {
 pub mod shp {
     use super::*;
 
-    /// Initialize the module and add the env instance and repl submodule
+    /// Initialize the module and add the env instance
     #[pymodule_init]
     fn init(m: &Bound<PyModule>) -> PyResult<()> {
         // Add environment singleton
@@ -121,21 +114,6 @@ pub mod shp {
         m.add_function(wrap_pyfunction!(shell::get_stderr, m)?)?;
         m.add_function(wrap_pyfunction!(shell::get_env, m)?)?;
         m.add_function(wrap_pyfunction!(shell::set_env, m)?)?;
-
-        // Add repl submodule
-        let repl_module = PyModule::new(m.py(), "repl")?;
-        repl_module.add_function(wrap_pyfunction!(repl::set_prompt, &repl_module)?)?;
-        repl_module.add_function(wrap_pyfunction!(repl::get_prompt, &repl_module)?)?;
-        repl_module.add_function(wrap_pyfunction!(repl::set_continuation, &repl_module)?)?;
-        repl_module.add_function(wrap_pyfunction!(repl::get_continuation, &repl_module)?)?;
-        repl_module.add_function(wrap_pyfunction!(repl::set_right_prompt, &repl_module)?)?;
-        repl_module.add_function(wrap_pyfunction!(repl::get_right_prompt, &repl_module)?)?;
-        repl_module.add_function(wrap_pyfunction!(repl::on, &repl_module)?)?;
-        repl_module.add_function(wrap_pyfunction!(repl::off, &repl_module)?)?;
-        repl_module.add_function(wrap_pyfunction!(repl::list_hooks, &repl_module)?)?;
-        repl_module.add_function(wrap_pyfunction!(repl::print_hooks, &repl_module)?)?;
-        repl_module.add_class::<repl::REPLHook>()?;
-        m.add_submodule(&repl_module)?;
 
         Ok(())
     }
