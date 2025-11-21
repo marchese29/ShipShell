@@ -182,30 +182,106 @@ def run_repl():
 
     # TODO: Check if user provided custom input implementation
 
-    # Install and import prompt_toolkit (after environment is initialized)
+    # Install and import prompt_toolkit and jedi (after environment is initialized)
     from shp.py_env import install_packages
 
-    install_packages("prompt_toolkit")
+    install_packages("prompt_toolkit", "jedi")
 
     from prompt_toolkit import PromptSession
     from prompt_toolkit.formatted_text import ANSI
+    from prompt_toolkit.completion import Completer, Completion
+
+    # Create jedi-based completer
+    class JediCompleter(Completer):
+        """Custom completer that uses jedi for intelligent Python completions."""
+
+        def __init__(self, namespace: dict):
+            """Initialize the completer with the REPL's namespace.
+            
+            Args:
+                namespace: The global namespace dict for jedi to analyze
+            """
+            self.namespace = namespace
+
+        def get_completions(self, document, complete_event):
+            """Generate completions for the current document state.
+            
+            Args:
+                document: The current document (text buffer)
+                complete_event: Event that triggered completion (tab press)
+                
+            Yields:
+                Completion objects with suggested completions
+            """
+            import jedi
+
+            # Get text before cursor
+            text = document.text_before_cursor
+            
+            # Only try to complete if there's some text
+            if not text or text.isspace():
+                return
+
+            try:
+                # Use jedi's Interpreter for REPL-style completion with namespace
+                script = jedi.Interpreter(
+                    text,
+                    namespaces=[self.namespace]
+                )
+                
+                # Get completions from jedi
+                completions = script.complete()
+                
+                # Convert jedi completions to prompt_toolkit completions
+                for completion in completions:
+                    # Calculate how much of the current word to replace
+                    # jedi provides the completion text and we need start position
+                    completion_text = completion.name
+                    
+                    # Get the length of text that should be replaced
+                    # This is typically the partial identifier being typed
+                    start_position = -len(completion.name_with_symbols.split('.')[-1])
+                    if completion.complete:
+                        start_position = -len(completion.complete)
+                    
+                    # Create display text with type information
+                    display = completion.name
+                    display_meta = ""
+                    
+                    if completion.type:
+                        display_meta = f"({completion.type})"
+                    
+                    yield Completion(
+                        completion_text,
+                        start_position=start_position,
+                        display=display,
+                        display_meta=display_meta
+                    )
+                    
+            except Exception:
+                # Silently ignore jedi errors (e.g., incomplete syntax)
+                # This ensures completion doesn't break the REPL experience
+                pass
 
     # Default implementation
     print("ShipShell Python REPL")
     print("Type 'exit()' or press Ctrl+D to quit")
     print()
 
-    session = PromptSession()
+    # Get the main module's namespace for REPL execution
+    import __main__
+    repl_globals = __main__.__dict__
+
+    # Create completer with access to REPL globals
+    completer = JediCompleter(repl_globals)
+
+    # Create session with completion enabled
+    session = PromptSession(completer=completer)
     buffer = ""
     prev_prompt = state.primary_prompt
 
     # Statement completeness checker
     compiler = codeop.CommandCompiler()
-
-    # Get the main module's namespace for REPL execution
-    import __main__
-
-    repl_globals = __main__.__dict__
 
     while True:
         try:
