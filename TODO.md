@@ -3,8 +3,8 @@
 - [ ] DEEP uv integration so people can use any python library they want directly from the shell
   - [X] Standardized location for shell's python environment (like installed libraries)
 - [ ] Translation layer from bash -> shp-python for easy compatibility
-- [ ] Syntax highlighting (and customization?)
-- [ ] Auto-Complete via LSP
+- [X] Syntax highlighting (and customization?)
+- [X] Auto-Complete via LSP
 - [ ] Support for writing command in $EDITOR
 
 **Core features to get to (synchronous shell only)**
