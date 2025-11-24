@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import jedi
 from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.lexers import PygmentsLexer
@@ -16,8 +16,99 @@ if TYPE_CHECKING:
     from .repl import REPLHooks, REPLState
 
 
+def _detect_string_context(text: str) -> tuple[bool, str, int]:
+    """
+    Detect if cursor is inside a string literal (for path completion).
+
+    Returns:
+        (should_complete_paths, partial_path, start_offset)
+        - should_complete_paths: True if we should offer path completions
+        - partial_path: The path fragment typed so far
+        - start_offset: How many chars back from cursor the path starts
+    """
+    if not text:
+        return False, "", 0
+
+    # Track state while parsing
+    in_string = False
+    string_char = None  # The quote character (' or ")
+    is_fstring = False
+    brace_depth = 0
+    string_start = 0
+    escaped = False
+
+    i = 0
+    while i < len(text):
+        char = text[i]
+
+        # Handle escape sequences
+        if escaped:
+            escaped = False
+            i += 1
+            continue
+
+        if char == "\\" and in_string:
+            escaped = True
+            i += 1
+            continue
+
+        # Check for f-string prefix
+        if not in_string and char in ("f", "F"):
+            if i + 1 < len(text) and text[i + 1] in ('"', "'"):
+                is_fstring = True
+                i += 1
+                continue
+
+        # Check for raw string prefix
+        if not in_string and char in ("r", "R"):
+            if i + 1 < len(text) and text[i + 1] in ('"', "'"):
+                i += 1
+                continue
+
+        # Handle quotes
+        if char in ('"', "'"):
+            if not in_string:
+                # Starting a string
+                in_string = True
+                string_char = char
+                string_start = i + 1
+                brace_depth = 0
+            elif char == string_char:
+                # Ending the string (only if not in braces for f-strings)
+                in_string = False
+                string_char = None
+                is_fstring = False
+                brace_depth = 0
+
+        # Handle f-string braces
+        elif in_string and is_fstring:
+            if char == "{":
+                # Check if it's {{ (escaped brace)
+                if i + 1 < len(text) and text[i + 1] == "{":
+                    i += 1  # Skip the next brace
+                else:
+                    brace_depth += 1
+            elif char == "}":
+                # Check if it's }} (escaped brace)
+                if i + 1 < len(text) and text[i + 1] == "}":
+                    i += 1  # Skip the next brace
+                else:
+                    brace_depth = max(0, brace_depth - 1)
+
+        i += 1
+
+    # If we ended inside a string and not inside f-string braces, offer path completion
+    if in_string and (not is_fstring or brace_depth == 0):
+        # Extract the path fragment from string_start to end
+        partial_path = text[string_start:]
+        start_offset = len(text) - string_start
+        return True, partial_path, start_offset
+
+    return False, "", 0
+
+
 class JediCompleter(Completer):
-    """Custom completer using jedi for Python code completion."""
+    """Custom completer using jedi for Python code completion with file path support."""
 
     def __init__(self, namespace: dict):
         """
@@ -27,10 +118,11 @@ class JediCompleter(Completer):
             namespace: The global namespace dictionary for the REPL.
         """
         self.namespace = namespace
+        self.path_completer = PathCompleter(expanduser=True)
 
     def get_completions(self, document: Document, complete_event):
         """
-        Get completion suggestions from jedi.
+        Get completion suggestions from jedi and file paths.
 
         Args:
             document: The current document with text and cursor position.
@@ -39,10 +131,14 @@ class JediCompleter(Completer):
         Yields:
             Completion objects for suggested completions.
         """
-        try:
-            # Get the text before the cursor
-            text = document.text_before_cursor
+        # Get the text before the cursor
+        text = document.text_before_cursor
 
+        # Check if we're inside a string for path completion
+        should_complete_paths, partial_path, start_offset = _detect_string_context(text)
+
+        # Always try to get Jedi completions
+        try:
             # Use jedi's Interpreter for REPL-style completion
             # This gives us access to the current namespace
             interpreter = jedi.Interpreter(text, namespaces=[self.namespace])
@@ -65,6 +161,32 @@ class JediCompleter(Completer):
         except Exception:
             # Silently fail if jedi isn't available or has issues
             pass
+
+        # If we're in a string, also provide path completions
+        if should_complete_paths:
+            try:
+                # Create a modified document with just the path fragment
+                path_document = Document(
+                    text=partial_path,
+                    cursor_position=len(partial_path),
+                )
+
+                # Get path completions
+                for completion in self.path_completer.get_completions(
+                    path_document, complete_event
+                ):
+                    # Adjust the completion to work with our actual document
+                    # The PathCompleter gives us start_position relative to the path fragment
+                    # We need to adjust it to be relative to our actual cursor position
+                    yield Completion(
+                        text=completion.text,
+                        start_position=completion.start_position,
+                        display=completion.display,
+                        display_meta="path",
+                    )
+            except Exception:
+                # Silently fail if path completion has issues
+                pass
 
 
 def _is_expression(code: str) -> bool:
