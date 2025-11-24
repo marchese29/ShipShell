@@ -111,82 +111,82 @@ def _execute_code(hooks: REPLHooks, code: str, globals_dict: dict) -> None:
 
 
 def loop(hooks: REPLHooks, state: REPLState):
+    # Default implementation
+    print("ShipShell Python REPL")
+    print("Type 'exit()' or press Ctrl+D to quit")
+    print()
+
+    # Get the main module's namespace for REPL execution
+    import __main__
+
+    repl_globals = __main__.__dict__
+
+    # Create jedi-based completer with access to REPL namespace
+    completer = JediCompleter(repl_globals)
+
+    # Create prompt session with autocomplete enabled
+    session = PromptSession(
+        completer=completer,
+        complete_while_typing=True,  # Show completions as you type
+        complete_in_thread=True,
+    )
+    buffer = ""
+    prev_prompt = state.primary_prompt
+
+    # Statement completeness checker
+    compiler = codeop.CommandCompiler()
+
     while True:
-        # Default implementation
-        print("ShipShell Python REPL")
-        print("Type 'exit()' or press Ctrl+D to quit")
-        print()
+        try:
+            # Determine if we're in continuation mode
+            is_continuation = bool(buffer)
 
-        # Get the main module's namespace for REPL execution
-        import __main__
+            # Fire appropriate hooks
+            if is_continuation:
+                hooks.fire_before_continuation(prev_prompt, buffer)
+                prompt_text = state.continuation_prompt
+            else:
+                hooks.fire_before_prompt()
+                prev_prompt = state.primary_prompt
+                prompt_text = state.primary_prompt
 
-        repl_globals = __main__.__dict__
+            # Get right prompt
+            rprompt_text = state.right_prompt
 
-        # Create jedi-based completer with access to REPL namespace
-        completer = JediCompleter(repl_globals)
+            # Read line from user
+            line = session.prompt(
+                ANSI(prompt_text),
+                rprompt=ANSI(rprompt_text) if rprompt_text else None,
+            )
 
-        # Create prompt session with autocomplete enabled
-        session = PromptSession(
-            completer=completer,
-            complete_while_typing=True,  # Show completions as you type
-        )
-        buffer = ""
-        prev_prompt = state.primary_prompt
+            # Append to buffer
+            if buffer:
+                buffer += "\n"
+            buffer += line
 
-        # Statement completeness checker
-        compiler = codeop.CommandCompiler()
+            # Check if statement is complete
+            code_obj = compiler(buffer)
 
-        while True:
-            try:
-                # Determine if we're in continuation mode
-                is_continuation = bool(buffer)
+            if code_obj is None:
+                # Incomplete - need more input
+                continue
 
-                # Fire appropriate hooks
-                if is_continuation:
-                    hooks.fire_before_continuation(prev_prompt, buffer)
-                    prompt_text = state.continuation_prompt
-                else:
-                    hooks.fire_before_prompt()
-                    prev_prompt = state.primary_prompt
-                    prompt_text = state.primary_prompt
+            # Statement is complete - execute it
+            if buffer.strip():
+                try:
+                    _execute_code(hooks, buffer, repl_globals)
+                except SystemExit:
+                    print("Exiting...")
+                    return
 
-                # Get right prompt
-                rprompt_text = state.right_prompt
+            # Clear buffer for next statement
+            buffer = ""
 
-                # Read line from user
-                line = session.prompt(
-                    ANSI(f"\x1b[0m{prompt_text}"),
-                    rprompt=ANSI(f"\x1b[0m{rprompt_text}") if rprompt_text else None,
-                )
-
-                # Append to buffer
-                if buffer:
-                    buffer += "\n"
-                buffer += line
-
-                # Check if statement is complete
-                code_obj = compiler(buffer)
-
-                if code_obj is None:
-                    # Incomplete - need more input
-                    continue
-
-                # Statement is complete - execute it
-                if buffer.strip():
-                    try:
-                        _execute_code(hooks, buffer, repl_globals)
-                    except SystemExit:
-                        print("Exiting...")
-                        break
-
-                # Clear buffer for next statement
-                buffer = ""
-
-            except KeyboardInterrupt:
-                # Ctrl+C - cancel current input
-                print("^C")
-                buffer = ""
-            except EOFError:
-                # Ctrl+D - exit
-                print("Exiting...")
-                break
+        except KeyboardInterrupt:
+            # Ctrl+C - cancel current input
+            print("^C")
+            buffer = ""
+        except EOFError:
+            # Ctrl+D - exit
+            print("Exiting...")
+            return
