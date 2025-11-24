@@ -15,8 +15,10 @@ import jedi
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.document import Document
-from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.formatted_text import ANSI, HTML
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.lexers import PygmentsLexer
+from prompt_toolkit.styles import Style
 from pygments.lexers.python import Python3Lexer
 
 
@@ -261,9 +263,18 @@ class PromptState:
         self.right_prompt = ""
 
 
+class MultilineState:
+    """Tracks multi-line mode state."""
+
+    def __init__(self):
+        self.enabled = False
+        self.just_toggled = False  # Track if we just toggled mode
+
+
 # Global instances
 prompt_hooks = PromptHooks()
 prompt_state = PromptState()
+multiline_state = MultilineState()
 
 
 def prompt():
@@ -272,12 +283,15 @@ def prompt():
     This is the default REPL input implementation. It uses prompt_toolkit to
     display interactive prompts and yields complete code blocks when ready.
 
+    Supports multi-line mode (Ctrl-M) where enter inserts newlines and Ctrl-Enter submits.
+
     Yields:
         str: Complete code strings ready for execution.
     """
     # Show initial message
     print("ShipShell Python REPL")
     print("Type 'exit()' or press Ctrl+D to quit")
+    print("Press Ctrl-X for multi-line mode")
     print()
 
     # Get the main module's namespace for completion
@@ -288,12 +302,73 @@ def prompt():
     # Create jedi-based completer with access to REPL namespace
     completer = JediCompleter(repl_globals)
 
+    # Create custom key bindings
+    bindings = KeyBindings()
+
+    @bindings.add("c-x")  # Ctrl-X
+    def _(event):
+        """Toggle multi-line mode on/off with Ctrl-X."""
+        if multiline_state.enabled:
+            # Exiting multi-line mode - clear buffer and return to normal
+            event.current_buffer.reset()
+            multiline_state.enabled = False
+        else:
+            # Entering multi-line mode - preserve buffer and previous prompt line
+            current_text = event.current_buffer.text
+            multiline_state.enabled = True
+            # Don't clear screen - keep previous prompt visible for context
+            event.current_buffer.text = current_text
+
+        # Mark that we just toggled - don't execute the buffer
+        multiline_state.just_toggled = True
+
+        # Restart the prompt to apply the new frame/toolbar settings
+        event.app.exit(result=event.current_buffer.document.text)
+
+    @bindings.add("c-s")  # Ctrl-S
+    def _(event):
+        """Submit code in multi-line mode with Ctrl-S."""
+        if multiline_state.enabled:
+            event.current_buffer.validate_and_handle()
+
+    @bindings.add("enter")
+    def _(event):
+        """Handle Enter key - newline in multi-line mode, submit otherwise."""
+        if multiline_state.enabled:
+            # In multi-line mode, Enter just inserts a newline
+            event.current_buffer.insert_text("\n")
+        else:
+            # In normal mode, Enter validates and submits (default behavior)
+            event.current_buffer.validate_and_handle()
+
+    def get_bottom_toolbar():
+        """Return toolbar text showing current mode."""
+        if multiline_state.enabled:
+            return HTML(
+                '<style bg="ansiblue" fg="ansiwhite"> MULTI-LINE MODE </style> '
+                '<style fg="ansiyellow">Ctrl-S to submit, Ctrl-X to exit</style>'
+            )
+        else:
+            return HTML(
+                '<style bg="ansigreen" fg="ansiwhite"> NORMAL MODE </style> '
+                '<style fg="ansicyan">Ctrl-X for multi-line mode</style>'
+            )
+
+    # Style for the frame border in multi-line mode
+    frame_style = Style.from_dict(
+        {
+            "frame.border": "#888888",
+        }
+    )
+
     # Create prompt session with autocomplete enabled
     session = PromptSession(
         completer=completer,
         complete_while_typing=True,  # Show completions as you type
         complete_in_thread=True,
         lexer=PygmentsLexer(Python3Lexer),
+        key_bindings=bindings,
+        bottom_toolbar=get_bottom_toolbar,  # Pass function, not result
     )
 
     buffer = ""
@@ -304,44 +379,78 @@ def prompt():
 
     while True:
         try:
-            # Determine if we're in continuation mode
-            is_continuation = bool(buffer)
-
-            # Fire appropriate hooks
-            if is_continuation:
-                prompt_hooks.fire_before_continuation(prev_prompt, buffer)
-                prompt_text = prompt_state.continuation_prompt
+            # === GET PROMPT CONFIGURATION ===
+            if multiline_state.enabled:
+                # Multi-line mode configuration
+                prompt_text = ""
+                rprompt_text = ""
+                style = frame_style
+                show_frame = True
+                multiline = True
             else:
-                prompt_hooks.fire_before_prompt()
-                prev_prompt = prompt_state.primary_prompt
-                prompt_text = prompt_state.primary_prompt
+                # Normal mode configuration
+                is_continuation = bool(buffer)
+                if is_continuation:
+                    prompt_hooks.fire_before_continuation(prev_prompt, buffer)
+                    prompt_text = prompt_state.continuation_prompt
+                else:
+                    prompt_hooks.fire_before_prompt()
+                    prev_prompt = prompt_state.primary_prompt
+                    prompt_text = prompt_state.primary_prompt
 
-            # Get right prompt
-            rprompt_text = prompt_state.right_prompt
+                rprompt_text = prompt_state.right_prompt
+                style = None
+                show_frame = False
+                multiline = False
 
-            # Read line from user
+            # === READ INPUT ===
             line = session.prompt(
                 ANSI(prompt_text),
                 rprompt=ANSI(rprompt_text) if rprompt_text else None,
+                style=style,
+                show_frame=show_frame,
+                multiline=multiline,
+                default=buffer if buffer else "",  # Pre-fill with existing buffer
             )
 
-            # Append to buffer
-            if buffer:
-                buffer += "\n"
-            buffer += line
+            # === UPDATE BUFFER ===
+            # When toggling with Ctrl-X, the buffer is managed by the toggle function
+            # Here we just handle normal input accumulation
+            if buffer and line and not line.startswith(buffer):
+                # Normal continuation - append to buffer
+                buffer += "\n" + line
+            else:
+                # First line, or full buffer from Ctrl-X toggle
+                buffer = line
 
-            # Check if statement is complete
-            code_obj = compiler(buffer)
+            # === EXECUTE BASED ON MODE ===
+            if multiline_state.enabled:
+                # MULTI-LINE MODE: User controls submission with Ctrl-S
+                # Check if we just toggled - if so, don't execute
+                if multiline_state.just_toggled:
+                    multiline_state.just_toggled = False
+                    continue  # Don't execute, just continue to next prompt
 
-            if code_obj is None:
-                # Incomplete - need more input
-                continue
+                # No completeness checking - just execute what they submitted
+                yield buffer
+                buffer = ""
+            else:
+                # NORMAL MODE: Check if statement is complete before executing
+                try:
+                    code_obj = compiler(buffer)
+                except SyntaxError as e:
+                    # Syntax error - display and clear buffer
+                    print(f"SyntaxError: {e}")
+                    buffer = ""
+                    continue
 
-            # Statement is complete - yield it
-            yield buffer
+                if code_obj is None:
+                    # Incomplete statement - continue getting input
+                    continue
 
-            # Clear buffer for next statement
-            buffer = ""
+                # Complete statement - execute it
+                yield buffer
+                buffer = ""
 
         except KeyboardInterrupt:
             # Ctrl+C - cancel current input
