@@ -134,6 +134,7 @@ def run_repl():
     from shp.py_env import install_packages
 
     install_packages("prompt_toolkit")
+    install_packages("pygments")
     install_packages("jedi")
 
     import _repl_internal

@@ -9,6 +9,8 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.lexers import PygmentsLexer
+from pygments.lexers.python import Python3Lexer
 
 if TYPE_CHECKING:
     from .repl import REPLHooks, REPLState
@@ -129,6 +131,7 @@ def loop(hooks: REPLHooks, state: REPLState):
         completer=completer,
         complete_while_typing=True,  # Show completions as you type
         complete_in_thread=True,
+        lexer=PygmentsLexer(Python3Lexer),
     )
     buffer = ""
     prev_prompt = state.primary_prompt
