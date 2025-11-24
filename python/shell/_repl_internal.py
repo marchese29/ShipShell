@@ -4,11 +4,65 @@ import codeop
 import traceback
 from typing import TYPE_CHECKING
 
+import jedi
 from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import ANSI
 
 if TYPE_CHECKING:
     from .repl import REPLHooks, REPLState
+
+
+class JediCompleter(Completer):
+    """Custom completer using jedi for Python code completion."""
+
+    def __init__(self, namespace: dict):
+        """
+        Initialize the JediCompleter.
+
+        Args:
+            namespace: The global namespace dictionary for the REPL.
+        """
+        self.namespace = namespace
+
+    def get_completions(self, document: Document, complete_event):
+        """
+        Get completion suggestions from jedi.
+
+        Args:
+            document: The current document with text and cursor position.
+            complete_event: The completion event.
+
+        Yields:
+            Completion objects for suggested completions.
+        """
+        try:
+            # Get the text before the cursor
+            text = document.text_before_cursor
+
+            # Use jedi's Interpreter for REPL-style completion
+            # This gives us access to the current namespace
+            interpreter = jedi.Interpreter(text, namespaces=[self.namespace])
+
+            # Get completions from jedi
+            completions = interpreter.complete()
+
+            # Convert jedi completions to prompt_toolkit Completions
+            for completion in completions:
+                # Use completion.complete which is just the suffix to add
+                # (not the full name, so we don't replace what was already typed)
+                complete_text = completion.complete
+                if complete_text is not None:
+                    yield Completion(
+                        text=complete_text,
+                        start_position=0,  # Insert at cursor, don't replace
+                        display=completion.name,
+                        display_meta=completion.type,
+                    )
+        except Exception:
+            # Silently fail if jedi isn't available or has issues
+            pass
 
 
 def _is_expression(code: str) -> bool:
@@ -63,17 +117,24 @@ def loop(hooks: REPLHooks, state: REPLState):
         print("Type 'exit()' or press Ctrl+D to quit")
         print()
 
-        session = PromptSession()
+        # Get the main module's namespace for REPL execution
+        import __main__
+
+        repl_globals = __main__.__dict__
+
+        # Create jedi-based completer with access to REPL namespace
+        completer = JediCompleter(repl_globals)
+
+        # Create prompt session with autocomplete enabled
+        session = PromptSession(
+            completer=completer,
+            complete_while_typing=True,  # Show completions as you type
+        )
         buffer = ""
         prev_prompt = state.primary_prompt
 
         # Statement completeness checker
         compiler = codeop.CommandCompiler()
-
-        # Get the main module's namespace for REPL execution
-        import __main__
-
-        repl_globals = __main__.__dict__
 
         while True:
             try:
