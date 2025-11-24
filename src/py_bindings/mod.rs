@@ -13,34 +13,33 @@ const PYTHON_INIT: &str = include_str!("../../python/shell/init.py");
 const REPL_INIT: &str = include_str!("../../python/shell/repl/__init__.py");
 const REPL_DEFAULT: &str = include_str!("../../python/shell/repl/default.py");
 
+/// Helper function to register a Python module with code
+fn register_module(py: Python, name: &str, code: &str, package: Option<&str>) -> PyResult<()> {
+    let sys_modules = py.import("sys")?.getattr("modules")?;
+    let module = PyModule::new(py, name)?;
+
+    // Set __package__ for proper relative imports
+    if let Some(pkg) = package {
+        module.setattr("__package__", pkg)?;
+    }
+
+    let code_cstr = CString::new(code).unwrap();
+    py.run(code_cstr.as_c_str(), Some(&module.dict()), None)?;
+    sys_modules.set_item(name, module)?;
+    Ok(())
+}
+
 /// Register embedded Python modules in sys.modules
 fn register_embedded_modules(py: Python) -> PyResult<()> {
-    let sys_modules = py.import("sys")?.getattr("modules")?;
-
-    // Helper closure to register a module
-    let register = |name: &str, code: &str, package: Option<&str>| -> PyResult<()> {
-        let module = PyModule::new(py, name)?;
-
-        // Set __package__ for proper relative imports
-        if let Some(pkg) = package {
-            module.setattr("__package__", pkg)?;
-        }
-
-        let code_cstr = CString::new(code).unwrap();
-        py.run(code_cstr.as_c_str(), Some(&module.dict()), None)?;
-        sys_modules.set_item(name, module)?;
-        Ok(())
-    };
-
     // Register all embedded modules
     // Note: We DON'T register the Python shp stub - the Rust native module is already registered
     // The shp/__init__.py file is only for external IDE/script support
     // Register shp.* modules first since repl depends on shp.py_env
-    register("core", CORE, None)?;
-    register("shp.builtins", SHP_BUILTINS, Some("shp"))?;
-    register("shp.py_env", SHP_PY_ENV, Some("shp"))?;
-    register("shp.shell_marker", SHP_SHELL_MARKER, Some("shp"))?;
-    register("repl", REPL_INIT, Some("repl"))?;
+    register_module(py, "core", CORE, None)?;
+    register_module(py, "shp.builtins", SHP_BUILTINS, Some("shp"))?;
+    register_module(py, "shp.py_env", SHP_PY_ENV, Some("shp"))?;
+    register_module(py, "shp.shell_marker", SHP_SHELL_MARKER, Some("shp"))?;
+    register_module(py, "repl", REPL_INIT, Some("repl"))?;
 
     Ok(())
 }
@@ -70,18 +69,7 @@ pub fn configure_python_env() -> Result<()> {
 
         // Register repl.default module (after init, so packages can be available)
         // This module requires prompt_toolkit, jedi, and pygments
-        let repl_default_module = PyModule::new(py, "repl.default")?;
-        repl_default_module.setattr("__package__", "repl")?;
-        let repl_default_cstr = CString::new(REPL_DEFAULT).unwrap();
-        py.run(
-            repl_default_cstr.as_c_str(),
-            Some(&repl_default_module.dict()),
-            None,
-        )?;
-
-        // Register the default REPL module
-        let sys_modules = py.import("sys")?.getattr("modules")?;
-        sys_modules.set_item("repl.default", repl_default_module)?;
+        register_module(py, "repl.default", REPL_DEFAULT, Some("repl"))?;
         Ok::<(), PyErr>(())
     })?;
 
