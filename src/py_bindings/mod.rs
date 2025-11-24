@@ -10,8 +10,8 @@ const SHP_BUILTINS: &str = include_str!("../../python/shell/builtins.py");
 const SHP_SHELL_MARKER: &str = include_str!("../../python/shell/shell_marker.py");
 const SHP_PY_ENV: &str = include_str!("../../python/shell/py_env.py");
 const PYTHON_INIT: &str = include_str!("../../python/shell/init.py");
-const REPL: &str = include_str!("../../python/shell/repl.py");
-const REPL_INTERNAL: &str = include_str!("../../python/shell/_repl_internal.py");
+const REPL_INIT: &str = include_str!("../../python/shell/repl/__init__.py");
+const REPL_DEFAULT: &str = include_str!("../../python/shell/repl/default.py");
 
 /// Register embedded Python modules in sys.modules
 fn register_embedded_modules(py: Python) -> PyResult<()> {
@@ -40,7 +40,7 @@ fn register_embedded_modules(py: Python) -> PyResult<()> {
     register("shp.builtins", SHP_BUILTINS, Some("shp"))?;
     register("shp.py_env", SHP_PY_ENV, Some("shp"))?;
     register("shp.shell_marker", SHP_SHELL_MARKER, Some("shp"))?;
-    register("repl", REPL, None)?;
+    register("repl", REPL_INIT, Some("repl"))?;
 
     Ok(())
 }
@@ -68,18 +68,20 @@ pub fn configure_python_env() -> Result<()> {
         let init_cstr = CString::new(PYTHON_INIT).unwrap();
         py.run(init_cstr.as_c_str(), None, None)?;
 
-        // Initialize the REPL
-        let repl_internal_module = PyModule::new(py, "_repl_internal")?;
-        let repl_cstr = CString::new(REPL_INTERNAL).unwrap();
+        // Register repl.default module (after init, so packages can be available)
+        // This module requires prompt_toolkit, jedi, and pygments
+        let repl_default_module = PyModule::new(py, "repl.default")?;
+        repl_default_module.setattr("__package__", "repl")?;
+        let repl_default_cstr = CString::new(REPL_DEFAULT).unwrap();
         py.run(
-            repl_cstr.as_c_str(),
-            Some(&repl_internal_module.dict()),
+            repl_default_cstr.as_c_str(),
+            Some(&repl_default_module.dict()),
             None,
         )?;
 
-        // Register the internal REPL module
+        // Register the default REPL module
         let sys_modules = py.import("sys")?.getattr("modules")?;
-        sys_modules.set_item("_repl_internal", repl_internal_module)?;
+        sys_modules.set_item("repl.default", repl_default_module)?;
         Ok::<(), PyErr>(())
     })?;
 
