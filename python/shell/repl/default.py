@@ -140,6 +140,10 @@ class JediCompleter(Completer):
         # Get the text before the cursor
         text = document.text_before_cursor
 
+        # Don't try to autocomplete before the user types something on the current line
+        if text is None or not text.strip().split("\n")[-1].strip():
+            return
+
         # Check if we're inside a string for path completion
         should_complete_paths, partial_path, start_offset = _detect_string_context(text)
 
@@ -345,13 +349,13 @@ def prompt():
         """Return toolbar text showing current mode."""
         if multiline_state.enabled:
             return HTML(
-                '<style bg="ansiblue" fg="ansiwhite"> MULTI-LINE MODE </style> '
-                '<style fg="ansiyellow">Ctrl-S to submit, Ctrl-X to exit</style>'
+                '<style bg="ansiblack" fg="ansiyellow"> MULTI-LINE MODE </style> '
+                '<style bg="ansiblack">Ctrl-S to submit, Ctrl-X to exit</style>'
             )
         else:
             return HTML(
-                '<style bg="ansigreen" fg="ansiwhite"> NORMAL MODE </style> '
-                '<style fg="ansicyan">Ctrl-X for multi-line mode</style>'
+                '<style fg="ansigreen" bg="ansiblack"> NORMAL MODE </style> '
+                '<style bg="ansiblack">Ctrl-X for multi-line mode</style>'
             )
 
     # Style for the frame border in multi-line mode
