@@ -19,3 +19,5 @@
 - [X] More shell builtins
 - [ ] Handling of traps
 - [ ] Enable export of shell-internal environment variables (if the user wants to)
+- [ ] Do subshells properly with "-c" option
+  - [ ] Be mindful of passing in globals to the subshell
