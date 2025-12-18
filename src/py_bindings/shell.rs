@@ -152,6 +152,9 @@ enum Runnable {
     ScriptExec {
         code: String,
     },
+    Negated {
+        runnable: ShipRunnable,
+    },
 }
 
 #[derive(Clone)]
@@ -208,6 +211,9 @@ impl From<&ShipRunnable> for ExecRequest {
                 env_overlay: env_overlay.clone(),
             },
             Runnable::ScriptExec { code } => ExecRequest::ScriptExec { code: code.clone() },
+            Runnable::Negated { runnable } => ExecRequest::Negated {
+                request: Box::new(runnable.into()),
+            },
         }
     }
 }
@@ -231,10 +237,18 @@ impl ShipRunnable {
             }
 
             // Atomic | Atomic -> Pipeline([lhs], rhs)
-            // (Command, Subshell, WithEnv, and ScriptExec are all atomic units)
+            // (Command, Subshell, WithEnv, ScriptExec, and Negated are all atomic units)
             (
-                Command { .. } | Subshell { .. } | WithEnv { .. } | ScriptExec { .. },
-                Command { .. } | Subshell { .. } | WithEnv { .. } | ScriptExec { .. },
+                Command { .. }
+                | Subshell { .. }
+                | WithEnv { .. }
+                | ScriptExec { .. }
+                | Negated { .. },
+                Command { .. }
+                | Subshell { .. }
+                | WithEnv { .. }
+                | ScriptExec { .. }
+                | Negated { .. },
             ) => Arc::new(Pipeline {
                 predecessors: vec![self.clone()],
                 final_cmd: other.clone(),
@@ -246,7 +260,11 @@ impl ShipRunnable {
                     predecessors,
                     final_cmd,
                 },
-                Command { .. } | Subshell { .. } | WithEnv { .. } | ScriptExec { .. },
+                Command { .. }
+                | Subshell { .. }
+                | WithEnv { .. }
+                | ScriptExec { .. }
+                | Negated { .. },
             ) => {
                 let mut new_predecessors = predecessors.clone();
                 new_predecessors.push(final_cmd.clone());
@@ -258,7 +276,11 @@ impl ShipRunnable {
 
             // Atomic | Pipeline -> prepend to pipeline
             (
-                Command { .. } | Subshell { .. } | WithEnv { .. } | ScriptExec { .. },
+                Command { .. }
+                | Subshell { .. }
+                | WithEnv { .. }
+                | ScriptExec { .. }
+                | Negated { .. },
                 Pipeline {
                     predecessors,
                     final_cmd,
@@ -406,6 +428,17 @@ impl ShipRunnable {
             })))
         }
     }
+
+    /// Negate the exit code of this runnable (0 becomes 1, non-zero becomes 0)
+    ///
+    /// Usage:
+    ///   prog('test')('-f', 'file.txt').negated()()  # succeeds if file doesn't exist
+    ///   negate(prog('grep')('pattern', 'file.txt'))()  # succeeds if pattern not found
+    fn negated(&self) -> PyResult<ShipRunnable> {
+        Ok(ShipRunnable(Arc::new(Runnable::Negated {
+            runnable: self.clone(),
+        })))
+    }
 }
 
 #[pyfunction]
@@ -442,6 +475,17 @@ pub fn pipe(
 #[pyfunction]
 pub fn sub(runnable: ShipRunnable) -> PyResult<ShipRunnable> {
     Ok(ShipRunnable(Arc::new(Runnable::Subshell { runnable })))
+}
+
+/// Negate a runnable's exit code (convenience function)
+///
+/// This is equivalent to calling .negated() on a runnable.
+///
+/// Usage:
+///   negate(prog('test')('-f', 'file.txt'))()  # succeeds if file doesn't exist
+#[pyfunction]
+pub fn negate(runnable: ShipRunnable) -> PyResult<ShipRunnable> {
+    runnable.negated()
 }
 
 /// Execute a Python script file in the embedded interpreter (in a subshell)
@@ -690,6 +734,19 @@ pub fn set_env(key: String, value: Bound<PyAny>) -> PyResult<()> {
     let env_value = py_to_env_value(&value)?;
     shell::set_var(key, env_value);
     Ok(())
+}
+
+/// Mark a variable as exported (will be passed to child processes)
+#[pyfunction]
+pub fn mark_var_exported(key: String) -> PyResult<()> {
+    shell::mark_exported(&key);
+    Ok(())
+}
+
+/// Check if a variable is exported
+#[pyfunction]
+pub fn is_var_exported(key: String) -> PyResult<bool> {
+    Ok(shell::is_exported(&key))
 }
 
 /// Dictionary-like access to environment variables

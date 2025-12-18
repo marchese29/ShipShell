@@ -2,58 +2,59 @@
 
 ## Interactive Shell Testing Workflow
 
-ShipShell now has proper multi-line input support! You can test features using either automated piping or interactive pasting.
+**IMPORTANT:** Piping input to `cargo run` does NOT work reliably. Always use the interactive testing method below.
 
-### Method 1: Automated Testing (Preferred for Simple Tests)
+### Interactive Testing Method (REQUIRED)
 
-For single-line or simple multi-line commands, pipe input directly to `cargo run`:
+1. **Assistant provides Python code** - I provide the exact Python code for you to paste
+2. **User runs `cargo run` manually** - You start the ShipShell REPL
+3. **User pastes the test code** - You paste the provided code into the running shell
+4. **User reports results** - You tell me the output you see
+5. **Assistant analyzes output** - I verify the results and continue
 
-```bash
-echo "prog('echo')('Hello') > 'test.txt'
-prog('cat')('test.txt')
-exit()" | cargo run
+### Testing Workflow Steps
+
+**Step 1: Assistant provides code**
+The assistant will provide code in a fenced code block like this:
+
+```python
+from compat.bash import run_bash_code
+
+print('=== Test Description ===')
+run_bash_code('''
+echo "Hello World"
+''')
 ```
 
-**Advantages:**
-- Fast and automated
-- Assistant can see all output immediately
-- Works great for testing simple statements
+**Step 2: User tests manually**
+- Run `cargo run` in your terminal
+- Copy and paste the provided Python code
+- Report back the exact output you see
 
-### Method 2: Interactive Testing (For Complex Multi-line)
+### Important Notes
 
-For complex indented blocks or when you want to verify interactive behavior:
+- **For indented blocks:** Include a blank line after indented blocks (`with`, `for`, `if`) to signal completion (mimics Python REPL behavior)
+- **Module imports:** Use `from compat.bash import run_bash_code` for bash testing
+- **Never pipe:** The command `echo "..." | cargo run` does NOT work - always use interactive testing
+- **Be specific:** When reporting results, include all output, errors, or unexpected behavior
 
-1. **Assistant provides test commands** - I tell you what to paste
-2. **Assistant runs `cargo run`** - I execute `cargo run` with no input
-3. **You paste the test commands** - You paste into the running shell
-4. **You exit the shell** - Run `exit()` or press Ctrl+D
-5. **Assistant sees the output** - I can verify the results
+### Example: Testing Bash Features
 
-**Important for pasting indented blocks:**
-- Include a **blank line after indented blocks** (like `with`, `for`, `if`) to signal completion
-- This mimics standard Python REPL behavior
+**Assistant provides:**
+```python
+from compat.bash import run_bash_code
 
-### Example: Automated Test
-
-```bash
-echo "x = 1
-y = 2
-print(f'x={x}, y={y}')
-exit()" | cargo run
+print('=== Test: Command substitution ===')
+run_bash_code('''
+for item in $(echo one two three); do
+    echo "Item: $item"
+done
+''')
 ```
 
-### Example: Interactive Test with Indented Block
+**User does:**
+1. Runs `cargo run`
+2. Pastes the code above
+3. Reports: "Output shows three lines: 'Item: one', 'Item: two', 'Item: three'"
 
-Assistant provides commands:
-```
-"Please paste this into the shell (note the blank line after the with block):
-
-with open('test.txt', 'w') as f:
-    f.write('Hello\\n')
-
-prog('cat')('test.txt')
-exit()
-"
-```
-
-Then assistant runs `cargo run`, user pastes the commands, and the shell executes them correctly.
+**Assistant:** Verifies the feature is working correctly!

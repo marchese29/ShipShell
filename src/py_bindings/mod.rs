@@ -12,6 +12,7 @@ const SHP_PY_ENV: &str = include_str!("../../python/shell/py_env.py");
 const PYTHON_INIT: &str = include_str!("../../python/shell/init.py");
 const REPL_INIT: &str = include_str!("../../python/shell/repl/__init__.py");
 const REPL_DEFAULT: &str = include_str!("../../python/shell/repl/default.py");
+const COMPAT_BASH: &str = include_str!("../../python/shell/compat/bash.py");
 
 /// Helper function to register a Python module with code
 fn register_module(py: Python, name: &str, code: &str, package: Option<&str>) -> PyResult<()> {
@@ -39,6 +40,7 @@ fn register_embedded_modules(py: Python) -> PyResult<()> {
     register_module(py, "shp.builtins", SHP_BUILTINS, Some("shp"))?;
     register_module(py, "shp.py_env", SHP_PY_ENV, Some("shp"))?;
     register_module(py, "shp.shell_marker", SHP_SHELL_MARKER, Some("shp"))?;
+    register_module(py, "compat.bash", COMPAT_BASH, Some("compat"))?;
     register_module(py, "repl", REPL_INIT, Some("repl"))?;
 
     Ok(())
@@ -112,12 +114,15 @@ pub mod shp {
         m.add_function(wrap_pyfunction!(shell::cmd, m)?)?;
         m.add_function(wrap_pyfunction!(shell::pipe, m)?)?;
         m.add_function(wrap_pyfunction!(shell::sub, m)?)?;
+        m.add_function(wrap_pyfunction!(shell::negate, m)?)?;
         m.add_function(wrap_pyfunction!(shell::shpexec, m)?)?;
         m.add_function(wrap_pyfunction!(shell::capture, m)?)?;
         m.add_function(wrap_pyfunction!(shell::get_stdout, m)?)?;
         m.add_function(wrap_pyfunction!(shell::get_stderr, m)?)?;
         m.add_function(wrap_pyfunction!(shell::get_env, m)?)?;
         m.add_function(wrap_pyfunction!(shell::set_env, m)?)?;
+        m.add_function(wrap_pyfunction!(shell::mark_var_exported, m)?)?;
+        m.add_function(wrap_pyfunction!(shell::is_var_exported, m)?)?;
 
         Ok(())
     }

@@ -6,8 +6,8 @@ use std::sync::OnceLock;
 
 // Re-export commonly used types and functions
 pub use env::{
-    EnvValue, all_var_keys, all_vars, contains_var, get_var, initialize_environment, set_last_exit,
-    set_var, unset_var, var_count,
+    EnvValue, all_var_keys, all_vars, contains_var, get_var, initialize_environment, is_exported,
+    mark_exported, set_last_exit, set_var, unset_var, var_count,
 };
 pub use exec::{ExecRequest, RedirectTarget, execute};
 

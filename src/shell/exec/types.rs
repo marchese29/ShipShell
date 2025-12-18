@@ -49,6 +49,9 @@ pub enum ExecRequest {
     ScriptExec {
         code: String,
     },
+    Negated {
+        request: Box<ExecRequest>,
+    },
 }
 
 /// Represents errors that can occur during program path resolution
@@ -61,6 +64,7 @@ pub enum ProgramResolutionError {
     /// File exists but is not executable
     PermissionDenied(String),
     /// PATH environment variable has invalid configuration
+    #[allow(dead_code)]
     InvalidPath(String),
 }
 
@@ -92,6 +96,78 @@ pub enum RedirectTarget {
     FileDescriptor { fd: i32 },
 }
 
+/// Redirect operation to be applied in child process before exec
+#[derive(Clone, Debug)]
+pub enum RedirectOperation {
+    FileOutput { path: String, append: bool, fd: i32 },
+    FileDescriptor { from_fd: i32, to_fd: i32 },
+}
+
+/// Capture information for stdout/stderr
+#[derive(Clone, Debug)]
+pub struct CaptureInfo {
+    pub stdout_pipe: i32,
+    pub stderr_pipe: i32,
+}
+
+/// Execution context passed through the execution tree
+/// Contains all parameters needed for execution without reading global state
+#[derive(Clone)]
+pub struct ExecutionContext {
+    /// Environment variables to pass to child processes
+    pub env_vars: HashMap<String, EnvValue>,
+
+    /// Pending redirects to apply in child before exec
+    pub redirects: Vec<RedirectOperation>,
+
+    /// Optional capture mode for stdout/stderr
+    pub capture: Option<CaptureInfo>,
+}
+
+impl ExecutionContext {
+    /// Create new context with environment variables
+    pub fn new(env_vars: HashMap<String, EnvValue>) -> Self {
+        Self {
+            env_vars,
+            redirects: Vec::new(),
+            capture: None,
+        }
+    }
+
+    /// Add a redirect operation to the context
+    pub fn with_redirect(mut self, redirect: RedirectOperation) -> Self {
+        self.redirects.push(redirect);
+        self
+    }
+
+    /// Merge environment overlay into context
+    pub fn with_env_overlay(mut self, overlay: &HashMap<String, EnvValue>) -> Self {
+        for (key, value) in overlay {
+            self.env_vars.insert(key.clone(), value.clone());
+        }
+        self
+    }
+
+    /// Set capture mode for this context
+    pub fn with_capture(mut self, stdout_fd: i32, stderr_fd: i32) -> Self {
+        self.capture = Some(CaptureInfo {
+            stdout_pipe: stdout_fd,
+            stderr_pipe: stderr_fd,
+        });
+        self
+    }
+}
+
+impl std::fmt::Debug for ExecutionContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExecutionContext")
+            .field("env_vars", &format!("{} vars", self.env_vars.len()))
+            .field("redirects", &self.redirects)
+            .field("capture", &self.capture)
+            .finish()
+    }
+}
+
 #[derive(Clone)]
 pub enum CommandSpec {
     Command {
@@ -120,6 +196,9 @@ pub enum CommandSpec {
     },
     ScriptExec {
         code: String,
+    },
+    Negated {
+        runnable: Box<CommandSpec>,
     },
 }
 
@@ -168,6 +247,10 @@ impl std::fmt::Debug for CommandSpec {
                     "code",
                     &format!("{}...", &code.chars().take(50).collect::<String>()),
                 )
+                .finish(),
+            CommandSpec::Negated { runnable } => f
+                .debug_struct("Negated")
+                .field("runnable", runnable)
                 .finish(),
         }
     }
@@ -233,6 +316,9 @@ impl From<&ExecRequest> for CommandSpec {
                 env_overlay: env_overlay.clone(),
             },
             ExecRequest::ScriptExec { code } => CommandSpec::ScriptExec { code: code.clone() },
+            ExecRequest::Negated { request } => CommandSpec::Negated {
+                runnable: Box::new(CommandSpec::from(request.as_ref())),
+            },
         }
     }
 }

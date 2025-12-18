@@ -20,12 +20,15 @@ __all__ = [
     "cmd",
     "pipe",
     "sub",
+    "negate",
     "shpexec",
     "capture",
     "get_stdout",
     "get_stderr",
     "get_env",
     "set_env",
+    "mark_var_exported",
+    "is_var_exported",
     "env",
     "repl",
 ]
@@ -224,6 +227,21 @@ class ShipRunnable:
         """
         raise NotImplementedError("with_env() only works in ShipShell REPL")
 
+    def negated(self) -> ShipRunnable:
+        """Negate the exit code of this runnable (0 becomes 1, non-zero becomes 0).
+
+        Returns:
+            A new ShipRunnable that inverts the exit code.
+
+        Examples:
+            # Succeed if file doesn't exist
+            prog('test')('-f', 'file.txt').negated()()
+
+            # Succeed if pattern not found
+            prog('grep')('pattern', 'file.txt').negated()()
+        """
+        raise NotImplementedError("negated() only works in ShipShell REPL")
+
 
 class ShipProgram:
     """Represents a program that can be executed."""
@@ -312,6 +330,30 @@ def pipe(cmd1: ShipRunnable, cmd2: ShipRunnable, *cmds: ShipRunnable) -> ShipRun
 def sub(runnable: ShipRunnable) -> ShipRunnable:
     """Execute a command in a subshell."""
     raise NotImplementedError("sub() only works in ShipShell REPL")
+
+
+def negate(runnable: ShipRunnable) -> ShipRunnable:
+    """Negate a runnable's exit code (0 becomes 1, non-zero becomes 0).
+
+    This is a convenience function equivalent to calling .negated() on a runnable.
+
+    Args:
+        runnable: The ShipRunnable to negate.
+
+    Returns:
+        A new ShipRunnable that inverts the exit code.
+
+    Examples:
+        # Succeed if file doesn't exist
+        negate(prog('test')('-f', 'file.txt'))()
+
+        # Succeed if pattern not found
+        negate(prog('grep')('pattern', 'file.txt'))()
+
+        # Can also use method form
+        prog('test')('-f', 'file.txt').negated()()
+    """
+    raise NotImplementedError("negate() only works in ShipShell REPL")
 
 
 def shpexec(file: str | Any, *args: str) -> ShipRunnable:
@@ -437,6 +479,16 @@ def set_env(key: str, value: Any) -> None:
     import os
 
     os.environ[key] = str(value)
+
+
+def mark_var_exported(key: str) -> None:
+    """Mark a variable as exported (will be passed to child processes)."""
+    raise NotImplementedError("mark_var_exported() only works in ShipShell REPL")
+
+
+def is_var_exported(key: str) -> bool:
+    """Check if a variable is exported."""
+    raise NotImplementedError("is_var_exported() only works in ShipShell REPL")
 
 
 # Global environment variable dictionary (stub implementation)

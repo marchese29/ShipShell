@@ -23,7 +23,7 @@ except ImportError:
     )
     sys.exit(1)
 
-__all__ = ["source", "wire_module", "wire_path_programs"]
+__all__ = ["source", "wire_module", "wire_path_programs", "run_bash_code"]
 
 
 def source(file: str | Path | IO[str], scope: str | None = None) -> None:
@@ -202,3 +202,40 @@ def wire_path_programs(module: str | None = None) -> None:
     if code_lines:
         code_str = "\n".join(code_lines)
         source(io.StringIO(code_str), module)
+
+
+def run_bash_code(bash_code: str):
+    """
+    Parse and execute bash code using the ShipBashInterpreter.
+
+    This function allows you to run bash scripts within ShipShell, translating
+    bash syntax to ShipShell commands. Useful for running existing bash scripts
+    or when you prefer bash syntax for certain operations.
+
+    Args:
+        bash_code: A string containing bash code to parse and execute
+
+    Example:
+        run_bash_code('echo "Hello from bash!"')
+        run_bash_code('''
+            if true; then
+                echo "Condition passed"
+            fi
+        ''')
+        run_bash_code('echo "Step 1" && echo "Step 2" && echo "Step 3"')
+    """
+    # Import here to avoid issues if tree-sitter-bash isn't available
+    from tree_sitter import Language, Parser
+    import tree_sitter_bash as tsbash
+    from compat.bash import ShipBashInterpreter
+
+    # Create the bash language and parser
+    bash_language = Language(tsbash.language())
+    parser = Parser(bash_language)
+
+    # Parse the bash code
+    tree = parser.parse(bytes(bash_code, "utf-8"))
+
+    # Create interpreter and execute
+    interpreter = ShipBashInterpreter(bash_code)
+    interpreter.visit(tree.root_node)

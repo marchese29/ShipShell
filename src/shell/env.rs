@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use std::ffi::CString;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
 
@@ -100,6 +99,7 @@ impl EnvValue {
 /// The shell's environment, containing all environment variables and directory stack
 pub struct ShellEnvironment {
     env_vars: HashMap<String, EnvValue>,
+    exported_vars: HashSet<String>,
     dir_stack: Vec<PathBuf>,
     pub last_exit: EnvValue,
     pid: EnvValue,
@@ -112,6 +112,7 @@ impl ShellEnvironment {
     pub fn new() -> Self {
         Self {
             env_vars: HashMap::new(),
+            exported_vars: HashSet::new(),
             dir_stack: Vec::new(),
             last_exit: EnvValue::Integer(0),
             pid: EnvValue::Integer(getpid().as_raw().into()),
@@ -123,11 +124,17 @@ impl ShellEnvironment {
     /// Create a new shell environment initialized from the parent process
     pub fn from_parent() -> Self {
         let mut env_vars = HashMap::new();
+        let mut exported_vars = HashSet::new();
+
+        // All variables from parent environment are exported by definition
         for (key, value) in std::env::vars() {
-            env_vars.insert(key, EnvValue::parse_from_string(&value));
+            env_vars.insert(key.clone(), EnvValue::parse_from_string(&value));
+            exported_vars.insert(key);
         }
+
         Self {
             env_vars,
+            exported_vars,
             dir_stack: Vec::new(),
             last_exit: EnvValue::Integer(0),
             pid: EnvValue::Integer(getpid().as_raw().into()),
@@ -165,6 +172,12 @@ impl ShellEnvironment {
     /// Set an environment variable
     pub fn set(&mut self, key: String, value: EnvValue) {
         match key.as_ref() {
+            // Exit code from last command (up to you if you wanna mess with it)
+            "?" => self.last_exit = value,
+
+            // Current shell's PID (you're on your own if you set this)
+            "$" => self.pid = value,
+
             // I guess you can set this if you *really* wanted to
             "PPID" => self.ppid = value,
 
@@ -183,7 +196,18 @@ impl ShellEnvironment {
 
     /// Remove an environment variable
     pub fn unset(&mut self, key: &str) -> Option<EnvValue> {
+        self.exported_vars.remove(key);
         self.env_vars.remove(key)
+    }
+
+    /// Mark a variable as exported (will be passed to child processes)
+    pub fn mark_exported(&mut self, key: &str) {
+        self.exported_vars.insert(key.to_string());
+    }
+
+    /// Check if a variable is exported
+    pub fn is_exported(&self, key: &str) -> bool {
+        self.exported_vars.contains(key)
     }
 
     /// Get all environment variables
@@ -204,18 +228,6 @@ impl ShellEnvironment {
     /// Get the number of environment variables
     pub fn len(&self) -> usize {
         self.env_vars.len()
-    }
-
-    /// Convert environment to Vec<CString> in "KEY=VALUE" format for execve
-    pub fn to_envp(&self) -> Vec<CString> {
-        self.env_vars
-            .iter()
-            .filter_map(|(key, value)| {
-                let value_str = value.to_string_repr();
-                // Include all variables, even those with empty string values (EnvValue::None)
-                CString::new(format!("{}={}", key, value_str)).ok()
-            })
-            .collect()
     }
 
     /// Push a directory onto the directory stack
@@ -296,6 +308,20 @@ pub fn set_last_exit(exit_code: u8) {
     let env = get_shell_env();
     let mut env_write = env.write().unwrap();
     env_write.last_exit = EnvValue::Integer(exit_code as i64);
+}
+
+/// Mark a variable as exported
+pub fn mark_exported(key: &str) {
+    let env = get_shell_env();
+    let mut env_write = env.write().unwrap();
+    env_write.mark_exported(key);
+}
+
+/// Check if a variable is exported
+pub fn is_exported(key: &str) -> bool {
+    let env = get_shell_env();
+    let env_read = env.read().unwrap();
+    env_read.is_exported(key)
 }
 
 /// Initialize the shell environment from the parent process
