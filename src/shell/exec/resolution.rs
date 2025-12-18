@@ -2,7 +2,7 @@ use nix::libc;
 use nix::unistd::execve;
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::super::env::EnvValue;
 use super::types::{ExecutionContext, ProgramResolutionError};
@@ -25,13 +25,13 @@ pub fn resolve_program_path(
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if let Ok(metadata) = std::fs::metadata(&path) {
-                if metadata.permissions().mode() & 0o111 == 0 {
-                    return Err(ProgramResolutionError::PermissionDenied(format!(
-                        "{}: Permission denied",
-                        program
-                    )));
-                }
+            if let Ok(metadata) = std::fs::metadata(&path)
+                && metadata.permissions().mode() & 0o111 == 0
+            {
+                return Err(ProgramResolutionError::PermissionDenied(format!(
+                    "{}: Permission denied",
+                    program
+                )));
             }
         }
 
@@ -71,10 +71,10 @@ pub fn resolve_program_path(
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                if let Ok(metadata) = std::fs::metadata(&candidate) {
-                    if metadata.permissions().mode() & 0o111 != 0 {
-                        return Ok(candidate);
-                    }
+                if let Ok(metadata) = std::fs::metadata(&candidate)
+                    && metadata.permissions().mode() & 0o111 != 0
+                {
+                    return Ok(candidate);
                 }
             }
         }
@@ -89,7 +89,7 @@ pub fn resolve_program_path(
 /// Execute already-resolved program (no locks, just execve)
 pub fn exec_resolved(
     program_name: &str,
-    resolved_path: &PathBuf,
+    resolved_path: &Path,
     args: &[String],
     context: ExecutionContext,
 ) -> ! {
