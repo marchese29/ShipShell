@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Callable, TYPE_CHECKING
 import fnmatch
+import glob
 import os
 from pathlib import Path
 import re
@@ -680,6 +681,12 @@ class ShipBashInterpreter(BashCSTVisitor):
         if text.startswith("~"):
             text = os.path.expanduser(text)
 
+        # Glob expansion (pathname expansion) for patterns
+        if glob.has_magic(text):
+            matches = sorted(glob.glob(text))
+            # Default bash behavior: return literal pattern if no matches
+            return matches if matches else text
+
         return text
 
     def evaluate_binary_expression(self, node: ts.Node) -> BashValue:
@@ -1227,10 +1234,16 @@ class ShipBashInterpreter(BashCSTVisitor):
         name_node = expect(cmd_node.child_by_field_name("name"))
 
         cmd_name = self._get_text(name_node)
-        cmd_args = [
-            bash_to_str(self.evaluate(arg_node))
-            for arg_node in cmd_node.children_by_field_name("argument")
-        ]
+        cmd_args = []
+        for arg_node in cmd_node.children_by_field_name("argument"):
+            arg_value = self.evaluate(arg_node)
+
+            # Flatten lists from glob expansion
+            if isinstance(arg_value, list):
+                cmd_args.extend([bash_to_str(v) for v in arg_value])
+            else:
+                cmd_args.append(bash_to_str(arg_value))
+
         return shp.prog(cmd_name)(*cmd_args)
 
     def _build_pipeline_runnable(self, pipeline_node: ts.Node) -> shp.ShipRunnable:
@@ -1296,30 +1309,38 @@ class ShipBashInterpreter(BashCSTVisitor):
                 raise ValueError(f"Cannot convert node type '{node.type}' to runnable")
 
     def visit_case_statement(self, node: ts.Node):
-        # Value to match against
+        """Handle case statements with proper glob pattern matching."""
+        # Get the value to match against
         value_node = expect(node.child_by_field_name("value"))
-        value = self.evaluate(value_node)
+        value = bash_to_str(self.evaluate(value_node))
 
-        # Work through the case_items and execute matches
+        # Iterate through case items
         for case_item in [n for n in node.children if n.type == "case_item"]:
-            for item in case_item.children_by_field_name("value"):
+            # Get all pattern nodes (we need to skip these when visiting body)
+            pattern_nodes = case_item.children_by_field_name("value")
+
+            # Check if ANY pattern matches (OR logic)
+            matched = False
+            for pattern_node in pattern_nodes:
+                pattern = bash_to_str(self.evaluate(pattern_node))
+                # Use fnmatch for glob pattern matching (*, ?, [abc], etc.)
+                if fnmatch.fnmatch(value, pattern):
+                    matched = True
+                    break  # Found a match, no need to check other patterns
+
+            # If matched, visit all children EXCEPT the patterns
+            if matched:
+                for child in case_item.named_children:
+                    # Skip pattern nodes (already evaluated)
+                    if child not in pattern_nodes:
+                        self.visit(child)
+
+                # Handle termination
                 if case_item.child_by_field_name("fallthrough"):
-                    raise NotImplementedError("case_item fallthrough")
-                executed = False
-
-                # Default branch
-                if item.type == "extglob_pattern":
-                    self.visit_children(case_item)
-                    executed = True
-
-                # "Normal" branch
-                item_value = self.evaluate(item)
-                if value == item_value:
-                    self.visit_children(case_item)
-                    executed = True
-
-                # Termination statements prevent continuing
-                if executed and case_item.child_by_field_name("termination"):
+                    # ;& or ;;& - continue to next case_item
+                    continue
+                else:
+                    # ;; - default termination, stop processing
                     return
 
     def visit_command(self, node: ts.Node):
