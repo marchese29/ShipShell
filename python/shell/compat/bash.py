@@ -388,8 +388,64 @@ class ShipBashInterpreter(BashCSTVisitor):
         else:
             return "".join([bash_to_str(p) for p in parts])
 
+    def _expand_range(self, content: str) -> list[str] | None:
+        if ".." not in content:
+            return None
+
+        parts = content.split("..")
+        if len(parts) < 2 or len(parts) > 3:
+            return None
+
+        start = parts[0].strip()
+        end = parts[1].strip()
+        inc = parts[2].strip() if len(parts) == 3 else None
+
+        try:
+            increment = int(inc) if inc else 1
+            if increment == 0:  # Only reject zero increment
+                return None
+        except ValueError:
+            return None
+
+        # Try with numbers
+        try:
+            start_num = int(start)
+            end_num = int(end)
+
+            pad_width = 0
+            if len(start) > 1 and start[0] == "0":
+                pad_width = len(start)
+            if len(end) > 1 and end[0] == "0":
+                pad_width = max(pad_width, len(end))
+
+            if start_num <= end_num:
+                return [
+                    str(n).zfill(pad_width)
+                    for n in range(start_num, end_num + 1, abs(increment))
+                ]
+            else:
+                return [
+                    str(n).zfill(pad_width)
+                    for n in range(start_num, end_num - 1, -abs(increment))
+                ]
+        except ValueError:
+            pass
+
+        # Try with letters (only simple ranges without custom increment)
+        if len(start) == 1 and len(end) == 1 and inc is None:
+            start_ord = ord(start)
+            end_ord = ord(end)
+
+            if start_ord <= end_ord:
+                return [chr(i) for i in range(start_ord, end_ord + 1)]
+            else:
+                return [chr(i) for i in range(start_ord, end_ord - 1, -1)]
+
+        return None
+
     def evaluate_brace_expression(self, node: ts.Node) -> BashValue:
-        raise NotImplementedError("brace_expression")
+        result = self._expand_range(self._get_text(node)[1:-1])
+        return result if result else []
 
     def evaluate_command_substitution(self, node: ts.Node) -> BashValue:
         """Handle command substitution: $(command) or `command`."""
@@ -414,6 +470,121 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         # Build a runnable from the command
         return shp.get_stdout(self._node_to_runnable(command_node)).rstrip("\n")
+
+    def _split_commas(self, string: str) -> list[str]:
+        result: list[str] = []
+        current = ""
+        depth = 0
+        i = 0
+
+        while i < len(string):
+            char = string[i]
+
+            # Deal with escaped characters
+            if (
+                char == "\\"
+                and i + 1 < len(string)
+                and string[i + 1] in ("{", "}", ",", "\\")
+            ):
+                current += char + string[i + 1]
+                i += 2
+                continue
+
+            # Unescaped characters
+            if char == "{":
+                depth += 1
+                current += char
+            elif char == "}":
+                depth -= 1
+                current += char
+            elif depth == 0 and char == ",":
+                result.append(current)
+                current = ""
+            else:
+                current += char
+
+            # Continue iterating
+            i += 1
+
+        if len(current) > 0:
+            result.append(current)
+
+        return result
+
+    def _expand_braces(self, string: str) -> list[str]:
+        result: list[str] = [""]
+        i = 0
+        while i < len(string):
+            char = string[i]
+
+            # Deal with escaped characters
+            if char == "\\" and i + 1 < len(string):
+                next_char = string[i + 1]
+                if next_char in ("{", "}", ",", "\\"):
+                    result = [r + next_char for r in result]
+                    i += 2
+                    continue
+                else:
+                    result = [r + char for r in result]
+                    i += 1
+                    continue
+
+            if char == "{":
+                depth = 1
+                j = i + 1
+
+                # Find the closing bracket
+                while j < len(string) and depth > 0:
+                    # Deal with escaped characters
+                    if (
+                        string[j] == "\\"
+                        and j + 1 < len(string)
+                        and string[j + 1] in ("{", "}", "\\")
+                    ):
+                        j += 2
+                        continue
+
+                    if string[j] == "{":
+                        depth += 1
+                    elif string[j] == "}":
+                        depth -= 1
+                    j += 1
+
+                if depth == 0:
+                    content = string[i + 1 : j - 1]
+
+                    # First see if the braces are a range
+                    range_result = self._expand_range(content)
+                    if range_result is not None:
+                        # Range:
+                        # Use the result as the expanded options
+                        expanded_options = range_result
+                    else:
+                        # Not a range:
+                        # Get options by separating on commas at the current depth
+                        expanded_options = []
+                        for option in self._split_commas(content):
+                            # Flatten if there are multiple options
+                            expanded_options.extend(self._expand_braces(option))
+
+                    # Cartesian Product
+                    new_result = []
+                    for prefix in result:
+                        for option in expanded_options:
+                            new_result.append(prefix + option)
+                    i = j
+                else:
+                    # Unclosed brackets are treated like normal text
+                    result = [r + char for r in result]
+                    i += 1
+            else:
+                # Everything else is appended to the results we have so far
+                result = [r + char for r in result]
+                i += 1
+        return result if len(result) > 1 or result[0] != "" else []
+
+    def evaluate_concatenation(self, node: ts.Node) -> BashValue:
+        return self._expand_braces(self._get_text(node))
 
     def evaluate_expansion(self, node: ts.Node) -> BashValue:
         """Handle ${var} and other complex expansions including ${10}, ${11}, etc."""
