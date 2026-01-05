@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     import tree_sitter as ts
 
 
-def expect[T](thing: T | None) -> T:
+def _expect[T](thing: T | None) -> T:
     assert thing is not None
     return thing
 
@@ -26,7 +26,7 @@ def expect[T](thing: T | None) -> T:
 BashValue = str | int | list[str]
 
 
-def bash_to_str(value: BashValue | None) -> str:
+def _bash_to_str(value: BashValue | None) -> str:
     match value:
         case int() as val:
             return str(val)
@@ -40,7 +40,7 @@ def bash_to_str(value: BashValue | None) -> str:
             return ""
 
 
-def bash_to_int(value: BashValue | None) -> int:
+def _bash_to_int(value: BashValue | None) -> int:
     match value:
         case int() as val:
             return val
@@ -53,6 +53,164 @@ def bash_to_int(value: BashValue | None) -> int:
             return 0
         case None:
             return 0
+
+
+def _expand_range(content: str) -> list[str] | None:
+    if ".." not in content:
+        return None
+
+    parts = content.split("..")
+    if len(parts) < 2 or len(parts) > 3:
+        return None
+
+    start = parts[0].strip()
+    end = parts[1].strip()
+    inc = parts[2].strip() if len(parts) == 3 else None
+
+    try:
+        increment = int(inc) if inc else 1
+        if increment == 0:  # Only reject zero increment
+            return None
+    except ValueError:
+        return None
+
+    # Try with numbers
+    try:
+        start_num = int(start)
+        end_num = int(end)
+
+        pad_width = 0
+        if len(start) > 1 and start[0] == "0":
+            pad_width = len(start)
+        if len(end) > 1 and end[0] == "0":
+            pad_width = max(pad_width, len(end))
+
+        if start_num <= end_num:
+            return [
+                str(n).zfill(pad_width)
+                for n in range(start_num, end_num + 1, abs(increment))
+            ]
+        else:
+            return [
+                str(n).zfill(pad_width)
+                for n in range(start_num, end_num - 1, -abs(increment))
+            ]
+    except ValueError:
+        pass
+
+
+def _split_commas(string: str) -> list[str]:
+    result: list[str] = []
+    current = ""
+    depth = 0
+    i = 0
+
+    while i < len(string):
+        char = string[i]
+
+        # Deal with escaped characters
+        if (
+            char == "\\"
+            and i + 1 < len(string)
+            and string[i + 1] in ("{", "}", ",", "\\")
+        ):
+            current += char + string[i + 1]
+            i += 2
+            continue
+
+        # Unescaped characters
+        if char == "{":
+            depth += 1
+            current += char
+        elif char == "}":
+            depth -= 1
+            current += char
+        elif depth == 0 and char == ",":
+            result.append(current)
+            current = ""
+        else:
+            current += char
+
+        # Continue iterating
+        i += 1
+
+    if len(current) > 0:
+        result.append(current)
+
+    return result
+
+
+def _expand_braces(string: str) -> list[str]:
+    result: list[str] = [""]
+    i = 0
+    while i < len(string):
+        char = string[i]
+
+        # Deal with escaped characters
+        if char == "\\" and i + 1 < len(string):
+            next_char = string[i + 1]
+            if next_char in ("{", "}", ",", "\\"):
+                result = [r + next_char for r in result]
+                i += 2
+                continue
+            else:
+                result = [r + char for r in result]
+                i += 1
+                continue
+
+        if char == "{":
+            depth = 1
+            j = i + 1
+
+            # Find the closing bracket
+            while j < len(string) and depth > 0:
+                # Deal with escaped characters
+                if (
+                    string[j] == "\\"
+                    and j + 1 < len(string)
+                    and string[j + 1] in ("{", "}", "\\")
+                ):
+                    j += 2
+                    continue
+
+                if string[j] == "{":
+                    depth += 1
+                elif string[j] == "}":
+                    depth -= 1
+                j += 1
+
+            if depth == 0:
+                content = string[i + 1 : j - 1]
+
+                # First see if the braces are a range
+                range_result = _expand_range(content)
+                if range_result is not None:
+                    # Range:
+                    # Use the result as the expanded options
+                    expanded_options = range_result
+                else:
+                    # Not a range:
+                    # Get options by separating on commas at the current depth
+                    expanded_options = []
+                    for option in _split_commas(content):
+                        # Flatten if there are multiple options
+                        expanded_options.extend(_expand_braces(option))
+
+                # Cartesian Product
+                new_result = []
+                for prefix in result:
+                    for option in expanded_options:
+                        new_result.append(prefix + option)
+                i = j
+            else:
+                # Unclosed brackets are treated like normal text
+                result = [r + char for r in result]
+                i += 1
+        else:
+            # Everything else is appended to the results we have so far
+            result = [r + char for r in result]
+            i += 1
+    return result if len(result) > 1 or result[0] != "" else []
 
 
 class BashScriptError(Exception):
@@ -95,7 +253,7 @@ class BashCSTVisitor:
         parts: list[BashValue] = []
         for child in node.named_children:
             parts.append(self.evaluate(child))
-        return "".join([bash_to_str(p) for p in parts])
+        return "".join([_bash_to_str(p) for p in parts])
 
 
 class ShipBashInterpreter(BashCSTVisitor):
@@ -173,7 +331,7 @@ class ShipBashInterpreter(BashCSTVisitor):
         match operator:
             case ":":
                 # Substring expansion: ${var:offset} or ${var:offset:length}
-                offset = bash_to_int(arg1_str)
+                offset = _bash_to_int(arg1_str)
 
                 # Handle negative offset (count from end)
                 if offset < 0:
@@ -186,7 +344,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                     return ""
 
                 if arg2_str is not None:
-                    length = bash_to_int(arg2_str)
+                    length = _bash_to_int(arg2_str)
                     if length < 0:
                         return ""
                     return value_str[offset : offset + length]
@@ -386,65 +544,10 @@ class ShipBashInterpreter(BashCSTVisitor):
         elif len(parts) == 1:
             return parts[0]
         else:
-            return "".join([bash_to_str(p) for p in parts])
-
-    def _expand_range(self, content: str) -> list[str] | None:
-        if ".." not in content:
-            return None
-
-        parts = content.split("..")
-        if len(parts) < 2 or len(parts) > 3:
-            return None
-
-        start = parts[0].strip()
-        end = parts[1].strip()
-        inc = parts[2].strip() if len(parts) == 3 else None
-
-        try:
-            increment = int(inc) if inc else 1
-            if increment == 0:  # Only reject zero increment
-                return None
-        except ValueError:
-            return None
-
-        # Try with numbers
-        try:
-            start_num = int(start)
-            end_num = int(end)
-
-            pad_width = 0
-            if len(start) > 1 and start[0] == "0":
-                pad_width = len(start)
-            if len(end) > 1 and end[0] == "0":
-                pad_width = max(pad_width, len(end))
-
-            if start_num <= end_num:
-                return [
-                    str(n).zfill(pad_width)
-                    for n in range(start_num, end_num + 1, abs(increment))
-                ]
-            else:
-                return [
-                    str(n).zfill(pad_width)
-                    for n in range(start_num, end_num - 1, -abs(increment))
-                ]
-        except ValueError:
-            pass
-
-        # Try with letters (only simple ranges without custom increment)
-        if len(start) == 1 and len(end) == 1 and inc is None:
-            start_ord = ord(start)
-            end_ord = ord(end)
-
-            if start_ord <= end_ord:
-                return [chr(i) for i in range(start_ord, end_ord + 1)]
-            else:
-                return [chr(i) for i in range(start_ord, end_ord - 1, -1)]
-
-        return None
+            return "".join([_bash_to_str(p) for p in parts])
 
     def evaluate_brace_expression(self, node: ts.Node) -> BashValue:
-        result = self._expand_range(self._get_text(node)[1:-1])
+        result = _expand_range(self._get_text(node)[1:-1])
         return result if result else []
 
     def evaluate_command_substitution(self, node: ts.Node) -> BashValue:
@@ -471,120 +574,8 @@ class ShipBashInterpreter(BashCSTVisitor):
         # Build a runnable from the command
         return shp.get_stdout(self._node_to_runnable(command_node)).rstrip("\n")
 
-    def _split_commas(self, string: str) -> list[str]:
-        result: list[str] = []
-        current = ""
-        depth = 0
-        i = 0
-
-        while i < len(string):
-            char = string[i]
-
-            # Deal with escaped characters
-            if (
-                char == "\\"
-                and i + 1 < len(string)
-                and string[i + 1] in ("{", "}", ",", "\\")
-            ):
-                current += char + string[i + 1]
-                i += 2
-                continue
-
-            # Unescaped characters
-            if char == "{":
-                depth += 1
-                current += char
-            elif char == "}":
-                depth -= 1
-                current += char
-            elif depth == 0 and char == ",":
-                result.append(current)
-                current = ""
-            else:
-                current += char
-
-            # Continue iterating
-            i += 1
-
-        if len(current) > 0:
-            result.append(current)
-
-        return result
-
-    def _expand_braces(self, string: str) -> list[str]:
-        result: list[str] = [""]
-        i = 0
-        while i < len(string):
-            char = string[i]
-
-            # Deal with escaped characters
-            if char == "\\" and i + 1 < len(string):
-                next_char = string[i + 1]
-                if next_char in ("{", "}", ",", "\\"):
-                    result = [r + next_char for r in result]
-                    i += 2
-                    continue
-                else:
-                    result = [r + char for r in result]
-                    i += 1
-                    continue
-
-            if char == "{":
-                depth = 1
-                j = i + 1
-
-                # Find the closing bracket
-                while j < len(string) and depth > 0:
-                    # Deal with escaped characters
-                    if (
-                        string[j] == "\\"
-                        and j + 1 < len(string)
-                        and string[j + 1] in ("{", "}", "\\")
-                    ):
-                        j += 2
-                        continue
-
-                    if string[j] == "{":
-                        depth += 1
-                    elif string[j] == "}":
-                        depth -= 1
-                    j += 1
-
-                if depth == 0:
-                    content = string[i + 1 : j - 1]
-
-                    # First see if the braces are a range
-                    range_result = self._expand_range(content)
-                    if range_result is not None:
-                        # Range:
-                        # Use the result as the expanded options
-                        expanded_options = range_result
-                    else:
-                        # Not a range:
-                        # Get options by separating on commas at the current depth
-                        expanded_options = []
-                        for option in self._split_commas(content):
-                            # Flatten if there are multiple options
-                            expanded_options.extend(self._expand_braces(option))
-
-                    # Cartesian Product
-                    new_result = []
-                    for prefix in result:
-                        for option in expanded_options:
-                            new_result.append(prefix + option)
-                    i = j
-                else:
-                    # Unclosed brackets are treated like normal text
-                    result = [r + char for r in result]
-                    i += 1
-            else:
-                # Everything else is appended to the results we have so far
-                result = [r + char for r in result]
-                i += 1
-        return result if len(result) > 1 or result[0] != "" else []
-
     def evaluate_concatenation(self, node: ts.Node) -> BashValue:
-        return self._expand_braces(self._get_text(node))
+        return _expand_braces(self._get_text(node))
 
     def evaluate_expansion(self, node: ts.Node) -> BashValue:
         """Handle ${var} and other complex expansions including ${10}, ${11}, etc."""
@@ -626,8 +617,8 @@ class ShipBashInterpreter(BashCSTVisitor):
         if prefix_operator == "!":
             if operator is None:
                 # ${!varname}
-                indirect = bash_to_str(shp.env.get(self._get_text(value_node), None))
-                return bash_to_str(shp.env.get(indirect, None))
+                indirect = _bash_to_str(shp.env.get(self._get_text(value_node), None))
+                return _bash_to_str(shp.env.get(indirect, None))
             elif operator in ("@", "*"):
                 # ${!prefix@} and ${!prefix*}
                 prefix = self._get_text(value_node)
@@ -663,7 +654,7 @@ class ShipBashInterpreter(BashCSTVisitor):
             elif var_name in ("@", "*"):
                 value = self._positional_params
             else:
-                value = bash_to_str(shp.env.get(var_name, None))
+                value = _bash_to_str(shp.env.get(var_name, None))
         else:
             # Subscript
             value = self.evaluate(value_node)
@@ -672,71 +663,71 @@ class ShipBashInterpreter(BashCSTVisitor):
             if isinstance(value, list):
                 return len(value)
             else:
-                return len(bash_to_str(value))
+                return len(_bash_to_str(value))
 
         # Return the value as-is if no operators
         if operator is None:
-            return bash_to_str(value)
+            return _bash_to_str(value)
 
         match operator:
             case "-":
                 if value is None:
-                    return self._get_text(expect(arg1))
+                    return self._get_text(_expect(arg1))
                 else:
                     return value
             case ":-":
                 if value is None or value == "":
-                    return self._get_text(expect(arg1))
+                    return self._get_text(_expect(arg1))
                 else:
                     return value
             case "=":
                 # Assign if variable is unset (None)
                 if value is None:
                     var_name = self._get_text(value_node)
-                    new_value = bash_to_str(self.evaluate(expect(arg1)))
+                    new_value = _bash_to_str(self.evaluate(_expect(arg1)))
                     shp.env[var_name] = new_value
                     return new_value
-                return bash_to_str(value)
+                return _bash_to_str(value)
             case ":=":
                 # Assign if variable is unset OR empty
                 if value is None or value == "":
                     var_name = self._get_text(value_node)
-                    new_value = bash_to_str(self.evaluate(expect(arg1)))
+                    new_value = _bash_to_str(self.evaluate(_expect(arg1)))
                     shp.env[var_name] = new_value
                     return new_value
-                return bash_to_str(value)
+                return _bash_to_str(value)
             case "?":
                 # Error if variable is unset
                 if value is None:
                     var_name = self._get_text(value_node)
                     error_msg = (
-                        self._get_text(expect(arg1))
+                        self._get_text(_expect(arg1))
                         if arg1
                         else "parameter null or not set"
                     )
                     raise BashScriptError(f"{var_name}: {error_msg}")
-                return bash_to_str(value)
+                return _bash_to_str(value)
             case ":?":
                 # Error if variable is unset OR empty
                 if value is None or value == "":
                     var_name = self._get_text(value_node)
                     error_msg = (
-                        self._get_text(expect(arg1))
+                        self._get_text(_expect(arg1))
                         if arg1
                         else "parameter null or not set"
                     )
                     raise BashScriptError(f"{var_name}: {error_msg}")
-                return bash_to_str(value)
+                return _bash_to_str(value)
             case "+":
                 if value is None:
                     return ""
                 else:
-                    return self._get_text(expect(arg1))
+                    return self._get_text(_expect(arg1))
             case ":+":
                 if value is None or value == "":
                     return ""
                 else:
-                    return self._get_text(expect(arg1))
+                    return self._get_text(_expect(arg1))
             case _:
                 # Per-element operators: apply to each element if value is a list
                 # Pre-evaluate arguments to strings
@@ -746,13 +737,13 @@ class ShipBashInterpreter(BashCSTVisitor):
                 if arg1:
                     # For substring (:), evaluate arg1 as expression; otherwise get text
                     if operator == ":":
-                        arg1_str = bash_to_str(self.evaluate(arg1))
+                        arg1_str = _bash_to_str(self.evaluate(arg1))
                     else:
                         arg1_str = self._get_text(arg1)
 
                 if arg2:
                     if operator == ":":
-                        arg2_str = bash_to_str(self.evaluate(arg2))
+                        arg2_str = _bash_to_str(self.evaluate(arg2))
                     else:
                         arg2_str = self._get_text(arg2)
 
@@ -764,13 +755,13 @@ class ShipBashInterpreter(BashCSTVisitor):
                     ]
                 else:
                     return self._apply_string_expansion(
-                        bash_to_str(value), operator, arg1_str, arg2_str
+                        _bash_to_str(value), operator, arg1_str, arg2_str
                     )
 
     def evaluate_array(self, node: ts.Node) -> BashValue:
         result: list[str] = []
         for child in node.named_children:
-            result.append(bash_to_str(self.evaluate(child)))
+            result.append(_bash_to_str(self.evaluate(child)))
         return result
 
     def evaluate_subshell(self, node: ts.Node) -> BashValue:
@@ -782,10 +773,10 @@ class ShipBashInterpreter(BashCSTVisitor):
         return self._get_text(node)[1:-1]
 
     def evaluate_subscript(self, node: ts.Node) -> BashValue:
-        var_name_node = expect(node.child_by_field_name("name"))
-        index_node = expect(node.child_by_field_name("index"))
+        var_name_node = _expect(node.child_by_field_name("name"))
+        index_node = _expect(node.child_by_field_name("index"))
 
-        index_val = bash_to_int(self.evaluate(index_node))
+        index_val = _bash_to_int(self.evaluate(index_node))
         var_name = self._get_text(var_name_node)
 
         var_value = shp.env.get(var_name)
@@ -809,7 +800,7 @@ class ShipBashInterpreter(BashCSTVisitor):
         """Evaluate numbers.  Bash only supports integers"""
         # Expression evaluating to a number
         if named_child := node.named_child(0):
-            return bash_to_int(self.evaluate(named_child))
+            return _bash_to_int(self.evaluate(named_child))
 
         # Text as number
         try:
@@ -863,7 +854,7 @@ class ShipBashInterpreter(BashCSTVisitor):
     def evaluate_binary_expression(self, node: ts.Node) -> BashValue:
         """Evaluate binary arithmetic expressions."""
         left_node: ts.Node | None = node.child_by_field_name("left")
-        op_node: ts.Node = expect(node.child_by_field_name("operator"))
+        op_node: ts.Node = _expect(node.child_by_field_name("operator"))
         right_nodes: list[ts.Node] = node.children_by_field_name("right")
 
         op_text = self._get_text(op_node)
@@ -883,11 +874,11 @@ class ShipBashInterpreter(BashCSTVisitor):
             "^=",
             "**=",
         ):
-            var_name = self._get_text(expect(left_node))
+            var_name = self._get_text(_expect(left_node))
 
             # Get current value for compound assignments
             if op_text != "=":
-                current = self.evaluate(expect(left_node))
+                current = self.evaluate(_expect(left_node))
                 if isinstance(current, str):
                     raise ValueError("Left side binary operand can't be a string")
             else:
@@ -895,7 +886,7 @@ class ShipBashInterpreter(BashCSTVisitor):
 
             # Evaluate right side
             # TODO: Error if not an integer
-            right_val = bash_to_int(self.evaluate(right_nodes[0]))
+            right_val = _bash_to_int(self.evaluate(right_nodes[0]))
 
             # Compute new value based on operator
             if op_text == "=":
@@ -974,51 +965,52 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         # Non-assignment operators - evaluate both sides
         left_val = self.evaluate(left_node) if left_node else 0
-        right_val = bash_to_int(self.evaluate(right_nodes[0]))
+        right_val = _bash_to_int(self.evaluate(right_nodes[0]))
 
         # Test operators (return 1 for true, 0 for false)
         # String comparisons
         if op_text == "=":
             # In test context, = is string equality
-            return 1 if bash_to_str(left_val) == bash_to_str(right_val) else 0
+            return 1 if _bash_to_str(left_val) == _bash_to_str(right_val) else 0
         elif op_text == "!=":
             # String inequality
-            return 1 if bash_to_str(left_val) != bash_to_str(right_val) else 0
+            return 1 if _bash_to_str(left_val) != _bash_to_str(right_val) else 0
         elif op_text == "=~":
             # Regex match
             # TODO: There's probably some differences between bash and python regex implementations
             try:
                 result = (
-                    re.search(bash_to_str(right_val), bash_to_str(left_val)) is not None
+                    re.search(_bash_to_str(right_val), _bash_to_str(left_val))
+                    is not None
                 )
                 return 1 if result else 0
             except re.error:
                 return 0
         # Integer comparisons
         elif op_text == "-eq":
-            return 1 if bash_to_int(left_val) == bash_to_int(right_val) else 0
+            return 1 if _bash_to_int(left_val) == _bash_to_int(right_val) else 0
         elif op_text == "-ne":
-            return 1 if bash_to_int(left_val) != bash_to_int(right_val) else 0
+            return 1 if _bash_to_int(left_val) != _bash_to_int(right_val) else 0
         elif op_text == "-lt":
-            return 1 if bash_to_int(left_val) < bash_to_int(right_val) else 0
+            return 1 if _bash_to_int(left_val) < _bash_to_int(right_val) else 0
         elif op_text == "-le":
-            return 1 if bash_to_int(left_val) <= bash_to_int(right_val) else 0
+            return 1 if _bash_to_int(left_val) <= _bash_to_int(right_val) else 0
         elif op_text == "-gt":
-            return 1 if bash_to_int(left_val) > bash_to_int(right_val) else 0
+            return 1 if _bash_to_int(left_val) > _bash_to_int(right_val) else 0
         elif op_text == "-ge":
-            return 1 if bash_to_int(left_val) >= bash_to_int(right_val) else 0
+            return 1 if _bash_to_int(left_val) >= _bash_to_int(right_val) else 0
         # Logical operators (also used in test context)
         elif op_text == "-a":
             # Logical AND in test context
-            return 1 if bash_to_int(left_val) and bash_to_int(right_val) else 0
+            return 1 if _bash_to_int(left_val) and _bash_to_int(right_val) else 0
         elif op_text == "-o":
             # Logical OR in test context
-            return 1 if bash_to_int(left_val) or bash_to_int(right_val) else 0
+            return 1 if _bash_to_int(left_val) or _bash_to_int(right_val) else 0
         # File comparison operators
         elif op_text in ("-nt", "-ot", "-ef"):
             # Get both file paths
-            left_path = Path(bash_to_str(left_val))
-            right_path = Path(bash_to_str(right_val))
+            left_path = Path(_bash_to_str(left_val))
+            right_path = Path(_bash_to_str(right_val))
 
             try:
                 if op_text == "-nt":
@@ -1169,10 +1161,10 @@ class ShipBashInterpreter(BashCSTVisitor):
                 return 0
 
     def evaluate_postfix_expression(self, node: ts.Node) -> BashValue:
-        operator_node = expect(node.child_by_field_name("operator"))
+        operator_node = _expect(node.child_by_field_name("operator"))
         operator = self._get_text(operator_node)
 
-        operand_node = expect(
+        operand_node = _expect(
             next((c for c in node.children if c != operator_node and c.is_named), None)
         )
         var_name = self._get_text(operand_node)
@@ -1195,11 +1187,11 @@ class ShipBashInterpreter(BashCSTVisitor):
         return current
 
     def evaluate_ternary_expression(self, node: ts.Node) -> BashValue:
-        cond_node: ts.Node = expect(node.child_by_field_name("condition"))
-        cons_node: ts.Node = expect(node.child_by_field_name("consequence"))
-        alt_node: ts.Node = expect(node.child_by_field_name("alternative"))
+        cond_node: ts.Node = _expect(node.child_by_field_name("condition"))
+        cons_node: ts.Node = _expect(node.child_by_field_name("consequence"))
+        alt_node: ts.Node = _expect(node.child_by_field_name("alternative"))
 
-        test_outcome = bash_to_int(self.evaluate(cond_node))
+        test_outcome = _bash_to_int(self.evaluate(cond_node))
 
         if test_outcome == 1:
             return self.evaluate(cons_node)
@@ -1207,10 +1199,10 @@ class ShipBashInterpreter(BashCSTVisitor):
             return self.evaluate(alt_node)
 
     def evaluate_unary_expression(self, node: ts.Node) -> BashValue:
-        operator_node = expect(node.child_by_field_name("operator"))
+        operator_node = _expect(node.child_by_field_name("operator"))
 
         op_text = self._get_text(operator_node)
-        operand = expect(
+        operand = _expect(
             next((c for c in node.children if c != operator_node and c.is_named), None)
         )
 
@@ -1239,11 +1231,11 @@ class ShipBashInterpreter(BashCSTVisitor):
         # Test operators (string tests return 1 for true, 0 for false)
         if op_text == "-z":
             # Zero length string
-            operand_str = bash_to_str(self.evaluate(operand))
+            operand_str = _bash_to_str(self.evaluate(operand))
             return 1 if len(operand_str) == 0 else 0
         elif op_text == "-n":
             # Non-zero length string
-            operand_str = bash_to_str(self.evaluate(operand))
+            operand_str = _bash_to_str(self.evaluate(operand))
             return 1 if len(operand_str) > 0 else 0
 
         # File test operators
@@ -1269,7 +1261,7 @@ class ShipBashInterpreter(BashCSTVisitor):
             "-u",
             "-g",
         ):
-            path_str = bash_to_str(self.evaluate(operand))
+            path_str = _bash_to_str(self.evaluate(operand))
             path = Path(path_str)
 
             try:
@@ -1362,7 +1354,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                 return 0
 
         # Other unary operators
-        operand_val = bash_to_int(self.evaluate(operand))
+        operand_val = _bash_to_int(self.evaluate(operand))
 
         match op_text:
             case "+":
@@ -1382,7 +1374,9 @@ class ShipBashInterpreter(BashCSTVisitor):
         """Apply all redirect nodes to a runnable and return the modified runnable."""
         for redirect_node in node.children_by_field_name("redirect"):
             if redirect_node.type == "file_redirect":
-                dest_nodes = expect(redirect_node.children_by_field_name("destination"))
+                dest_nodes = _expect(
+                    redirect_node.children_by_field_name("destination")
+                )
                 dest_file = self.evaluate(dest_nodes[0])
 
                 # Check for >> vs >
@@ -1402,7 +1396,7 @@ class ShipBashInterpreter(BashCSTVisitor):
         return runnable
 
     def _build_command_runnable(self, cmd_node: ts.Node) -> shp.ShipRunnable:
-        name_node = expect(cmd_node.child_by_field_name("name"))
+        name_node = _expect(cmd_node.child_by_field_name("name"))
 
         cmd_name = self._get_text(name_node)
         cmd_args = []
@@ -1411,9 +1405,9 @@ class ShipBashInterpreter(BashCSTVisitor):
 
             # Flatten lists from glob expansion
             if isinstance(arg_value, list):
-                cmd_args.extend([bash_to_str(v) for v in arg_value])
+                cmd_args.extend([_bash_to_str(v) for v in arg_value])
             else:
-                cmd_args.append(bash_to_str(arg_value))
+                cmd_args.append(_bash_to_str(arg_value))
 
         return shp.prog(cmd_name)(*cmd_args)
 
@@ -1474,7 +1468,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                 if child is None:
                     return shp.prog("false")()
                 # Evaluate the expression and return true/false runnable
-                result = bash_to_int(self.evaluate(child))
+                result = _bash_to_int(self.evaluate(child))
                 return shp.prog("true")() if result else shp.prog("false")()
             case _:
                 raise ValueError(f"Cannot convert node type '{node.type}' to runnable")
@@ -1482,8 +1476,8 @@ class ShipBashInterpreter(BashCSTVisitor):
     def visit_case_statement(self, node: ts.Node):
         """Handle case statements with proper glob pattern matching."""
         # Get the value to match against
-        value_node = expect(node.child_by_field_name("value"))
-        value = bash_to_str(self.evaluate(value_node))
+        value_node = _expect(node.child_by_field_name("value"))
+        value = _bash_to_str(self.evaluate(value_node))
 
         # Iterate through case items
         for case_item in [n for n in node.children if n.type == "case_item"]:
@@ -1493,7 +1487,7 @@ class ShipBashInterpreter(BashCSTVisitor):
             # Check if ANY pattern matches (OR logic)
             matched = False
             for pattern_node in pattern_nodes:
-                pattern = bash_to_str(self.evaluate(pattern_node))
+                pattern = _bash_to_str(self.evaluate(pattern_node))
                 # Use fnmatch for glob pattern matching (*, ?, [abc], etc.)
                 if fnmatch.fnmatch(value, pattern):
                     matched = True
@@ -1536,7 +1530,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                 if name_node is None:
                     continue
 
-                name = bash_to_str(self.evaluate(name_node))
+                name = _bash_to_str(self.evaluate(name_node))
                 value = self.evaluate(value_node) if value_node else ""
 
                 # Set the variable
@@ -1550,7 +1544,7 @@ class ShipBashInterpreter(BashCSTVisitor):
             elif child.type in ("word", "string", "raw_string", "variable_name"):
                 # export VAR (without assignment - export existing var)
                 if keyword == "export":
-                    var_name = bash_to_str(self._get_text(child))
+                    var_name = _bash_to_str(self._get_text(child))
                     # Only mark as exported if it exists
                     if var_name in shp.env:
                         shp.mark_var_exported(var_name)
@@ -1564,19 +1558,19 @@ class ShipBashInterpreter(BashCSTVisitor):
         if node.type == "variable_assignment":
             # Execute the assignment and return the assigned value
             self.visit(node)
-            name_node = expect(node.child_by_field_name("name"))
+            name_node = _expect(node.child_by_field_name("name"))
             var_name = self._get_text(name_node)
-            return bash_to_int(shp.env.get(var_name, 0))
+            return _bash_to_int(shp.env.get(var_name, 0))
         else:
             # Regular expression - evaluate and return
-            return bash_to_int(self.evaluate(node))
+            return _bash_to_int(self.evaluate(node))
 
     def visit_c_style_for_statement(self, node: ts.Node):
         """Handle c-style for loops: `for ((i=0; i<10; i++)); do ...; done`"""
         initializers = node.children_by_field_name("initializer")
         conditions = node.children_by_field_name("condition")
         updates = node.children_by_field_name("update")
-        body = expect(node.child_by_field_name("body"))
+        body = _expect(node.child_by_field_name("body"))
 
         def eval_conditions() -> bool:
             """Evaluate condition expressions - empty means infinite loop (true)"""
@@ -1613,7 +1607,7 @@ class ShipBashInterpreter(BashCSTVisitor):
     def visit_for_statement(self, node: ts.Node):
         """Handle for loops: for var in values; do ...; done"""
         # Get loop variable name
-        var_node = expect(node.child_by_field_name("variable"))
+        var_node = _expect(node.child_by_field_name("variable"))
         var_name = self._get_text(var_node)
 
         # Get values to iterate over
@@ -1633,12 +1627,12 @@ class ShipBashInterpreter(BashCSTVisitor):
                     values.extend(result)
                 elif v_node.type == "command_substitution":
                     # Command substitution output is split on whitespace (IFS)
-                    output = bash_to_str(result)
+                    output = _bash_to_str(result)
                     if output:
                         values.extend(output.split())
                 else:
                     # Scalar value - single iteration value
-                    values.append(bash_to_str(result))
+                    values.append(_bash_to_str(result))
 
         # Execute loop body for each value
         body_node = node.child_by_field_name("body")
@@ -1770,7 +1764,7 @@ class ShipBashInterpreter(BashCSTVisitor):
             return
 
         # Evaluate the expression using the existing evaluate() infrastructure
-        result = bash_to_int(self.evaluate(child))
+        result = _bash_to_int(self.evaluate(child))
 
         # Set exit code: 0 for true, 1 for false
         shp.env["?"] = 0 if result else 1
@@ -1788,10 +1782,10 @@ class ShipBashInterpreter(BashCSTVisitor):
 
     def visit_variable_assignment(self, node: ts.Node):
         """Handle variable assignment: var=value"""
-        name_node = expect(node.child_by_field_name("name"))
-        value_node = expect(node.child_by_field_name("value"))
+        name_node = _expect(node.child_by_field_name("name"))
+        value_node = _expect(node.child_by_field_name("value"))
 
-        name = bash_to_str(self.evaluate(name_node))
+        name = _bash_to_str(self.evaluate(name_node))
         value = self.evaluate(value_node)
 
         # Set in shell environment (not exported by default)
