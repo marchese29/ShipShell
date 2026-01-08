@@ -1,0 +1,10 @@
+[project]
+name = "shipshell"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "jedi>=0.19.2",
+    "tree-sitter>=0.25.2",
+    "tree-sitter-bash>=0.25.1",
+]
