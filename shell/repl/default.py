@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import codeop
 import sys
-from typing import Callable
+from collections.abc import Callable
 
 import jedi
 from prompt_toolkit import PromptSession
@@ -33,7 +33,7 @@ def _detect_string_context(text: str) -> tuple[bool, str, int]:
         - start_offset: How many chars back from cursor the path starts
     """
     if not text:
-        return False, "", 0
+        return False, '', 0
 
     # Track state while parsing
     in_string = False
@@ -53,20 +53,20 @@ def _detect_string_context(text: str) -> tuple[bool, str, int]:
             i += 1
             continue
 
-        if char == "\\" and in_string:
+        if char == '\\' and in_string:
             escaped = True
             i += 1
             continue
 
         # Check for f-string prefix
-        if not in_string and char in ("f", "F"):
+        if not in_string and char in ('f', 'F'):
             if i + 1 < len(text) and text[i + 1] in ('"', "'"):
                 is_fstring = True
                 i += 1
                 continue
 
         # Check for raw string prefix
-        if not in_string and char in ("r", "R"):
+        if not in_string and char in ('r', 'R'):
             if i + 1 < len(text) and text[i + 1] in ('"', "'"):
                 i += 1
                 continue
@@ -88,15 +88,15 @@ def _detect_string_context(text: str) -> tuple[bool, str, int]:
 
         # Handle f-string braces
         elif in_string and is_fstring:
-            if char == "{":
+            if char == '{':
                 # Check if it's {{ (escaped brace)
-                if i + 1 < len(text) and text[i + 1] == "{":
+                if i + 1 < len(text) and text[i + 1] == '{':
                     i += 1  # Skip the next brace
                 else:
                     brace_depth += 1
-            elif char == "}":
+            elif char == '}':
                 # Check if it's }} (escaped brace)
-                if i + 1 < len(text) and text[i + 1] == "}":
+                if i + 1 < len(text) and text[i + 1] == '}':
                     i += 1  # Skip the next brace
                 else:
                     brace_depth = max(0, brace_depth - 1)
@@ -110,7 +110,7 @@ def _detect_string_context(text: str) -> tuple[bool, str, int]:
         start_offset = len(text) - string_start
         return True, partial_path, start_offset
 
-    return False, "", 0
+    return False, '', 0
 
 
 class JediCompleter(Completer):
@@ -141,7 +141,7 @@ class JediCompleter(Completer):
         text = document.text_before_cursor
 
         # Don't try to autocomplete before the user types something on the current line
-        if text is None or not text.strip().split("\n")[-1].strip():
+        if text is None or not text.strip().split('\n')[-1].strip():
             return
 
         # Check if we're inside a string for path completion
@@ -192,7 +192,7 @@ class JediCompleter(Completer):
                         text=completion.text,
                         start_position=completion.start_position,
                         display=completion.display,
-                        display_meta="path",
+                        display_meta='path',
                     )
             except Exception:
                 # Silently fail if path completion has issues
@@ -247,7 +247,7 @@ class PromptHooks:
             try:
                 hook(*args)
             except Exception as e:
-                print(f"Error in prompt hook: {e}", file=sys.stderr)
+                print(f'Error in prompt hook: {e}', file=sys.stderr)
 
     def fire_before_prompt(self):
         """Fire all before_prompt hooks."""
@@ -262,9 +262,9 @@ class PromptState:
     """Stores prompt configuration."""
 
     def __init__(self):
-        self.primary_prompt = "ship> "
-        self.continuation_prompt = "..... "
-        self.right_prompt = ""
+        self.primary_prompt = 'ship> '
+        self.continuation_prompt = '..... '
+        self.right_prompt = ''
 
 
 class MultilineState:
@@ -293,9 +293,9 @@ def prompt():
         str: Complete code strings ready for execution.
     """
     # Show initial message
-    print("ShipShell Python REPL")
+    print('ShipShell Python REPL')
     print("Type 'exit()' or press Ctrl+D to quit")
-    print("Press Ctrl-X for multi-line mode")
+    print('Press Ctrl-X for multi-line mode')
     print()
 
     # Get the main module's namespace for completion
@@ -309,7 +309,7 @@ def prompt():
     # Create custom key bindings
     bindings = KeyBindings()
 
-    @bindings.add("c-x")  # Ctrl-X
+    @bindings.add('c-x')  # Ctrl-X
     def _(event):
         """Toggle multi-line mode on/off with Ctrl-X."""
         if multiline_state.enabled:
@@ -329,18 +329,18 @@ def prompt():
         # Restart the prompt to apply the new frame/toolbar settings
         event.app.exit(result=event.current_buffer.document.text)
 
-    @bindings.add("c-s")  # Ctrl-S
+    @bindings.add('c-s')  # Ctrl-S
     def _(event):
         """Submit code in multi-line mode with Ctrl-S."""
         if multiline_state.enabled:
             event.current_buffer.validate_and_handle()
 
-    @bindings.add("enter")
+    @bindings.add('enter')
     def _(event):
         """Handle Enter key - newline in multi-line mode, submit otherwise."""
         if multiline_state.enabled:
             # In multi-line mode, Enter just inserts a newline
-            event.current_buffer.insert_text("\n")
+            event.current_buffer.insert_text('\n')
         else:
             # In normal mode, Enter validates and submits (default behavior)
             event.current_buffer.validate_and_handle()
@@ -361,21 +361,22 @@ def prompt():
     # Style for the frame border in multi-line mode
     frame_style = Style.from_dict(
         {
-            "frame.border": "#888888",
+            'frame.border': '#888888',
         }
     )
 
     # Create prompt session with autocomplete enabled
+    # Note: complete_in_thread=False to avoid issues with forking in subshells
     session = PromptSession(
         completer=completer,
-        complete_while_typing=True,  # Show completions as you type
-        complete_in_thread=True,
+        complete_while_typing=True,
+        complete_in_thread=False,
         lexer=PygmentsLexer(Python3Lexer),
         key_bindings=bindings,
-        bottom_toolbar=get_bottom_toolbar,  # Pass function, not result
+        bottom_toolbar=get_bottom_toolbar,
     )
 
-    buffer = ""
+    buffer = ''
     prev_prompt = prompt_state.primary_prompt
 
     # Statement completeness checker
@@ -386,8 +387,8 @@ def prompt():
             # === GET PROMPT CONFIGURATION ===
             if multiline_state.enabled:
                 # Multi-line mode configuration
-                prompt_text = ""
-                rprompt_text = ""
+                prompt_text = ''
+                rprompt_text = ''
                 style = frame_style
                 show_frame = True
                 multiline = True
@@ -414,7 +415,7 @@ def prompt():
                 style=style,
                 show_frame=show_frame,
                 multiline=multiline,
-                default=buffer if buffer else "",  # Pre-fill with existing buffer
+                default=buffer if buffer else '',  # Pre-fill with existing buffer
             )
 
             # === UPDATE BUFFER ===
@@ -422,7 +423,7 @@ def prompt():
             # Here we just handle normal input accumulation
             if buffer and line and not line.startswith(buffer):
                 # Normal continuation - append to buffer
-                buffer += "\n" + line
+                buffer += '\n' + line
             else:
                 # First line, or full buffer from Ctrl-X toggle
                 buffer = line
@@ -437,15 +438,15 @@ def prompt():
 
                 # No completeness checking - just execute what they submitted
                 yield buffer
-                buffer = ""
+                buffer = ''
             else:
                 # NORMAL MODE: Check if statement is complete before executing
                 try:
                     code_obj = compiler(buffer)
                 except SyntaxError as e:
                     # Syntax error - display and clear buffer
-                    print(f"SyntaxError: {e}")
-                    buffer = ""
+                    print(f'SyntaxError: {e}')
+                    buffer = ''
                     continue
 
                 if code_obj is None:
@@ -454,12 +455,12 @@ def prompt():
 
                 # Complete statement - execute it
                 yield buffer
-                buffer = ""
+                buffer = ''
 
         except KeyboardInterrupt:
             # Ctrl+C - cancel current input
-            print("^C")
-            buffer = ""
+            print('^C')
+            buffer = ''
         except EOFError:
             # Ctrl+D - exit
             return

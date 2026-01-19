@@ -1,87 +1,565 @@
-"""
-Shell built-in command wrappers.
-
-This module provides ergonomic wrappers around ShipShell's builtin commands,
-allowing them to be used in pipelines, subshells, and other compositions.
-"""
-
+import inspect
+import os
+import sys
+from collections.abc import Callable
+from functools import wraps
 from pathlib import Path
+from typing import (
+    Annotated,
+    Any,
+    Literal,
+    cast,
+    get_args,
+    get_origin,
+    get_type_hints,
+    overload,
+)
 
-from shp import prog, ShipRunnable
+from pydantic import BeforeValidator, ConfigDict, ValidationError, validate_call
 
-# Control what gets exported with "from ... import *"
-__all__ = ["cd", "pwd", "pushd", "popd", "dirs", "exit", "quit", "which"]
-
-
-# Builtin command wrappers using prog() for composability
-def cd(path: str | Path | None = None) -> ShipRunnable:
-    """Change directory. No args = HOME, '-' = OLDPWD, path = specific directory."""
-    if path is None:
-        return prog("cd")()
-    else:
-        return prog("cd")(str(path))
-
-
-def pwd(physical: bool = False) -> ShipRunnable:
-    """Print working directory. physical=True resolves symlinks."""
-    if physical:
-        return prog("pwd")("-P")
-    else:
-        return prog("pwd")()
+from .environment import env
+from .model import BUILTIN_REGISTRY, Builtin
+from .types import ShellError, ShellInt, ShellPath
 
 
-def pushd(path: str | Path) -> ShipRunnable:
-    return prog("pushd")(str(path))
+class _Flag:
+    """Annotate a parameter with short flag names (without dash).
 
+    Boolean params: presence of flag sets to True.
+        physical: Annotated[bool, _Flag("P")] = False
+        Calling with -P sets physical=True.
 
-def popd() -> ShipRunnable:
-    return prog("popd")()
-
-
-def dirs() -> ShipRunnable:
-    return prog("dirs")()
-
-
-def exit(code: int = 0) -> ShipRunnable:
-    """Exit the shell with given exit code."""
-    if code == 0:
-        return prog("exit")()
-    else:
-        return prog("exit")(str(code))
-
-
-def quit(code: int = 0) -> ShipRunnable:
-    """Quit the shell (alias for exit)."""
-    if code == 0:
-        return prog("quit")()
-    else:
-        return prog("quit")(str(code))
-
-
-def which(*programs: str, show_all: bool = False, silent: bool = False) -> ShipRunnable:
+    Non-boolean params: flag consumes next value.
+        count: Annotated[int, _Flag("n")] = 1
+        Calling with -n 5 sets count=5.
     """
-    Locate a program file in the user's path.
+
+    def __init__(self, *short: str):
+        self.shorts: list[str] = list(short)
+
+
+def _is_bool_type(hint) -> bool:
+    """Check if a type hint is a boolean type."""
+    origin = get_origin(hint)
+    if origin is Annotated:
+        hint = get_args(hint)[0]
+    return hint is bool
+
+
+def _is_variadic_tuple(hint) -> bool:
+    """Check if a type hint is a variadic tuple like tuple[str, ...]."""
+    origin = get_origin(hint)
+    if origin is Annotated:
+        hint = get_args(hint)[0]
+        origin = get_origin(hint)
+    if origin is tuple:
+        args = get_args(hint)
+        # tuple[T, ...] has args like (str, Ellipsis)
+        return len(args) == 2 and args[1] is ...
+    return False
+
+
+
+
+def builtin_command[**P](f: Callable[P, None]) -> Callable[..., Builtin]:
+    """Decorator that wraps a function to behave as a shell builtin.
+
+    Returns a Builtin runnable that can be composed with other shell operations
+    (pipes, redirections) and executed via run().
+
+    Provides two calling conventions:
+    - Bash-style: cd("-P", "/tmp") - positional args with flags
+    - Keyword-style: cd(target="/tmp", physical=True) - named parameters
+
+    Flags are defined using Annotated[type, _Flag("X")] where "X" is the short
+    flag name (without dash). Boolean flags set the param to True when present;
+    non-boolean flags consume the next argument as their value.
+
+    Exit codes follow bash convention:
+    - 0: Success
+    - 1: General errors (e.g., file not found)
+    - 2: Misuse of builtin (e.g., invalid flag, wrong argument type)
+    """
+    validated: Callable[..., None] = validate_call(
+        config=ConfigDict(validate_default=True)
+    )(f)
+
+    hints = get_type_hints(f, include_extras=True)
+    sig = inspect.signature(f)
+    param_names = list(sig.parameters.keys())
+
+    # Map short flag names to (parameter_name, is_boolean)
+    flag_mapping: dict[str, tuple[str, bool]] = {}
+    # Track which parameters are flags (vs positional)
+    flag_params: set[str] = set()
+
+    for name, hint in hints.items():
+        if get_origin(hint) is Annotated:
+            for metadata in get_args(hint)[1:]:
+                if isinstance(metadata, _Flag):
+                    flag_params.add(name)
+                    is_bool = _is_bool_type(hint)
+                    for short_name in metadata.shorts:
+                        flag_mapping[short_name] = (name, is_bool)
+
+    # Parameters that accept positional args (non-flag params, in order)
+    positional_params = [p for p in param_names if p not in flag_params]
+
+    # Check if the last positional parameter is variadic (tuple[T, ...])
+    variadic_param: str | None = None
+    if positional_params:
+        last_param = positional_params[-1]
+        if last_param in hints and _is_variadic_tuple(hints[last_param]):
+            variadic_param = last_param
+
+    def impl(**kwargs) -> int:
+        """Execute the builtin with the given kwargs, return exit code."""
+        try:
+            validated(**kwargs)
+            return 0
+        except ShellError as se:
+            if se.message:
+                print(f'{f.__name__}: {se.message}', file=sys.stderr)
+            return se.exit_code
+        except (TypeError, ValidationError) as e:
+            print(f'{f.__name__}: {e}', file=sys.stderr)
+            return 2
+        except OSError as e:
+            print(f'{f.__name__}: {e}', file=sys.stderr)
+            return 1
+        except Exception as e:
+            print(
+                f"{f.__name__}: unexpected exception '{type(e)}: {e}'", file=sys.stderr
+            )
+            return 1
+
+    @wraps(f)
+    def factory(*args, **kwargs) -> Builtin:
+        """Parse arguments and return a Builtin runnable."""
+        if args and kwargs:
+            raise ShellError(
+                'cannot mix positional and keyword arguments', exit_code=2
+            )
+
+        # Keyword style: pass through directly
+        if kwargs:
+            return Builtin(f.__name__, impl, kwargs)
+
+        # Bash style: parse args into kwargs
+        parsed_kwargs: dict[str, Any] = {}
+        positional_args: list[Any] = []
+
+        i = 0
+        args_list = list(args)
+        while i < len(args_list):
+            arg = args_list[i]
+            if isinstance(arg, str) and arg.startswith('-') and len(arg) > 1:
+                flags = arg[1:]
+                for j, flag_char in enumerate(flags):
+                    if flag_char not in flag_mapping:
+                        raise ShellError(f'unknown flag: -{flag_char}', exit_code=2)
+
+                    param_name, is_bool = flag_mapping[flag_char]
+                    if is_bool:
+                        parsed_kwargs[param_name] = True
+                    else:
+                        # Non-boolean flag consumes next value
+                        if j + 1 < len(flags):
+                            # Remaining chars in this flag group are the value
+                            parsed_kwargs[param_name] = flags[j + 1:]
+                            break
+                        elif i + 1 < len(args_list):
+                            i += 1
+                            parsed_kwargs[param_name] = args_list[i]
+                        else:
+                            raise ShellError(
+                                f'flag -{flag_char} requires a value', exit_code=2
+                            )
+            else:
+                positional_args.append(arg)
+            i += 1
+
+        # Handle variadic parameter (collects remaining positional args)
+        if variadic_param is not None:
+            # All non-variadic positional params come before the variadic one
+            non_variadic_params = positional_params[:-1]
+            if len(positional_args) < len(non_variadic_params):
+                # Not enough args for non-variadic params - let validation handle it
+                for i, value in enumerate(positional_args):
+                    parsed_kwargs[non_variadic_params[i]] = value
+            else:
+                # Assign non-variadic params first
+                for i, name in enumerate(non_variadic_params):
+                    parsed_kwargs[name] = positional_args[i]
+                # Collect remaining into variadic param as tuple
+                parsed_kwargs[variadic_param] = tuple(
+                    positional_args[len(non_variadic_params):]
+                )
+        else:
+            # No variadic parameter - strict positional count
+            if len(positional_args) > len(positional_params):
+                raise ShellError(
+                    f'expected at most {len(positional_params)} positional '
+                    f'argument(s), got {len(positional_args)}',
+                    exit_code=2,
+                )
+
+            for i, value in enumerate(positional_args):
+                parsed_kwargs[positional_params[i]] = value
+
+        return Builtin(f.__name__, impl, parsed_kwargs)
+
+    # Register this builtin
+    BUILTIN_REGISTRY[f.__name__] = factory
+
+    return factory
+
+
+def _cd_args(arg: Any) -> Path:
+    if arg is None:
+        if env.home:
+            return env.home
+        else:
+            raise ShellError('HOME not set')
+    if isinstance(arg, str) and arg == '-':
+        return env.old_pwd if env.old_pwd else Path.cwd()
+    if isinstance(arg, Path):
+        result = arg
+    elif isinstance(arg, str):
+        result = Path(arg)
+    else:
+        raise ShellError(f'invalid argument: {arg!r}', exit_code=2)
+
+    if not result.exists():
+        raise ShellError(f'no such directory: {result}')
+    if not result.is_dir():
+        raise ShellError(f'not a directory: {result}')
+    return result
+
+
+CdTarget = Annotated[Literal['-'] | str | Path | None, BeforeValidator(_cd_args)]
+
+
+@overload
+def cd(*args: Any) -> Builtin: ...
+@overload
+def cd(*, target: CdTarget = ..., physical: bool = ...) -> Builtin: ...
+@builtin_command
+def cd(target: CdTarget = None, physical: Annotated[bool, _Flag('P')] = False):
+    """Change the current working directory.
 
     Args:
-        *programs: One or more program names to search for
-        show_all: If True, list all instances found (instead of just the first)
-        silent: If True, silent mode - no output, just return exit code
-
-    Returns:
-        ShipRunnable that when executed prints the full path(s) to the program(s)
-        Exit code: 0 if all programs found, 1 if any not found
+        target: Directory to change to. If None, changes to $HOME.
+                Use "-" to change to the previous directory ($OLDPWD).
+        physical: If True (-P flag), resolve symlinks in the path.
 
     Examples:
-        which("ls")                          # Find ls
-        which("ls", "cat", "grep")           # Find multiple programs
-        which("python3", show_all=True)      # Find all instances of python3
-        which("grep", silent=True)           # Silent mode, check if exists
+        cd("/tmp")              # Change to /tmp
+        cd("-P", "/tmp")        # Change to /tmp, resolving symlinks
+        cd("-")                 # Change to previous directory
+        cd()                    # Change to $HOME
+        cd(target="/tmp", physical=True)  # Keyword style
     """
-    args = []
-    if show_all:
-        args.append("-a")
-    if silent:
-        args.append("-s")
-    args.extend(programs)
+    target = cast(Path, target)
+    if physical:
+        target = target.resolve()
+    env.chdir(target)
+    os.chdir(target)
 
-    return prog("which")(*args)
+
+@overload
+def pwd(*args: Any) -> Builtin: ...
+@overload
+def pwd(*, physical: bool = ...) -> Builtin: ...
+@builtin_command
+def pwd(physical: Annotated[bool, _Flag('P')] = False):
+    """Print the current working directory.
+
+    Args:
+        physical: If True (-P flag), resolve symlinks to show the physical path.
+
+    Examples:
+        pwd()           # Print current directory
+        pwd("-P")       # Print physical path (symlinks resolved)
+    """
+    path = Path.cwd()
+    if physical:
+        path = path.resolve()
+    print(str(path))
+
+
+@overload
+def pushd(*args: Any) -> Builtin: ...
+@overload
+def pushd(*, target: ShellInt | ShellPath | None = ...) -> Builtin: ...
+@builtin_command
+def pushd(target: ShellInt | ShellPath | None = None):
+    """Push a directory onto the stack and change to it.
+
+    Args:
+        target: Directory path to push, stack index to rotate to, or None.
+                - Path: Push directory onto stack and cd to it.
+                - Integer (+N/-N): Rotate stack so Nth entry is on top, then cd.
+                - None: Swap the top two directories.
+
+    Prints the directory stack after the operation.
+
+    Examples:
+        pushd("/tmp")   # Push /tmp and cd to it
+        pushd()         # Swap top two directories
+        pushd("+1")     # Rotate stack by 1 position
+    """
+    if isinstance(target, int):
+        env.pushd_rot(target)
+        os.chdir(env.dir_stack[0])
+    elif isinstance(target, (str, Path)):
+        path = Path(target) if isinstance(target, str) else target
+        if not path.exists():
+            raise ShellError(f'no such directory: {path}')
+        if not path.is_dir():
+            raise ShellError(f'not a directory: {path}')
+        env.pushd(path)
+        os.chdir(path)
+    elif target is None:
+        env.pushd(None)
+        os.chdir(env.dir_stack[0])
+    else:
+        raise ShellError(f'invalid argument: {target!r}', exit_code=2)
+    print(' '.join(str(d) for d in env.dir_stack))
+
+
+@overload
+def popd(*args: Any) -> Builtin: ...
+@overload
+def popd(*, index: ShellInt | None = ...) -> Builtin: ...
+@builtin_command
+def popd(index: ShellInt | None = None):
+    """Pop a directory from the stack.
+
+    Args:
+        index: Stack index to remove, or None.
+               - None or 0: Pop top directory and cd to the new top.
+               - +N/-N: Remove the Nth entry without changing directory.
+
+    Prints the directory stack after the operation.
+
+    Examples:
+        popd()      # Pop top and cd to new top
+        popd("+1")  # Remove second entry, stay in current directory
+    """
+    index = cast(int | None, index)
+    env.popd(index)
+    if index is None or index == 0:
+        os.chdir(env.dir_stack[0])
+    print(' '.join(str(d) for d in env.dir_stack))
+
+
+@overload
+def dirs(*args: Any) -> Builtin: ...
+@overload
+def dirs(
+    *,
+    clear: bool = ...,
+    long_format: bool = ...,
+    per_line: bool = ...,
+) -> Builtin: ...
+@builtin_command
+def dirs(
+    clear: Annotated[bool, _Flag('c')] = False,
+    long_format: Annotated[bool, _Flag('l')] = False,
+    per_line: Annotated[bool, _Flag('p', 'v')] = False,
+):
+    """Display or clear the directory stack.
+
+    Args:
+        clear: If True (-c flag), clear the stack (keep only cwd).
+        long_format: If True (-l flag), show full paths with symlinks resolved.
+        per_line: If True (-p or -v flag), print one directory per line.
+
+    Examples:
+        dirs()          # Print stack space-separated
+        dirs("-l")      # Print with symlinks resolved
+        dirs("-p")      # Print one per line
+        dirs("-c")      # Clear the stack
+        dirs("-lp")     # Combine flags
+    """
+    if clear:
+        env._dir_stack.clear()
+        env._dir_stack.append(Path.cwd())
+        return
+
+    stack = env.dir_stack
+    if long_format:
+        stack = [d.resolve() for d in stack]
+
+    if per_line:
+        for directory in stack:
+            print(directory)
+    else:
+        print(' '.join(str(d) for d in stack))
+
+
+@overload
+def exit_(*args: Any) -> Builtin: ...
+@overload
+def exit_(*, code: int = ...) -> Builtin: ...
+@builtin_command
+def exit_(code: int = 0):
+    """Exit the shell with the given exit code.
+
+    Args:
+        code: Exit code to return to the parent process. Defaults to 0.
+
+    Examples:
+        exit_()     # Exit with code 0
+        exit_(1)    # Exit with code 1
+    """
+    sys.exit(code)
+
+
+def _find_in_path(name: str, find_all: bool = False) -> list[Path]:
+    """Find a program in PATH.
+
+    Args:
+        name: The program name to search for.
+        find_all: If True, returns all instances; if False, returns only the first.
+
+    Returns:
+        List of Path objects for matching executables (empty if not found).
+    """
+    results: list[Path] = []
+    env_path: list[Path] = env.get('PATH', [])
+
+    for path_dir in env_path:
+        candidate = path_dir / name
+        if candidate.exists() and candidate.is_file() and os.access(candidate, os.X_OK):
+            results.append(candidate)
+            if not find_all:
+                break
+
+    return results
+
+
+@builtin_command
+def which(
+    commands: tuple[str, ...] = (),
+    all_instances: Annotated[bool, _Flag('a')] = False,
+    silent: Annotated[bool, _Flag('s')] = False,
+):
+    """Locate commands by name.
+
+    Checks builtins first, then searches PATH for executables.
+
+    Args:
+        commands: One or more command names to look up.
+        all_instances: If True (-a flag), show all instances in PATH,
+                       not just the first. Also searches PATH for builtins.
+        silent: If True (-s flag), suppress output and only set exit code.
+
+    Exit codes:
+        0: All commands found
+        1: One or more commands not found (or no commands specified)
+
+    Examples:
+        which("ls")              # Print path to ls
+        which("ls", "cat")       # Look up multiple commands
+        which("-a", "python")    # Show all python instances in PATH
+        which("-s", "cd")        # Silent check if cd exists
+    """
+    if not commands:
+        raise ShellError('missing argument', exit_code=1)
+
+    all_found = True
+
+    for command in commands:
+        found_anything = False
+
+        # Check builtins first
+        is_builtin = command in BUILTIN_REGISTRY
+        if is_builtin:
+            if not silent:
+                print(f'{command}: shell built-in command')
+            found_anything = True
+
+            # If not showing all, skip searching PATH
+            if not all_instances:
+                continue
+
+        # Search in PATH (either not a built-in, or all_instances is requested)
+        paths = _find_in_path(command, find_all=all_instances)
+
+        if paths:
+            found_anything = True
+            if not silent:
+                for path in paths:
+                    print(str(path))
+
+        if not found_anything:
+            all_found = False
+            if not silent:
+                print(f'{command} not found', file=sys.stderr)
+
+    if not all_found:
+        raise ShellError('', exit_code=1)
+
+
+def _source_file_arg(arg: Any) -> Path:
+    """Validate and resolve a source file path."""
+    if arg is None:
+        raise ShellError('missing file argument', exit_code=1)
+    if isinstance(arg, Path):
+        result = arg
+    elif isinstance(arg, str):
+        result = Path(arg).expanduser().resolve()
+    else:
+        raise ShellError(f'invalid file argument: {arg!r}', exit_code=2)
+
+    if not result.exists():
+        raise ShellError(f'no such file: {result}')
+    if not result.is_file():
+        raise ShellError(f'not a file: {result}')
+    return result
+
+
+SourceFile = Annotated[str | Path, BeforeValidator(_source_file_arg)]
+
+
+@builtin_command
+def source(file: SourceFile, args: tuple[str, ...] = ()):
+    """
+    Execute a Python file in the shell's namespace.
+
+    The script runs in the current shell namespace, so definitions persist.
+    Optional arguments are passed as sys.argv[1:].
+
+    To run without modifying the current namespace, wrap in sub():
+        sub(source("script.py", "arg1"))()
+
+    Args:
+        file: Path to the Python file (supports ~ expansion).
+        args: Optional arguments passed to the script as sys.argv[1:].
+
+    Examples:
+        source("~/.pyshrc")()           # Load config file
+        source("script.py", "arg1")()   # Run with sys.argv = ["script.py", "arg1"]
+        sub(source("tool.py"))()        # Run isolated (like ./tool.py)
+    """
+    file = cast(Path, file)
+
+    import __main__
+
+    # Save and set sys.argv and __file__
+    saved_argv = sys.argv
+    saved_file = __main__.__dict__.get('__file__')
+    sys.argv = [str(file)] + list(args)
+    __main__.__dict__['__file__'] = str(file)
+
+    try:
+        code = file.read_text()
+        exec(compile(code, str(file), 'exec'), __main__.__dict__)
+    finally:
+        sys.argv = saved_argv
+        if saved_file is None:
+            __main__.__dict__.pop('__file__', None)
+        else:
+            __main__.__dict__['__file__'] = saved_file

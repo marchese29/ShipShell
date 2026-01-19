@@ -1,5 +1,5 @@
-# Rust
-/target
+# Claude Code
+.claude/
 
 # Python
 __pycache__/

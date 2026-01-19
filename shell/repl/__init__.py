@@ -7,7 +7,7 @@ For the default prompt-based implementation, see repl.default.
 
 import sys
 import traceback
-from typing import Callable, Iterator, Optional
+from collections.abc import Callable, Iterator
 
 
 class REPLHooks:
@@ -61,7 +61,7 @@ class REPLHooks:
             try:
                 hook(*args)
             except Exception as e:
-                print(f"Error in REPL hook: {e}", file=sys.stderr)
+                print(f'Error in REPL hook: {e}', file=sys.stderr)
 
     def fire_before_execute(self, code: str):
         """Fire all before_execute hooks."""
@@ -79,7 +79,7 @@ hooks = REPLHooks()
 def _is_expression(code: str) -> bool:
     """Check if code is a valid expression (not a statement)."""
     try:
-        compile(code, "<string>", "eval")
+        compile(code, '<string>', 'eval')
         return True
     except SyntaxError:
         return False
@@ -88,10 +88,10 @@ def _is_expression(code: str) -> bool:
 def _execute_code(code: str, globals_dict: dict) -> None:
     """Execute a code string with full lifecycle (hooks + error handling).
 
-    Auto-runs ShipRunnable objects if they're the result of an expression.
+    Auto-runs ShellRunnable objects if they're the result of an expression.
     Raises SystemExit if exit() is called.
     """
-    import shp
+    from shell.model import ShellResult, ShellRunnable
 
     # Fire before_execute hook
     hooks.fire_before_execute(code)
@@ -101,10 +101,10 @@ def _execute_code(code: str, globals_dict: dict) -> None:
         if _is_expression(code):
             result = eval(code, globals_dict)
 
-            # Auto-run ShipRunnable objects
-            if isinstance(result, shp.ShipRunnable):
+            # Auto-run ShellRunnable objects
+            if isinstance(result, ShellRunnable):
                 result()
-            elif result is not None:
+            elif result is not None and not isinstance(result, ShellResult):
                 print(repr(result))
         else:
             # Execute as statement
@@ -113,7 +113,7 @@ def _execute_code(code: str, globals_dict: dict) -> None:
         # Re-raise to let caller handle REPL exit
         raise
     except KeyboardInterrupt:
-        print("^C")
+        print('^C')
     except Exception:
         traceback.print_exc()
     finally:
@@ -121,7 +121,7 @@ def _execute_code(code: str, globals_dict: dict) -> None:
         hooks.fire_after_execute(code)
 
 
-def run_repl(input_source: Optional[Iterator[str]] = None):
+def run_repl(input_source: Iterator[str] | None = None):
     """Main REPL loop.
 
     Args:
@@ -135,14 +135,7 @@ def run_repl(input_source: Optional[Iterator[str]] = None):
 
     # Use default prompt-based input if no custom source provided
     if input_source is None:
-        # Install dependencies and import default implementation
-        from shp.py_env import install_packages
-
-        install_packages("prompt_toolkit")
-        install_packages("pygments")
-        install_packages("jedi")
-
-        from repl.default import prompt
+        from shell.repl.default import prompt
 
         input_source = prompt()
 
@@ -153,16 +146,16 @@ def run_repl(input_source: Optional[Iterator[str]] = None):
                 try:
                     _execute_code(code, repl_globals)
                 except SystemExit:
-                    print("Exiting...")
+                    print('Exiting...')
                     return
     except KeyboardInterrupt:
         # Ctrl+C during iteration
-        print("\n^C")
+        print('\n^C')
     except EOFError:
         # Ctrl+D or end of input
-        print("Exiting...")
+        print('Exiting...')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     # Allow running this module directly for testing
     run_repl()

@@ -1,0 +1,12 @@
+#!/bin/bash
+# Pre-commit hook: runs linting and type checking
+
+set -e
+
+echo "Running ruff..."
+uv run ruff check shell/
+
+echo "Running pyright..."
+uv run pyright shell/
+
+echo "All checks passed!"

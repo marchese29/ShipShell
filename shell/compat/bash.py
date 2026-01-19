@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-from typing import Callable, TYPE_CHECKING
 import fnmatch
 import glob
 import os
-from pathlib import Path
 import re
 import stat
 import sys
+from collections.abc import Callable
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import tree_sitter_bash as tsbash
 from tree_sitter import Language, Parser
 
-import shp
+from shell.environment import env
+from shell.model import ShellRunnable, capture, prog
 
 if TYPE_CHECKING:
     import tree_sitter as ts
@@ -34,10 +36,23 @@ def _bash_to_str(value: BashValue | None) -> str:
             return val
         case list() as val:
             if len(val) == 0:
-                return ""
+                return ''
             return val[0]
         case None:
-            return ""
+            return ''
+
+
+def _bash_to_file(value: BashValue | None) -> int | str:
+    """Convert BashValue to a file target (fd int or path str)."""
+    match value:
+        case int() as val:
+            return val  # File descriptor
+        case str() as val:
+            return val  # File path
+        case list() as val:
+            return val[0] if val else ''
+        case None:
+            return ''
 
 
 def _bash_to_int(value: BashValue | None) -> int:
@@ -56,10 +71,10 @@ def _bash_to_int(value: BashValue | None) -> int:
 
 
 def _expand_range(content: str) -> list[str] | None:
-    if ".." not in content:
+    if '..' not in content:
         return None
 
-    parts = content.split("..")
+    parts = content.split('..')
     if len(parts) < 2 or len(parts) > 3:
         return None
 
@@ -80,9 +95,9 @@ def _expand_range(content: str) -> list[str] | None:
         end_num = int(end)
 
         pad_width = 0
-        if len(start) > 1 and start[0] == "0":
+        if len(start) > 1 and start[0] == '0':
             pad_width = len(start)
-        if len(end) > 1 and end[0] == "0":
+        if len(end) > 1 and end[0] == '0':
             pad_width = max(pad_width, len(end))
 
         if start_num <= end_num:
@@ -101,7 +116,7 @@ def _expand_range(content: str) -> list[str] | None:
 
 def _split_commas(string: str) -> list[str]:
     result: list[str] = []
-    current = ""
+    current = ''
     depth = 0
     i = 0
 
@@ -110,24 +125,24 @@ def _split_commas(string: str) -> list[str]:
 
         # Deal with escaped characters
         if (
-            char == "\\"
+            char == '\\'
             and i + 1 < len(string)
-            and string[i + 1] in ("{", "}", ",", "\\")
+            and string[i + 1] in ('{', '}', ',', '\\')
         ):
             current += char + string[i + 1]
             i += 2
             continue
 
         # Unescaped characters
-        if char == "{":
+        if char == '{':
             depth += 1
             current += char
-        elif char == "}":
+        elif char == '}':
             depth -= 1
             current += char
-        elif depth == 0 and char == ",":
+        elif depth == 0 and char == ',':
             result.append(current)
-            current = ""
+            current = ''
         else:
             current += char
 
@@ -141,15 +156,15 @@ def _split_commas(string: str) -> list[str]:
 
 
 def _expand_braces(string: str) -> list[str]:
-    result: list[str] = [""]
+    result: list[str] = ['']
     i = 0
     while i < len(string):
         char = string[i]
 
         # Deal with escaped characters
-        if char == "\\" and i + 1 < len(string):
+        if char == '\\' and i + 1 < len(string):
             next_char = string[i + 1]
-            if next_char in ("{", "}", ",", "\\"):
+            if next_char in ('{', '}', ',', '\\'):
                 result = [r + next_char for r in result]
                 i += 2
                 continue
@@ -158,7 +173,7 @@ def _expand_braces(string: str) -> list[str]:
                 i += 1
                 continue
 
-        if char == "{":
+        if char == '{':
             depth = 1
             j = i + 1
 
@@ -166,16 +181,16 @@ def _expand_braces(string: str) -> list[str]:
             while j < len(string) and depth > 0:
                 # Deal with escaped characters
                 if (
-                    string[j] == "\\"
+                    string[j] == '\\'
                     and j + 1 < len(string)
-                    and string[j + 1] in ("{", "}", "\\")
+                    and string[j + 1] in ('{', '}', '\\')
                 ):
                     j += 2
                     continue
 
-                if string[j] == "{":
+                if string[j] == '{':
                     depth += 1
-                elif string[j] == "}":
+                elif string[j] == '}':
                     depth -= 1
                 j += 1
 
@@ -210,7 +225,7 @@ def _expand_braces(string: str) -> list[str]:
             # Everything else is appended to the results we have so far
             result = [r + char for r in result]
             i += 1
-    return result if len(result) > 1 or result[0] != "" else []
+    return result if len(result) > 1 or result[0] != '' else []
 
 
 class BashScriptError(Exception):
@@ -224,7 +239,7 @@ class BashScriptError(Exception):
 class BashCSTVisitor:
     # Statements
     def visit(self, node: ts.Node):
-        method_name = f"visit_{node.type}"
+        method_name = f'visit_{node.type}'
         method: Callable[[ts.Node], None] | None = getattr(self, method_name, None)
 
         if method is not None:
@@ -241,7 +256,7 @@ class BashCSTVisitor:
 
     # Expressions
     def evaluate(self, node: ts.Node) -> BashValue:
-        method_name = f"evaluate_{node.type}"
+        method_name = f'evaluate_{node.type}'
         method: Callable[[ts.Node], BashValue] | None = getattr(self, method_name, None)
 
         if method is not None:
@@ -253,12 +268,12 @@ class BashCSTVisitor:
         parts: list[BashValue] = []
         for child in node.named_children:
             parts.append(self.evaluate(child))
-        return "".join([_bash_to_str(p) for p in parts])
+        return ''.join([_bash_to_str(p) for p in parts])
 
 
 class ShipBashInterpreter(BashCSTVisitor):
     def __init__(
-        self, source: str, args: list[str] | None = None, script_name: str = "bash"
+        self, source: str, args: list[str] | None = None, script_name: str = 'bash'
     ):
         self._source = source
         self._positional_params = args if args is not None else []
@@ -291,18 +306,18 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         # Remove the (?s:...) wrapper and \Z suffix that fnmatch adds
         # fnmatch.translate returns something like: '(?s:pattern)\\Z'
-        if regex_pattern.startswith("(?s:") and regex_pattern.endswith(")\\Z"):
+        if regex_pattern.startswith('(?s:') and regex_pattern.endswith(')\\Z'):
             regex_pattern = regex_pattern[4:-3]  # Remove (?s: and )\Z
 
         # If non-greedy, replace .* with .*?
         if not greedy:
-            regex_pattern = regex_pattern.replace(".*", ".*?")
+            regex_pattern = regex_pattern.replace('.*', '.*?')
 
         # Add anchors as needed
         if anchor_start:
-            regex_pattern = "^" + regex_pattern
+            regex_pattern = '^' + regex_pattern
         if anchor_end:
-            regex_pattern = regex_pattern + "$"
+            regex_pattern = regex_pattern + '$'
 
         # Compile and return the pattern
         return re.compile(regex_pattern)
@@ -329,7 +344,7 @@ class ShipBashInterpreter(BashCSTVisitor):
             The transformed string
         """
         match operator:
-            case ":":
+            case ':':
                 # Substring expansion: ${var:offset} or ${var:offset:length}
                 offset = _bash_to_int(arg1_str)
 
@@ -341,17 +356,17 @@ class ShipBashInterpreter(BashCSTVisitor):
 
                 # If offset is beyond string length, return empty
                 if offset >= len(value_str):
-                    return ""
+                    return ''
 
                 if arg2_str is not None:
                     length = _bash_to_int(arg2_str)
                     if length < 0:
-                        return ""
+                        return ''
                     return value_str[offset : offset + length]
                 else:
                     return value_str[offset:]
 
-            case "#":
+            case '#':
                 # Remove shortest prefix match
                 if arg1_str is None:
                     return value_str
@@ -363,7 +378,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                     return value_str[match.end() :]
                 return value_str
 
-            case "##":
+            case '##':
                 # Remove longest prefix match
                 if arg1_str is None:
                     return value_str
@@ -375,7 +390,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                     return value_str[match.end() :]
                 return value_str
 
-            case "%":
+            case '%':
                 # Remove shortest suffix match
                 if arg1_str is None:
                     return value_str
@@ -387,7 +402,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                     return value_str[: match.start()]
                 return value_str
 
-            case r"%%":
+            case r'%%':
                 # Remove longest suffix match
                 if arg1_str is None:
                     return value_str
@@ -399,46 +414,46 @@ class ShipBashInterpreter(BashCSTVisitor):
                     return value_str[: match.start()]
                 return value_str
 
-            case "/":
+            case '/':
                 # Replace first match
                 if arg1_str is None:
                     return value_str
-                replacement = arg2_str if arg2_str is not None else ""
+                replacement = arg2_str if arg2_str is not None else ''
                 regex = self._glob_pattern_to_regex(arg1_str)
                 return regex.sub(replacement, value_str, count=1)
 
-            case "//":
+            case '//':
                 # Replace all matches
                 if arg1_str is None:
                     return value_str
-                replacement = arg2_str if arg2_str is not None else ""
+                replacement = arg2_str if arg2_str is not None else ''
                 regex = self._glob_pattern_to_regex(arg1_str)
                 return regex.sub(replacement, value_str)
 
-            case "/#":
+            case '/#':
                 # Replace if matches at start
                 if arg1_str is None:
                     return value_str
-                replacement = arg2_str if arg2_str is not None else ""
+                replacement = arg2_str if arg2_str is not None else ''
                 regex = self._glob_pattern_to_regex(arg1_str, anchor_start=True)
                 return regex.sub(replacement, value_str, count=1)
 
-            case "/%":
+            case '/%':
                 # Replace if matches at end
                 if arg1_str is None:
                     return value_str
-                replacement = arg2_str if arg2_str is not None else ""
+                replacement = arg2_str if arg2_str is not None else ''
                 regex = self._glob_pattern_to_regex(arg1_str, anchor_end=True)
                 return regex.sub(replacement, value_str, count=1)
 
-            case "^":
+            case '^':
                 # Uppercase first character (optionally matching pattern)
                 if not value_str:
-                    return ""
+                    return ''
 
                 if arg1_str:
                     pattern_regex = self._glob_pattern_to_regex(arg1_str)
-                    result = ""
+                    result = ''
                     found_first = False
                     for char in value_str:
                         if not found_first and pattern_regex.match(char):
@@ -450,14 +465,14 @@ class ShipBashInterpreter(BashCSTVisitor):
                 else:
                     return value_str[0].upper() + value_str[1:]
 
-            case "^^":
+            case '^^':
                 # Uppercase all characters (optionally matching pattern)
                 if not value_str:
-                    return ""
+                    return ''
 
                 if arg1_str:
                     pattern_regex = self._glob_pattern_to_regex(arg1_str)
-                    result = ""
+                    result = ''
                     for char in value_str:
                         if pattern_regex.match(char):
                             result += char.upper()
@@ -467,14 +482,14 @@ class ShipBashInterpreter(BashCSTVisitor):
                 else:
                     return value_str.upper()
 
-            case ",":
+            case ',':
                 # Lowercase first character (optionally matching pattern)
                 if not value_str:
-                    return ""
+                    return ''
 
                 if arg1_str:
                     pattern_regex = self._glob_pattern_to_regex(arg1_str)
-                    result = ""
+                    result = ''
                     found_first = False
                     for char in value_str:
                         if not found_first and pattern_regex.match(char):
@@ -486,14 +501,14 @@ class ShipBashInterpreter(BashCSTVisitor):
                 else:
                     return value_str[0].lower() + value_str[1:]
 
-            case ",,":
+            case ',,':
                 # Lowercase all characters (optionally matching pattern)
                 if not value_str:
-                    return ""
+                    return ''
 
                 if arg1_str:
                     pattern_regex = self._glob_pattern_to_regex(arg1_str)
-                    result = ""
+                    result = ''
                     for char in value_str:
                         if pattern_regex.match(char):
                             result += char.lower()
@@ -503,37 +518,37 @@ class ShipBashInterpreter(BashCSTVisitor):
                 else:
                     return value_str.lower()
 
-            case "@":
+            case '@':
                 # Transformation operators
                 match arg1_str:
-                    case "U":
+                    case 'U':
                         return value_str.upper()
-                    case "u":
+                    case 'u':
                         if len(value_str) == 0:
                             return value_str
                         elif len(value_str) == 1:
                             return value_str.upper()
                         else:
-                            return f"{value_str[0].upper()}{value_str[1:]}"
-                    case "L":
+                            return f'{value_str[0].upper()}{value_str[1:]}'
+                    case 'L':
                         return value_str.lower()
-                    case "Q" | "E":
-                        raise NotImplementedError("Quoted expansions")
-                    case "P":
-                        raise NotImplementedError("Prompt String expansion")
-                    case "A":
-                        raise NotImplementedError("Declaration recreation expansion")
-                    case "K" | "k":
-                        raise NotImplementedError("Array printing expansion")
-                    case "a":
-                        raise NotImplementedError("Parameter attribute expansion")
+                    case 'Q' | 'E':
+                        raise NotImplementedError('Quoted expansions')
+                    case 'P':
+                        raise NotImplementedError('Prompt String expansion')
+                    case 'A':
+                        raise NotImplementedError('Declaration recreation expansion')
+                    case 'K' | 'k':
+                        raise NotImplementedError('Array printing expansion')
+                    case 'a':
+                        raise NotImplementedError('Parameter attribute expansion')
                 return value_str
 
             case _:
                 return value_str
 
     def evaluate_ansi_c_str(self, node: ts.Node) -> BashValue:
-        raise NotImplementedError("ansi_c_str expression")
+        raise NotImplementedError('ansi_c_str expression')
 
     def evaluate_arithmetic_expansion(self, node: ts.Node) -> BashValue:
         parts = []
@@ -544,7 +559,7 @@ class ShipBashInterpreter(BashCSTVisitor):
         elif len(parts) == 1:
             return parts[0]
         else:
-            return "".join([_bash_to_str(p) for p in parts])
+            return ''.join([_bash_to_str(p) for p in parts])
 
     def evaluate_brace_expression(self, node: ts.Node) -> BashValue:
         result = _expand_range(self._get_text(node)[1:-1])
@@ -552,8 +567,8 @@ class ShipBashInterpreter(BashCSTVisitor):
 
     def evaluate_command_substitution(self, node: ts.Node) -> BashValue:
         """Handle command substitution: $(command) or `command`."""
-        if node.child_by_field_name("redirect") is not None:
-            raise NotImplementedError("redirect in command substitution not supported")
+        if node.child_by_field_name('redirect') is not None:
+            raise NotImplementedError('redirect in command substitution not supported')
 
         # TODO: Handle multi-command children
 
@@ -562,17 +577,17 @@ class ShipBashInterpreter(BashCSTVisitor):
             (
                 c
                 for c in node.children
-                if c.is_named and c.type != "command_substitution"
+                if c.is_named and c.type != 'command_substitution'
             ),
             None,
         )
 
         if command_node is None:
             # Empty command substitution
-            return ""
+            return ''
 
         # Build a runnable from the command
-        return shp.get_stdout(self._node_to_runnable(command_node)).rstrip("\n")
+        return capture(self._node_to_runnable(command_node)).read_stdout()
 
     def evaluate_concatenation(self, node: ts.Node) -> BashValue:
         return _expand_braces(self._get_text(node))
@@ -593,73 +608,73 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         next_node = next(node_iterator)
         text = self._get_text(next_node)
-        if text in ("!", "#"):
+        if text in ('!', '#'):
             prefix_operator = text
             next_node = next(node_iterator)
         value_node = next_node
 
         next_node = next(node_iterator)
         text = self._get_text(next_node)
-        if not next_node.is_named and text != "}":
+        if not next_node.is_named and text != '}':
             operator = text
             next_node = next(node_iterator)
             text = self._get_text(next_node)
             # Only set arg1 if this isn't the closing brace
-            if text != "}":
+            if text != '}':
                 arg1 = next_node
                 next_node = next(node_iterator)
                 text = self._get_text(next_node)
-        if not next_node.is_named and text != "}":
+        if not next_node.is_named and text != '}':
             next(node_iterator)  # Consume the argument separator
             arg2 = next(node_iterator)
 
         value: BashValue | None = None
-        if prefix_operator == "!":
+        if prefix_operator == '!':
             if operator is None:
                 # ${!varname}
-                indirect = _bash_to_str(shp.env.get(self._get_text(value_node), None))
-                return _bash_to_str(shp.env.get(indirect, None))
-            elif operator in ("@", "*"):
+                indirect = _bash_to_str(env.get(self._get_text(value_node), None))
+                return _bash_to_str(env.get(indirect, None))
+            elif operator in ('@', '*'):
                 # ${!prefix@} and ${!prefix*}
                 prefix = self._get_text(value_node)
-                variables = [k for k in shp.env.keys() if k.startswith(prefix)]
-                if operator == "@":
+                variables = [k for k in env.keys() if k.startswith(prefix)]
+                if operator == '@':
                     return variables
                 else:
-                    return " ".join(variables)
+                    return ' '.join(variables)
             else:
                 # ${!name[@]} and ${!name[*]}
                 var_name = self._get_text(value_node)
-                var_value = shp.env.get(var_name, None)
+                var_value = env.get(var_name, None)
 
                 # TODO: Support for more complex types like sparse/associative arrays
                 if var_value is None or not isinstance(var_value, list):
-                    return [] if arg1 and self._get_text(arg1) == "@" else ""
+                    return [] if arg1 and self._get_text(arg1) == '@' else ''
 
                 indices = [str(i) for i in range(len(var_value))]
-                if arg1 and self._get_text(arg1) == "@":
+                if arg1 and self._get_text(arg1) == '@':
                     return indices
                 else:
-                    return " ".join(indices)
-        elif value_node.type in ("variable_name", "special_variable_name"):
+                    return ' '.join(indices)
+        elif value_node.type in ('variable_name', 'special_variable_name'):
             var_name = self._get_text(value_node)
-            if var_name == "0":
+            if var_name == '0':
                 value = self._script_name
             elif var_name.isnumeric():
                 idx = int(var_name) - 1
                 if 0 <= idx < len(self._positional_params):
                     value = self._positional_params[idx]
                 else:
-                    value = ""
-            elif var_name in ("@", "*"):
+                    value = ''
+            elif var_name in ('@', '*'):
                 value = self._positional_params
             else:
-                value = _bash_to_str(shp.env.get(var_name, None))
+                value = _bash_to_str(env.get(var_name, None))
         else:
             # Subscript
             value = self.evaluate(value_node)
 
-        if prefix_operator == "#":
+        if prefix_operator == '#':
             if isinstance(value, list):
                 return len(value)
             else:
@@ -670,62 +685,62 @@ class ShipBashInterpreter(BashCSTVisitor):
             return _bash_to_str(value)
 
         match operator:
-            case "-":
+            case '-':
                 if value is None:
                     return self._get_text(_expect(arg1))
                 else:
                     return value
-            case ":-":
-                if value is None or value == "":
+            case ':-':
+                if value is None or value == '':
                     return self._get_text(_expect(arg1))
                 else:
                     return value
-            case "=":
+            case '=':
                 # Assign if variable is unset (None)
                 if value is None:
                     var_name = self._get_text(value_node)
                     new_value = _bash_to_str(self.evaluate(_expect(arg1)))
-                    shp.env[var_name] = new_value
+                    env[var_name] = new_value
                     return new_value
                 return _bash_to_str(value)
-            case ":=":
+            case ':=':
                 # Assign if variable is unset OR empty
-                if value is None or value == "":
+                if value is None or value == '':
                     var_name = self._get_text(value_node)
                     new_value = _bash_to_str(self.evaluate(_expect(arg1)))
-                    shp.env[var_name] = new_value
+                    env[var_name] = new_value
                     return new_value
                 return _bash_to_str(value)
-            case "?":
+            case '?':
                 # Error if variable is unset
                 if value is None:
                     var_name = self._get_text(value_node)
                     error_msg = (
                         self._get_text(_expect(arg1))
                         if arg1
-                        else "parameter null or not set"
+                        else 'parameter null or not set'
                     )
-                    raise BashScriptError(f"{var_name}: {error_msg}")
+                    raise BashScriptError(f'{var_name}: {error_msg}')
                 return _bash_to_str(value)
-            case ":?":
+            case ':?':
                 # Error if variable is unset OR empty
-                if value is None or value == "":
+                if value is None or value == '':
                     var_name = self._get_text(value_node)
                     error_msg = (
                         self._get_text(_expect(arg1))
                         if arg1
-                        else "parameter null or not set"
+                        else 'parameter null or not set'
                     )
-                    raise BashScriptError(f"{var_name}: {error_msg}")
+                    raise BashScriptError(f'{var_name}: {error_msg}')
                 return _bash_to_str(value)
-            case "+":
+            case '+':
                 if value is None:
-                    return ""
+                    return ''
                 else:
                     return self._get_text(_expect(arg1))
-            case ":+":
-                if value is None or value == "":
-                    return ""
+            case ':+':
+                if value is None or value == '':
+                    return ''
                 else:
                     return self._get_text(_expect(arg1))
             case _:
@@ -736,13 +751,13 @@ class ShipBashInterpreter(BashCSTVisitor):
 
                 if arg1:
                     # For substring (:), evaluate arg1 as expression; otherwise get text
-                    if operator == ":":
+                    if operator == ':':
                         arg1_str = _bash_to_str(self.evaluate(arg1))
                     else:
                         arg1_str = self._get_text(arg1)
 
                 if arg2:
-                    if operator == ":":
+                    if operator == ':':
                         arg2_str = _bash_to_str(self.evaluate(arg2))
                     else:
                         arg2_str = self._get_text(arg2)
@@ -766,34 +781,34 @@ class ShipBashInterpreter(BashCSTVisitor):
 
     def evaluate_subshell(self, node: ts.Node) -> BashValue:
         runnable = self._node_to_runnable(node)
-        return shp.get_stdout(runnable).rstrip("\n")
+        return capture(runnable).read_stdout()
 
     def evaluate_regex(self, node: ts.Node) -> BashValue:
         # TODO: Regex is just a raw string right?
         return self._get_text(node)[1:-1]
 
     def evaluate_subscript(self, node: ts.Node) -> BashValue:
-        var_name_node = _expect(node.child_by_field_name("name"))
-        index_node = _expect(node.child_by_field_name("index"))
+        var_name_node = _expect(node.child_by_field_name('name'))
+        index_node = _expect(node.child_by_field_name('index'))
 
         index_val = _bash_to_int(self.evaluate(index_node))
         var_name = self._get_text(var_name_node)
 
-        var_value = shp.env.get(var_name)
+        var_value = env.get(var_name)
 
         if var_value is None or not isinstance(var_value, list):
-            return ""
+            return ''
         if isinstance(index_val, list):
-            return ""
+            return ''
         if isinstance(index_val, str):
             try:
                 index_val = int(index_val)
             except Exception:
-                return ""
+                return ''
 
         if index_val < 0 or index_val >= len(var_value):
             # TODO: Throw an error?
-            return ""
+            return ''
         return var_value[index_val]
 
     def evaluate_number(self, node: ts.Node) -> BashValue:
@@ -811,7 +826,7 @@ class ShipBashInterpreter(BashCSTVisitor):
     def evaluate_process_substitution(self, node: ts.Node) -> BashValue:
         # TODO: grep <(cmd -arg)
         # This will probably need to be something that adds to an accrued state
-        raise NotImplementedError("process_substitution expression")
+        raise NotImplementedError('process_substitution expression')
 
     def evaluate_raw_string(self, node: ts.Node) -> BashValue:
         """Single-quoted strings are not given an expansion"""
@@ -819,28 +834,28 @@ class ShipBashInterpreter(BashCSTVisitor):
 
     def evaluate_simple_expansion(self, node: ts.Node) -> BashValue:
         for child in node.named_children:
-            if child.type in ("variable_name", "special_variable_name"):
+            if child.type in ('variable_name', 'special_variable_name'):
                 var_name = self._get_text(child)
-                if var_name == "0":
+                if var_name == '0':
                     return self._script_name
                 elif var_name.isnumeric():
                     idx = int(var_name) - 1
                     if 0 <= idx < len(self._positional_params):
                         return self._positional_params[idx]
                     else:
-                        return ""
-                elif var_name in ("@", "*"):
+                        return ''
+                elif var_name in ('@', '*'):
                     return self._positional_params
                 else:
-                    return shp.env.get(var_name, "")
-        return ""
+                    return env.get(var_name, '')
+        return ''
 
     def evaluate_word(self, node: ts.Node) -> BashValue:
         text = self._get_text(node)
 
         # Expand tilde at the start of the word (unquoted words only)
         # os.path.expanduser handles ~, ~/path, ~username, and ~username/path
-        if text.startswith("~"):
+        if text.startswith('~'):
             text = os.path.expanduser(text)
 
         # Glob expansion (pathname expansion) for patterns
@@ -853,31 +868,31 @@ class ShipBashInterpreter(BashCSTVisitor):
 
     def evaluate_binary_expression(self, node: ts.Node) -> BashValue:
         """Evaluate binary arithmetic expressions."""
-        left_node: ts.Node | None = node.child_by_field_name("left")
-        op_node: ts.Node = _expect(node.child_by_field_name("operator"))
-        right_nodes: list[ts.Node] = node.children_by_field_name("right")
+        left_node: ts.Node | None = node.child_by_field_name('left')
+        op_node: ts.Node = _expect(node.child_by_field_name('operator'))
+        right_nodes: list[ts.Node] = node.children_by_field_name('right')
 
         op_text = self._get_text(op_node)
 
         # Handle assignment operators
         if op_text in (
-            "=",
-            "+=",
-            "-=",
-            "*=",
-            "/=",
-            "%=",
-            "<<=",
-            ">>=",
-            "&=",
-            "|=",
-            "^=",
-            "**=",
+            '=',
+            '+=',
+            '-=',
+            '*=',
+            '/=',
+            '%=',
+            '<<=',
+            '>>=',
+            '&=',
+            '|=',
+            '^=',
+            '**=',
         ):
             var_name = self._get_text(_expect(left_node))
 
             # Get current value for compound assignments
-            if op_text != "=":
+            if op_text != '=':
                 current = self.evaluate(_expect(left_node))
                 if isinstance(current, str):
                     raise ValueError("Left side binary operand can't be a string")
@@ -889,26 +904,26 @@ class ShipBashInterpreter(BashCSTVisitor):
             right_val = _bash_to_int(self.evaluate(right_nodes[0]))
 
             # Compute new value based on operator
-            if op_text == "=":
+            if op_text == '=':
                 new_val = right_val
-            elif op_text == "+=":
+            elif op_text == '+=':
                 if (isinstance(current, list) and isinstance(right_val, str)) or (
                     isinstance(current, int) and isinstance(right_val, int)
                 ):
                     new_val = current + right_val  # type: ignore
                 else:
-                    raise ValueError("Invalid binary operand types")
-            elif op_text == "-=":
+                    raise ValueError('Invalid binary operand types')
+            elif op_text == '-=':
                 if isinstance(current, int) and isinstance(right_val, int):
                     new_val = current - right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            elif op_text == "*=":
+                    raise ValueError('Invalid binary operand types')
+            elif op_text == '*=':
                 if isinstance(current, int) and isinstance(right_val, int):
                     new_val = current * right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            elif op_text == "/=":
+                    raise ValueError('Invalid binary operand types')
+            elif op_text == '/=':
                 if (
                     isinstance(current, int)
                     and isinstance(right_val, int)
@@ -916,8 +931,8 @@ class ShipBashInterpreter(BashCSTVisitor):
                 ):
                     new_val = current // right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            elif op_text == "%=":
+                    raise ValueError('Invalid binary operand types')
+            elif op_text == '%=':
                 if (
                     isinstance(current, int)
                     and isinstance(right_val, int)
@@ -925,42 +940,42 @@ class ShipBashInterpreter(BashCSTVisitor):
                 ):
                     new_val = current % right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            elif op_text == "<<=":
+                    raise ValueError('Invalid binary operand types')
+            elif op_text == '<<=':
                 if isinstance(current, int) and isinstance(right_val, int):
                     new_val = current << right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            elif op_text == ">>=":
+                    raise ValueError('Invalid binary operand types')
+            elif op_text == '>>=':
                 if isinstance(current, int) and isinstance(right_val, int):
                     new_val = current >> right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            elif op_text == "&=":
+                    raise ValueError('Invalid binary operand types')
+            elif op_text == '&=':
                 if isinstance(current, int) and isinstance(right_val, int):
                     new_val = current & right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            elif op_text == "|=":
+                    raise ValueError('Invalid binary operand types')
+            elif op_text == '|=':
                 if isinstance(current, int) and isinstance(right_val, int):
                     new_val = current | right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            elif op_text == "^=":
+                    raise ValueError('Invalid binary operand types')
+            elif op_text == '^=':
                 if isinstance(current, int) and isinstance(right_val, int):
                     new_val = current ^ right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            elif op_text == "**=":
+                    raise ValueError('Invalid binary operand types')
+            elif op_text == '**=':
                 if isinstance(current, int) and isinstance(right_val, int):
                     new_val = current**right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
+                    raise ValueError('Invalid binary operand types')
             else:
                 new_val = 0
 
             # Store and return
-            shp.env[var_name] = str(new_val)
+            env[var_name] = str(new_val)
             return new_val
 
         # Non-assignment operators - evaluate both sides
@@ -969,13 +984,13 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         # Test operators (return 1 for true, 0 for false)
         # String comparisons
-        if op_text == "=":
+        if op_text == '=':
             # In test context, = is string equality
             return 1 if _bash_to_str(left_val) == _bash_to_str(right_val) else 0
-        elif op_text == "!=":
+        elif op_text == '!=':
             # String inequality
             return 1 if _bash_to_str(left_val) != _bash_to_str(right_val) else 0
-        elif op_text == "=~":
+        elif op_text == '=~':
             # Regex match
             # TODO: There's probably some differences between bash and python regex implementations
             try:
@@ -987,33 +1002,33 @@ class ShipBashInterpreter(BashCSTVisitor):
             except re.error:
                 return 0
         # Integer comparisons
-        elif op_text == "-eq":
+        elif op_text == '-eq':
             return 1 if _bash_to_int(left_val) == _bash_to_int(right_val) else 0
-        elif op_text == "-ne":
+        elif op_text == '-ne':
             return 1 if _bash_to_int(left_val) != _bash_to_int(right_val) else 0
-        elif op_text == "-lt":
+        elif op_text == '-lt':
             return 1 if _bash_to_int(left_val) < _bash_to_int(right_val) else 0
-        elif op_text == "-le":
+        elif op_text == '-le':
             return 1 if _bash_to_int(left_val) <= _bash_to_int(right_val) else 0
-        elif op_text == "-gt":
+        elif op_text == '-gt':
             return 1 if _bash_to_int(left_val) > _bash_to_int(right_val) else 0
-        elif op_text == "-ge":
+        elif op_text == '-ge':
             return 1 if _bash_to_int(left_val) >= _bash_to_int(right_val) else 0
         # Logical operators (also used in test context)
-        elif op_text == "-a":
+        elif op_text == '-a':
             # Logical AND in test context
             return 1 if _bash_to_int(left_val) and _bash_to_int(right_val) else 0
-        elif op_text == "-o":
+        elif op_text == '-o':
             # Logical OR in test context
             return 1 if _bash_to_int(left_val) or _bash_to_int(right_val) else 0
         # File comparison operators
-        elif op_text in ("-nt", "-ot", "-ef"):
+        elif op_text in ('-nt', '-ot', '-ef'):
             # Get both file paths
             left_path = Path(_bash_to_str(left_val))
             right_path = Path(_bash_to_str(right_val))
 
             try:
-                if op_text == "-nt":
+                if op_text == '-nt':
                     # Newer than (compare modification times)
                     if not left_path.exists() or not right_path.exists():
                         return 0
@@ -1022,7 +1037,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                         if left_path.stat().st_mtime > right_path.stat().st_mtime
                         else 0
                     )
-                elif op_text == "-ot":
+                elif op_text == '-ot':
                     # Older than (compare modification times)
                     if not left_path.exists() or not right_path.exists():
                         return 0
@@ -1031,7 +1046,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                         if left_path.stat().st_mtime < right_path.stat().st_mtime
                         else 0
                     )
-                elif op_text == "-ef":
+                elif op_text == '-ef':
                     # Same file (compare device and inode)
                     if not left_path.exists() or not right_path.exists():
                         return 0
@@ -1052,24 +1067,24 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         # Arithmetic operators
         match op_text:
-            case "+":
+            case '+':
                 if (isinstance(left_val, list) and isinstance(right_val, str)) or (
                     isinstance(left_val, int) or isinstance(right_val, int)
                 ):
                     return left_val + right_val  # type: ignore
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case "-":
+                    raise ValueError('Invalid binary operand types')
+            case '-':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return left_val - right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case "*":
+                    raise ValueError('Invalid binary operand types')
+            case '*':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return left_val * right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case "/":
+                    raise ValueError('Invalid binary operand types')
+            case '/':
                 if (
                     isinstance(left_val, int)
                     and isinstance(right_val, int)
@@ -1077,8 +1092,8 @@ class ShipBashInterpreter(BashCSTVisitor):
                 ):
                     return left_val // right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case "%":
+                    raise ValueError('Invalid binary operand types')
+            case '%':
                 if (
                     isinstance(left_val, int)
                     and isinstance(right_val, int)
@@ -1086,82 +1101,82 @@ class ShipBashInterpreter(BashCSTVisitor):
                 ):
                     return left_val % right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case "**":
+                    raise ValueError('Invalid binary operand types')
+            case '**':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return left_val**right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case "<<":
+                    raise ValueError('Invalid binary operand types')
+            case '<<':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return left_val << right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case ">>":
+                    raise ValueError('Invalid binary operand types')
+            case '>>':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return left_val >> right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case "&":
+                    raise ValueError('Invalid binary operand types')
+            case '&':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return left_val & right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case "|":
+                    raise ValueError('Invalid binary operand types')
+            case '|':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return left_val | right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case "^":
+                    raise ValueError('Invalid binary operand types')
+            case '^':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return left_val ^ right_val
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case "<":
+                    raise ValueError('Invalid binary operand types')
+            case '<':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return 1 if left_val < right_val else 0
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case ">":
+                    raise ValueError('Invalid binary operand types')
+            case '>':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return 1 if left_val > right_val else 0
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case "<=":
+                    raise ValueError('Invalid binary operand types')
+            case '<=':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return 1 if left_val <= right_val else 0
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case ">=":
+                    raise ValueError('Invalid binary operand types')
+            case '>=':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return 1 if left_val >= right_val else 0
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case "==":
+                    raise ValueError('Invalid binary operand types')
+            case '==':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return 1 if left_val == right_val else 0
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case "!=":
+                    raise ValueError('Invalid binary operand types')
+            case '!=':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return 1 if left_val != right_val else 0
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case "&&":
+                    raise ValueError('Invalid binary operand types')
+            case '&&':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return 1 if left_val and right_val else 0
                 else:
-                    raise ValueError("Invalid binary operand types")
-            case "||":
+                    raise ValueError('Invalid binary operand types')
+            case '||':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return 1 if left_val or right_val else 0
                 else:
-                    raise ValueError("Invalid binary operand types")
+                    raise ValueError('Invalid binary operand types')
             case _:
                 return 0
 
     def evaluate_postfix_expression(self, node: ts.Node) -> BashValue:
-        operator_node = _expect(node.child_by_field_name("operator"))
+        operator_node = _expect(node.child_by_field_name('operator'))
         operator = self._get_text(operator_node)
 
         operand_node = _expect(
@@ -1170,26 +1185,26 @@ class ShipBashInterpreter(BashCSTVisitor):
         var_name = self._get_text(operand_node)
 
         # Read current value directly from environment
-        var_value = shp.env.get(var_name, 0)
+        var_value = env.get(var_name, 0)
         try:
             current = int(var_value)
         except Exception:
             current = 0
 
         # Post-increment/decrement returns old value but modifies variable
-        if operator == "++":
-            shp.env[var_name] = str(current + 1)
+        if operator == '++':
+            env[var_name] = str(current + 1)
             return current
-        elif operator == "--":
-            shp.env[var_name] = str(current - 1)
+        elif operator == '--':
+            env[var_name] = str(current - 1)
             return current
 
         return current
 
     def evaluate_ternary_expression(self, node: ts.Node) -> BashValue:
-        cond_node: ts.Node = _expect(node.child_by_field_name("condition"))
-        cons_node: ts.Node = _expect(node.child_by_field_name("consequence"))
-        alt_node: ts.Node = _expect(node.child_by_field_name("alternative"))
+        cond_node: ts.Node = _expect(node.child_by_field_name('condition'))
+        cons_node: ts.Node = _expect(node.child_by_field_name('consequence'))
+        alt_node: ts.Node = _expect(node.child_by_field_name('alternative'))
 
         test_outcome = _bash_to_int(self.evaluate(cond_node))
 
@@ -1199,7 +1214,7 @@ class ShipBashInterpreter(BashCSTVisitor):
             return self.evaluate(alt_node)
 
     def evaluate_unary_expression(self, node: ts.Node) -> BashValue:
-        operator_node = _expect(node.child_by_field_name("operator"))
+        operator_node = _expect(node.child_by_field_name('operator'))
 
         op_text = self._get_text(operator_node)
         operand = _expect(
@@ -1210,137 +1225,137 @@ class ShipBashInterpreter(BashCSTVisitor):
             return 0
 
         # Pre-increment/decrement modify the variable
-        if op_text in ("++", "--"):
+        if op_text in ('++', '--'):
             var_name = self._get_text(operand)
 
             # Read current value directly from environment
-            var_value = shp.env.get(var_name, "0")
+            var_value = env.get(var_name, '0')
             try:
                 current = int(var_value)
             except ValueError:
                 current = 0
 
-            if op_text == "++":
+            if op_text == '++':
                 new_val = current + 1
             else:  # --
                 new_val = current - 1
 
-            shp.env[var_name] = str(new_val)
+            env[var_name] = str(new_val)
             return new_val
 
         # Test operators (string tests return 1 for true, 0 for false)
-        if op_text == "-z":
+        if op_text == '-z':
             # Zero length string
             operand_str = _bash_to_str(self.evaluate(operand))
             return 1 if len(operand_str) == 0 else 0
-        elif op_text == "-n":
+        elif op_text == '-n':
             # Non-zero length string
             operand_str = _bash_to_str(self.evaluate(operand))
             return 1 if len(operand_str) > 0 else 0
 
         # File test operators
         elif op_text in (
-            "-e",
-            "-f",
-            "-d",
-            "-r",
-            "-w",
-            "-x",
-            "-s",
-            "-L",
-            "-h",
-            "-b",
-            "-c",
-            "-p",
-            "-S",
-            "-G",
-            "-O",
-            "-N",
-            "-k",
-            "-t",
-            "-u",
-            "-g",
+            '-e',
+            '-f',
+            '-d',
+            '-r',
+            '-w',
+            '-x',
+            '-s',
+            '-L',
+            '-h',
+            '-b',
+            '-c',
+            '-p',
+            '-S',
+            '-G',
+            '-O',
+            '-N',
+            '-k',
+            '-t',
+            '-u',
+            '-g',
         ):
             path_str = _bash_to_str(self.evaluate(operand))
             path = Path(path_str)
 
             try:
-                if op_text == "-e":
+                if op_text == '-e':
                     # File exists (follows symlinks)
                     return 1 if path.exists() else 0
-                elif op_text == "-f":
+                elif op_text == '-f':
                     # Regular file (follows symlinks)
                     return 1 if path.is_file() else 0
-                elif op_text == "-d":
+                elif op_text == '-d':
                     # Directory (follows symlinks)
                     return 1 if path.is_dir() else 0
-                elif op_text in ("-L", "-h"):
+                elif op_text in ('-L', '-h'):
                     # Symbolic link (does not follow symlinks)
                     return 1 if path.is_symlink() else 0
-                elif op_text == "-r":
+                elif op_text == '-r':
                     # Readable
                     return 1 if os.access(path, os.R_OK) else 0
-                elif op_text == "-w":
+                elif op_text == '-w':
                     # Writable
                     return 1 if os.access(path, os.W_OK) else 0
-                elif op_text == "-x":
+                elif op_text == '-x':
                     # Executable
                     return 1 if os.access(path, os.X_OK) else 0
-                elif op_text == "-s":
+                elif op_text == '-s':
                     # Non-empty file (follows symlinks)
                     return 1 if path.exists() and path.stat().st_size > 0 else 0
-                elif op_text == "-b":
+                elif op_text == '-b':
                     # Block device
                     return (
                         1 if path.exists() and stat.S_ISBLK(path.stat().st_mode) else 0
                     )
-                elif op_text == "-c":
+                elif op_text == '-c':
                     # Character device
                     return (
                         1 if path.exists() and stat.S_ISCHR(path.stat().st_mode) else 0
                     )
-                elif op_text == "-p":
+                elif op_text == '-p':
                     # Named pipe (FIFO)
                     return 1 if path.is_fifo() else 0
-                elif op_text == "-S":
+                elif op_text == '-S':
                     # Socket
                     return 1 if path.is_socket() else 0
-                elif op_text == "-u":
+                elif op_text == '-u':
                     # Setuid bit set
                     return (
                         1
                         if path.exists() and (path.stat().st_mode & stat.S_ISUID)
                         else 0
                     )
-                elif op_text == "-g":
+                elif op_text == '-g':
                     # Setgid bit set
                     return (
                         1
                         if path.exists() and (path.stat().st_mode & stat.S_ISGID)
                         else 0
                     )
-                elif op_text == "-k":
+                elif op_text == '-k':
                     # Sticky bit set
                     return (
                         1
                         if path.exists() and (path.stat().st_mode & stat.S_ISVTX)
                         else 0
                     )
-                elif op_text == "-G":
+                elif op_text == '-G':
                     # Owned by effective group ID
                     return (
                         1 if path.exists() and path.stat().st_gid == os.getegid() else 0
                     )
-                elif op_text == "-O":
+                elif op_text == '-O':
                     # Owned by effective user ID
                     return (
                         1 if path.exists() and path.stat().st_uid == os.geteuid() else 0
                     )
-                elif op_text == "-N":
+                elif op_text == '-N':
                     # Modified since last read
                     st = path.stat()
                     return 1 if st.st_mtime > st.st_atime else 0
-                elif op_text == "-t":
+                elif op_text == '-t':
                     # File descriptor is a terminal
                     try:
                         fd = int(path_str)
@@ -1357,50 +1372,50 @@ class ShipBashInterpreter(BashCSTVisitor):
         operand_val = _bash_to_int(self.evaluate(operand))
 
         match op_text:
-            case "+":
+            case '+':
                 return operand_val
-            case "-":
+            case '-':
                 return -operand_val
-            case "!":
+            case '!':
                 return 1 if not operand_val else 0
-            case "~":
+            case '~':
                 return ~operand_val
             case _:
                 return 0
 
     def _apply_redirects(
-        self, runnable: shp.ShipRunnable, node: ts.Node
-    ) -> shp.ShipRunnable:
+        self, runnable: ShellRunnable, node: ts.Node
+    ) -> ShellRunnable:
         """Apply all redirect nodes to a runnable and return the modified runnable."""
-        for redirect_node in node.children_by_field_name("redirect"):
-            if redirect_node.type == "file_redirect":
+        for redirect_node in node.children_by_field_name('redirect'):
+            if redirect_node.type == 'file_redirect':
                 dest_nodes = _expect(
-                    redirect_node.children_by_field_name("destination")
+                    redirect_node.children_by_field_name('destination')
                 )
-                dest_file = self.evaluate(dest_nodes[0])
+                dest_file = _bash_to_file(self.evaluate(dest_nodes[0]))
 
                 # Check for >> vs >
                 is_append = any(
-                    self._get_text(child) == ">>" for child in redirect_node.children
+                    self._get_text(child) == '>>' for child in redirect_node.children
                 )
 
                 if is_append:
                     runnable >>= dest_file
                 else:
                     runnable = runnable > dest_file
-            elif redirect_node.type == "heredoc_redirect":
-                raise NotImplementedError("heredoc")
+            elif redirect_node.type == 'heredoc_redirect':
+                raise NotImplementedError('heredoc')
             else:
-                raise NotImplementedError(f"Redirect type {redirect_node.type}")
+                raise NotImplementedError(f'Redirect type {redirect_node.type}')
 
         return runnable
 
-    def _build_command_runnable(self, cmd_node: ts.Node) -> shp.ShipRunnable:
-        name_node = _expect(cmd_node.child_by_field_name("name"))
+    def _build_command_runnable(self, cmd_node: ts.Node) -> ShellRunnable:
+        name_node = _expect(cmd_node.child_by_field_name('name'))
 
         cmd_name = self._get_text(name_node)
         cmd_args = []
-        for arg_node in cmd_node.children_by_field_name("argument"):
+        for arg_node in cmd_node.children_by_field_name('argument'):
             arg_value = self.evaluate(arg_node)
 
             # Flatten lists from glob expansion
@@ -1409,9 +1424,9 @@ class ShipBashInterpreter(BashCSTVisitor):
             else:
                 cmd_args.append(_bash_to_str(arg_value))
 
-        return shp.prog(cmd_name)(*cmd_args)
+        return prog(cmd_name)(*cmd_args)
 
-    def _build_pipeline_runnable(self, pipeline_node: ts.Node) -> shp.ShipRunnable:
+    def _build_pipeline_runnable(self, pipeline_node: ts.Node) -> ShellRunnable:
         """Build a runnable from a pipeline node by chaining commands."""
         runnable = None
         for cmd in [child for child in pipeline_node.children if child.is_named]:
@@ -1420,69 +1435,69 @@ class ShipBashInterpreter(BashCSTVisitor):
             else:
                 runnable |= self._node_to_runnable(cmd)
         if runnable is None:
-            raise ValueError("Empty pipeline")
+            raise ValueError('Empty pipeline')
         return runnable
 
-    def _node_to_runnable(self, node: ts.Node) -> shp.ShipRunnable:
+    def _node_to_runnable(self, node: ts.Node) -> ShellRunnable:
         """Convert any executable node to a ShipRunnable.
 
         This is a general method that handles converting various bash node types
         into ShipShell runnables, centralizing the conversion logic.
         """
         match node.type:
-            case "command":
+            case 'command':
                 return self._build_command_runnable(node)
-            case "pipeline":
+            case 'pipeline':
                 return self._build_pipeline_runnable(node)
-            case "subshell":
+            case 'subshell':
                 # Extract subshell command text and wrap in bash -c with all vars
                 full_text = self._get_text(node)
                 commands_text = full_text[1:-1].strip()  # Remove ( and )
 
                 if not commands_text:
                     # Empty subshell - return a no-op
-                    return shp.prog("true")()
+                    return prog('true')()
 
                 # Get ALL current variables (not just exported)
-                all_vars = dict(shp.env.items())
+                all_vars = dict(env.items())
 
                 # Return a runnable that executes bash with all variables
-                return shp.prog("bash")("-c", commands_text).with_env(**all_vars)
-            case "negated_command":
+                return prog('bash')('-c', commands_text).env(**all_vars)
+            case 'negated_command':
                 # Get the child node and build a negated runnable
                 child_nodes = [c for c in node.children if c.is_named]
                 if not child_nodes:
-                    raise ValueError("Negated command has no child")
+                    raise ValueError('Negated command has no child')
                 inner_runnable = self._node_to_runnable(child_nodes[0])
-                return inner_runnable.negated()
-            case "redirected_statement":
+                return inner_runnable.neg()
+            case 'redirected_statement':
                 # Get the body and build the runnable with redirects applied
-                body_node = node.child_by_field_name("body")
+                body_node = node.child_by_field_name('body')
                 if body_node is None:
-                    raise ValueError("Redirected statement has no body")
+                    raise ValueError('Redirected statement has no body')
                 runnable = self._node_to_runnable(body_node)
                 return self._apply_redirects(runnable, node)
-            case "test_command":
+            case 'test_command':
                 # Build a test runnable by evaluating the expression
                 child = next((c for c in node.children if c.is_named), None)
                 if child is None:
-                    return shp.prog("false")()
+                    return prog('false')()
                 # Evaluate the expression and return true/false runnable
                 result = _bash_to_int(self.evaluate(child))
-                return shp.prog("true")() if result else shp.prog("false")()
+                return prog('true')() if result else prog('false')()
             case _:
                 raise ValueError(f"Cannot convert node type '{node.type}' to runnable")
 
     def visit_case_statement(self, node: ts.Node):
         """Handle case statements with proper glob pattern matching."""
         # Get the value to match against
-        value_node = _expect(node.child_by_field_name("value"))
+        value_node = _expect(node.child_by_field_name('value'))
         value = _bash_to_str(self.evaluate(value_node))
 
         # Iterate through case items
-        for case_item in [n for n in node.children if n.type == "case_item"]:
+        for case_item in [n for n in node.children if n.type == 'case_item']:
             # Get all pattern nodes (we need to skip these when visiting body)
-            pattern_nodes = case_item.children_by_field_name("value")
+            pattern_nodes = case_item.children_by_field_name('value')
 
             # Check if ANY pattern matches (OR logic)
             matched = False
@@ -1501,7 +1516,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                         self.visit(child)
 
                 # Handle termination
-                if case_item.child_by_field_name("fallthrough"):
+                if case_item.child_by_field_name('fallthrough'):
                     # ;& or ;;& - continue to next case_item
                     continue
                 else:
@@ -1523,31 +1538,31 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         # Handle variable assignments in the command
         for child in node.children:
-            if child.type == "variable_assignment":
-                name_node = child.child_by_field_name("name")
-                value_node = child.child_by_field_name("value")
+            if child.type == 'variable_assignment':
+                name_node = child.child_by_field_name('name')
+                value_node = child.child_by_field_name('value')
 
                 if name_node is None:
                     continue
 
                 name = _bash_to_str(self.evaluate(name_node))
-                value = self.evaluate(value_node) if value_node else ""
+                value = self.evaluate(value_node) if value_node else ''
 
                 # Set the variable
-                shp.env[name] = value
+                env[name] = value
 
                 # Mark as exported if it's an export command
-                if keyword == "export":
-                    shp.mark_var_exported(name)
+                if keyword == 'export':
+                    env.export(name)
                 # TODO: Handle declare -x, typeset -x when needed
                 # TODO: Handle local when implementing functions
-            elif child.type in ("word", "string", "raw_string", "variable_name"):
+            elif child.type in ('word', 'string', 'raw_string', 'variable_name'):
                 # export VAR (without assignment - export existing var)
-                if keyword == "export":
+                if keyword == 'export':
                     var_name = _bash_to_str(self._get_text(child))
                     # Only mark as exported if it exists
-                    if var_name in shp.env:
-                        shp.mark_var_exported(var_name)
+                    if var_name in env:
+                        env.export(var_name)
 
     def _execute_c_style_expr(self, node: ts.Node) -> int:
         """Execute a c-style for loop expression/statement and return its integer value.
@@ -1555,22 +1570,22 @@ class ShipBashInterpreter(BashCSTVisitor):
         C-style for loops can contain both expressions (like i++, i<10) and
         statements (like variable_assignment). This helper handles both cases.
         """
-        if node.type == "variable_assignment":
+        if node.type == 'variable_assignment':
             # Execute the assignment and return the assigned value
             self.visit(node)
-            name_node = _expect(node.child_by_field_name("name"))
+            name_node = _expect(node.child_by_field_name('name'))
             var_name = self._get_text(name_node)
-            return _bash_to_int(shp.env.get(var_name, 0))
+            return _bash_to_int(env.get(var_name, 0))
         else:
             # Regular expression - evaluate and return
             return _bash_to_int(self.evaluate(node))
 
     def visit_c_style_for_statement(self, node: ts.Node):
         """Handle c-style for loops: `for ((i=0; i<10; i++)); do ...; done`"""
-        initializers = node.children_by_field_name("initializer")
-        conditions = node.children_by_field_name("condition")
-        updates = node.children_by_field_name("update")
-        body = _expect(node.child_by_field_name("body"))
+        initializers = node.children_by_field_name('initializer')
+        conditions = node.children_by_field_name('condition')
+        updates = node.children_by_field_name('update')
+        body = _expect(node.child_by_field_name('body'))
 
         def eval_conditions() -> bool:
             """Evaluate condition expressions - empty means infinite loop (true)"""
@@ -1607,11 +1622,11 @@ class ShipBashInterpreter(BashCSTVisitor):
     def visit_for_statement(self, node: ts.Node):
         """Handle for loops: for var in values; do ...; done"""
         # Get loop variable name
-        var_node = _expect(node.child_by_field_name("variable"))
+        var_node = _expect(node.child_by_field_name('variable'))
         var_name = self._get_text(var_node)
 
         # Get values to iterate over
-        value_nodes = node.children_by_field_name("value")
+        value_nodes = node.children_by_field_name('value')
 
         if not value_nodes:
             # No "in" clause - defaults to $@ (positional parameters)
@@ -1625,7 +1640,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                 if isinstance(result, list):
                     # Array expansion (e.g., "${arr[@]}") - each element is separate
                     values.extend(result)
-                elif v_node.type == "command_substitution":
+                elif v_node.type == 'command_substitution':
                     # Command substitution output is split on whitespace (IFS)
                     output = _bash_to_str(result)
                     if output:
@@ -1635,27 +1650,27 @@ class ShipBashInterpreter(BashCSTVisitor):
                     values.append(_bash_to_str(result))
 
         # Execute loop body for each value
-        body_node = node.child_by_field_name("body")
+        body_node = node.child_by_field_name('body')
         if body_node:
             for value in values:
-                shp.env[var_name] = value
+                env[var_name] = value
                 self.visit_children(body_node)
 
     def visit_function_definition(self, node: ts.Node):
-        raise NotImplementedError("function_definition")
+        raise NotImplementedError('function_definition')
 
     def _visit_elif_clause(self, node: ts.Node) -> bool:
         it = iter(node.children)
 
         # Run through everything before the "then" node
         child = next(it, None)
-        while child and child.type != "then":
+        while child and child.type != 'then':
             if child.is_named:
                 self.visit(child)
             child = next(it, None)
 
         # Return here if the condition doesn't pass
-        if shp.env.get("?", 0) != 0:
+        if env.get('?', 0) != 0:
             return False
 
         # Otherwise run the body and report back that it ran
@@ -1669,15 +1684,15 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         # Run through everything before the "then" node
         child = next(it, None)
-        while child and child.type != "then":
+        while child and child.type != 'then':
             if child.is_named:
                 self.visit(child)
             child = next(it, None)
         child = next(it, None)  # Consume the "then" node
 
         # Work through the body, running statements if condition was successful
-        run_body = shp.env.get("?", 0) == 0
-        while child and child.type not in ("elif_clause", "else_clause", "fi"):
+        run_body = env.get('?', 0) == 0
+        while child and child.type not in ('elif_clause', 'else_clause', 'fi'):
             if run_body:
                 self.visit(child)
             child = next(it, None)
@@ -1685,33 +1700,33 @@ class ShipBashInterpreter(BashCSTVisitor):
             return
 
         # Try the elif clauses if the initial condition didn't pass
-        while child and child.type == "elif_clause":
+        while child and child.type == 'elif_clause':
             if self._visit_elif_clause(child):
                 return
             child = next(it, None)
 
-        if child and child.type == "else_clause":
+        if child and child.type == 'else_clause':
             self.visit_children(child)
 
     def visit_list(self, node: ts.Node):
         for child in node.children:
             if child.is_named:
                 self.visit(child)
-            elif child.type == "&&":
-                if shp.env.get("?", 0) != 0:
+            elif child.type == '&&':
+                if env.get('?', 0) != 0:
                     return
-            elif child.type == "||":
-                if shp.env.get("?", 0) == 0:
+            elif child.type == '||':
+                if env.get('?', 0) == 0:
                     return
 
     def visit_negated_command(self, node: ts.Node):
         child_nodes = [c for c in node.children if c.is_named]
         if not child_nodes:
-            raise ValueError("Negated command has no child")
+            raise ValueError('Negated command has no child')
 
         # Build a runnable from the child and negate it
         runnable = self._node_to_runnable(child_nodes[0])
-        runnable.negated()()
+        runnable.neg()()
 
     def visit_pipeline(self, node: ts.Node):
         # Build and execute the pipeline using the helper method
@@ -1720,9 +1735,9 @@ class ShipBashInterpreter(BashCSTVisitor):
 
     def visit_redirected_statement(self, node: ts.Node):
         # Get the body (the command being redirected)
-        body_node = node.child_by_field_name("body")
+        body_node = node.child_by_field_name('body')
         if body_node is None:
-            raise ValueError("Redirected statement has no body")
+            raise ValueError('Redirected statement has no body')
 
         # Build the base runnable from the body
         runnable = self._node_to_runnable(body_node)
@@ -1745,14 +1760,14 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         if not commands_text:
             # Empty subshell: ()
-            shp.env["?"] = 0
+            env['?'] = 0
             return
 
         # Get ALL current variables (not just exported ones)
-        all_vars = dict(shp.env.items())
+        all_vars = dict(env.items())
 
         # Execute bash with all variables passed via with_env
-        sub_bash = shp.prog("bash")("-c", commands_text).with_env(**all_vars)
+        sub_bash = prog('bash')('-c', commands_text).env(**all_vars)
         sub_bash()
 
     def visit_test_command(self, node: ts.Node):
@@ -1760,54 +1775,54 @@ class ShipBashInterpreter(BashCSTVisitor):
         child = next((c for c in node.children if c.is_named), None)
         if child is None:
             # Empty test - should fail
-            shp.env["?"] = 1
+            env['?'] = 1
             return
 
         # Evaluate the expression using the existing evaluate() infrastructure
         result = _bash_to_int(self.evaluate(child))
 
         # Set exit code: 0 for true, 1 for false
-        shp.env["?"] = 0 if result else 1
+        env['?'] = 0 if result else 1
 
     def visit_unset_command(self, node: ts.Node):
         """Handle unset command to remove variables"""
         # unset command removes variables from the environment
         # Usage: unset VAR1 VAR2 VAR3
         for child in node.children:
-            if child.type in ("word", "variable_name"):
+            if child.type in ('word', 'variable_name'):
                 var_name = self._get_text(child)
                 # Use del to remove from environment (calls __delitem__)
-                if var_name in shp.env:
-                    del shp.env[var_name]
+                if var_name in env:
+                    del env[var_name]
 
     def visit_variable_assignment(self, node: ts.Node):
         """Handle variable assignment: var=value"""
-        name_node = _expect(node.child_by_field_name("name"))
-        value_node = _expect(node.child_by_field_name("value"))
+        name_node = _expect(node.child_by_field_name('name'))
+        value_node = _expect(node.child_by_field_name('value'))
 
         name = _bash_to_str(self.evaluate(name_node))
         value = self.evaluate(value_node)
 
         # Set in shell environment (not exported by default)
-        shp.env[name] = value
+        env[name] = value
 
     def visit_while_statement(self, node: ts.Node):
         # Loop while condition is true (exit code 0)
         while True:
             # Execute condition statements
-            condition_nodes = node.children_by_field_name("condition")
+            condition_nodes = node.children_by_field_name('condition')
             for cond_node in condition_nodes:
                 self.visit(cond_node)
 
             # Check exit code
-            exit_code = shp.env.get("?", 0)
+            exit_code = env.get('?', 0)
 
             # If condition failed, exit loop
             if exit_code != 0:
                 break
 
             # Execute body (do_group)
-            body_node = node.child_by_field_name("body")
+            body_node = node.child_by_field_name('body')
             if body_node:
                 self.visit_children(body_node)
 
@@ -1817,14 +1832,15 @@ def print_bash_tree(bash_code: str, show_unnamed: bool = False):
 
     Args:
         bash_code: A string containing bash code to parse
-        show_unnamed: If True, show unnamed nodes (punctuation, keywords); if False, only named nodes
+        show_unnamed: If True, show unnamed nodes (punctuation, keywords);
+            if False, only named nodes
     """
     # Create the bash language and parser
     bash_language = Language(tsbash.language())
     parser = Parser(bash_language)
 
     # Parse the bash code
-    tree = parser.parse(bytes(bash_code, "utf-8"))
+    tree = parser.parse(bytes(bash_code, 'utf-8'))
 
     def print_node(node: ts.Node, indent: int = 0):
         """Recursively print a node and its children with indentation."""
@@ -1835,14 +1851,14 @@ def print_bash_tree(bash_code: str, show_unnamed: bool = False):
             return
 
         # Print current node
-        indent_str = "  " * indent
-        node_info = f"{indent_str}{node.type}"
+        indent_str = '  ' * indent
+        node_info = f'{indent_str}{node.type}'
 
         # Add text content for leaf nodes or small nodes
         if node.child_count == 0 or len(node.children) == 0:
             text = bash_code[node.start_byte : node.end_byte]
             if len(text) <= 40:  # Only show short text
-                node_info += f" [{repr(text)}]"
+                node_info += f' [{repr(text)}]'
 
         print(node_info)
 
@@ -1855,7 +1871,7 @@ def print_bash_tree(bash_code: str, show_unnamed: bool = False):
 
 
 def run_bash_code(
-    bash_code: str, args: list[str] | None = None, script_name: str = "bash"
+    bash_code: str, args: list[str] | None = None, script_name: str = 'bash'
 ):
     """Parse and execute bash code using the ShipBashInterpreter.
 
@@ -1869,12 +1885,12 @@ def run_bash_code(
     parser = Parser(bash_language)
 
     # Parse the bash code
-    tree = parser.parse(bytes(bash_code, "utf-8"))
+    tree = parser.parse(bytes(bash_code, 'utf-8'))
 
     # Create interpreter and execute
     try:
         interpreter = ShipBashInterpreter(bash_code, args, script_name)
         interpreter.visit(tree.root_node)
     except BashScriptError as e:
-        print(f"bash: {e}", file=sys.stderr)
-        shp.env["?"] = e.exit_code
+        print(f'bash: {e}', file=sys.stderr)
+        env['?'] = e.exit_code
