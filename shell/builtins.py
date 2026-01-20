@@ -148,12 +148,30 @@ def builtin_command[**P](f: Callable[P, None]) -> Callable[..., Builtin]:
         # Bash style: parse args into kwargs
         parsed_kwargs: dict[str, Any] = {}
         positional_args: list[Any] = []
+        end_of_flags = False  # Set to True after seeing '--'
 
         i = 0
         args_list = list(args)
         while i < len(args_list):
             arg = args_list[i]
-            if isinstance(arg, str) and arg.startswith('-') and len(arg) > 1:
+            # Check for end-of-flags marker or if arg looks like a flag
+            # Skip flag parsing if: end_of_flags is set, arg is '--', or arg is numeric (like -5)
+            if not end_of_flags and isinstance(arg, str) and arg == '--':
+                end_of_flags = True
+                i += 1
+                continue
+            # Check if this looks like a flag (starts with - and isn't a number like -5)
+            is_flag = False
+            if (
+                not end_of_flags
+                and isinstance(arg, str)
+                and arg.startswith('-')
+                and len(arg) > 1
+            ):
+                # Not a flag if it looks like a negative number (e.g., -5, -3.14)
+                after_dash = arg[1:].lstrip('-').replace('.', '', 1)
+                is_flag = not (after_dash.isdigit() if after_dash else False)
+            if is_flag:
                 flags = arg[1:]
                 for j, flag_char in enumerate(flags):
                     if flag_char not in flag_mapping:

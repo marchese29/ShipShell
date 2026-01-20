@@ -911,8 +911,8 @@ class ShipBashInterpreter(BashCSTVisitor):
         return capture(runnable).read_stdout()
 
     def evaluate_regex(self, node: ts.Node) -> BashValue:
-        # TODO: Regex is just a raw string right?
-        return self._get_text(node)[1:-1]
+        """Return the regex pattern as-is."""
+        return self._get_text(node)
 
     def evaluate_subscript(self, node: ts.Node) -> BashValue:
         var_name_node = _expect(node.child_by_field_name('name'))
@@ -1098,86 +1098,46 @@ class ShipBashInterpreter(BashCSTVisitor):
         ):
             var_name = self._get_text(_expect(left_node))
 
-            # Get current value for compound assignments
+            # Get current value for compound assignments (convert to int)
             if op_text != '=':
-                current = self.evaluate(_expect(left_node))
-                if isinstance(current, str):
-                    raise ValueError("Left side binary operand can't be a string")
+                current = _bash_to_int(self.evaluate(_expect(left_node)))
             else:
                 current = 0
 
             # Evaluate right side
-            # TODO: Error if not an integer
             right_val = _bash_to_int(self.evaluate(right_nodes[0]))
 
             # Compute new value based on operator
             if op_text == '=':
                 new_val = right_val
             elif op_text == '+=':
-                if (isinstance(current, list) and isinstance(right_val, str)) or (
-                    isinstance(current, int) and isinstance(right_val, int)
-                ):
-                    new_val = current + right_val  # type: ignore
-                else:
-                    raise ValueError('Invalid binary operand types')
+                new_val = current + right_val
             elif op_text == '-=':
-                if isinstance(current, int) and isinstance(right_val, int):
-                    new_val = current - right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                new_val = current - right_val
             elif op_text == '*=':
-                if isinstance(current, int) and isinstance(right_val, int):
-                    new_val = current * right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                new_val = current * right_val
             elif op_text == '/=':
-                if (
-                    isinstance(current, int)
-                    and isinstance(right_val, int)
-                    and right_val != 0
-                ):
+                if right_val != 0:
                     new_val = current // right_val
                 else:
-                    raise ValueError('Invalid binary operand types')
+                    raise ValueError('Division by zero')
             elif op_text == '%=':
-                if (
-                    isinstance(current, int)
-                    and isinstance(right_val, int)
-                    and right_val != 0
-                ):
+                if right_val != 0:
                     new_val = current % right_val
                 else:
-                    raise ValueError('Invalid binary operand types')
+                    raise ValueError('Division by zero')
             elif op_text == '<<=':
-                if isinstance(current, int) and isinstance(right_val, int):
-                    new_val = current << right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                new_val = current << right_val
             elif op_text == '>>=':
-                if isinstance(current, int) and isinstance(right_val, int):
-                    new_val = current >> right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                new_val = current >> right_val
             elif op_text == '&=':
-                if isinstance(current, int) and isinstance(right_val, int):
-                    new_val = current & right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                new_val = current & right_val
             elif op_text == '|=':
-                if isinstance(current, int) and isinstance(right_val, int):
-                    new_val = current | right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                new_val = current | right_val
             elif op_text == '^=':
-                if isinstance(current, int) and isinstance(right_val, int):
-                    new_val = current ^ right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                new_val = current ^ right_val
             elif op_text == '**=':
-                if isinstance(current, int) and isinstance(right_val, int):
-                    new_val = current**right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                new_val = current**right_val
             else:
                 new_val = 0
 
@@ -1186,53 +1146,60 @@ class ShipBashInterpreter(BashCSTVisitor):
             return new_val
 
         # Non-assignment operators - evaluate both sides
+        # Keep as BashValue first; convert to int only for arithmetic operators
         left_val = self.evaluate(left_node) if left_node else 0
-        right_val = _bash_to_int(self.evaluate(right_nodes[0]))
+        right_val_raw = self.evaluate(right_nodes[0])
 
         # Test operators (return 1 for true, 0 for false)
-        # String comparisons
+        # String comparisons - use raw values, not int-converted
         if op_text == '=':
             # In test context, = is string equality
-            return 1 if _bash_to_str(left_val) == _bash_to_str(right_val) else 0
+            return 1 if _bash_to_str(left_val) == _bash_to_str(right_val_raw) else 0
+        elif op_text == '==':
+            # String/pattern equality (same as = in [[ ]] context)
+            return 1 if _bash_to_str(left_val) == _bash_to_str(right_val_raw) else 0
         elif op_text == '!=':
             # String inequality
-            return 1 if _bash_to_str(left_val) != _bash_to_str(right_val) else 0
+            return 1 if _bash_to_str(left_val) != _bash_to_str(right_val_raw) else 0
         elif op_text == '=~':
-            # Regex match
-            # TODO: There's probably some differences between bash and python regex implementations
+            # Regex match - use raw string values
             try:
                 result = (
-                    re.search(_bash_to_str(right_val), _bash_to_str(left_val))
+                    re.search(_bash_to_str(right_val_raw), _bash_to_str(left_val))
                     is not None
                 )
                 return 1 if result else 0
             except re.error:
                 return 0
+
+        # Convert to int for numeric operations
+        right_val = _bash_to_int(right_val_raw)
+
         # Integer comparisons
-        elif op_text == '-eq':
-            return 1 if _bash_to_int(left_val) == _bash_to_int(right_val) else 0
+        if op_text == '-eq':
+            return 1 if _bash_to_int(left_val) == right_val else 0
         elif op_text == '-ne':
-            return 1 if _bash_to_int(left_val) != _bash_to_int(right_val) else 0
+            return 1 if _bash_to_int(left_val) != right_val else 0
         elif op_text == '-lt':
-            return 1 if _bash_to_int(left_val) < _bash_to_int(right_val) else 0
+            return 1 if _bash_to_int(left_val) < right_val else 0
         elif op_text == '-le':
-            return 1 if _bash_to_int(left_val) <= _bash_to_int(right_val) else 0
+            return 1 if _bash_to_int(left_val) <= right_val else 0
         elif op_text == '-gt':
-            return 1 if _bash_to_int(left_val) > _bash_to_int(right_val) else 0
+            return 1 if _bash_to_int(left_val) > right_val else 0
         elif op_text == '-ge':
-            return 1 if _bash_to_int(left_val) >= _bash_to_int(right_val) else 0
+            return 1 if _bash_to_int(left_val) >= right_val else 0
         # Logical operators (also used in test context)
         elif op_text == '-a':
-            # Logical AND in test context
-            return 1 if _bash_to_int(left_val) and _bash_to_int(right_val) else 0
+            # Logical AND in test context - both sides are already evaluated as test results
+            return 1 if _bash_to_int(left_val) and right_val else 0
         elif op_text == '-o':
             # Logical OR in test context
-            return 1 if _bash_to_int(left_val) or _bash_to_int(right_val) else 0
+            return 1 if _bash_to_int(left_val) or right_val else 0
         # File comparison operators
         elif op_text in ('-nt', '-ot', '-ef'):
             # Get both file paths
             left_path = Path(_bash_to_str(left_val))
-            right_path = Path(_bash_to_str(right_val))
+            right_path = Path(_bash_to_str(right_val_raw))
 
             try:
                 if op_text == '-nt':
@@ -2015,7 +1982,15 @@ class ShipBashInterpreter(BashCSTVisitor):
         sub_bash()
 
     def visit_test_command(self, node: ts.Node):
-        """Execute a test command: [[ expression ]] or [ expression ]"""
+        """Execute a test command: [[ expression ]] or [ expression ]
+
+        Known limitation: tree-sitter-bash parses -a, -o, and ! operators with
+        incorrect precedence relative to comparison operators like -eq:
+          - [ 1 -eq 1 -a 2 -eq 2 ] parses as ((1 -eq 1) -a 2) -eq 2
+          - [ ! 1 -eq 2 ] parses as (!1) -eq 2
+        This would require patching the tree-sitter grammar to fix properly.
+        See: ShipShell-53a
+        """
         child = next((c for c in node.children if c.is_named), None)
         if child is None:
             # Empty test - should fail
