@@ -286,6 +286,7 @@ class ShipBashInterpreter(BashCSTVisitor):
         self._script_name = script_name
         self._env = env
         self._temp_files: list[str] = []  # Temp files to clean up (e.g., heredocs)
+        self._resolve_vars = False  # When True, variable_name nodes are looked up
 
     def cleanup(self):
         """Clean up temporary resources created during execution."""
@@ -662,15 +663,21 @@ class ShipBashInterpreter(BashCSTVisitor):
         return ''.join(result)
 
     def evaluate_arithmetic_expansion(self, node: ts.Node) -> BashValue:
-        parts = []
-        for child in node.named_children:
-            parts.append(self.evaluate(child))
-        if len(parts) == 0:
-            return 0
-        elif len(parts) == 1:
-            return parts[0]
-        else:
-            return ''.join([_bash_to_str(p) for p in parts])
+        # Enable variable resolution for arithmetic context
+        old_resolve_vars = self._resolve_vars
+        self._resolve_vars = True
+        try:
+            parts = []
+            for child in node.named_children:
+                parts.append(self.evaluate(child))
+            if len(parts) == 0:
+                return 0
+            elif len(parts) == 1:
+                return parts[0]
+            else:
+                return ''.join([_bash_to_str(p) for p in parts])
+        finally:
+            self._resolve_vars = old_resolve_vars
 
     def evaluate_brace_expression(self, node: ts.Node) -> BashValue:
         result = _expand_range(self._get_text(node)[1:-1])
@@ -701,7 +708,16 @@ class ShipBashInterpreter(BashCSTVisitor):
         return capture(self._node_to_runnable(command_node)).read_stdout()
 
     def evaluate_concatenation(self, node: ts.Node) -> BashValue:
-        return _expand_braces(self._get_text(node))
+        """Concatenate child nodes, expanding variables and other constructs."""
+        parts: list[str] = []
+        for child in node.children:
+            # Evaluate each child and convert to string
+            value = self.evaluate(child)
+            parts.append(_bash_to_str(value))
+        result = ''.join(parts)
+        # Apply brace expansion to the final result
+        expanded = _expand_braces(result)
+        return expanded if len(expanded) > 1 else expanded[0] if expanded else ''
 
     def evaluate_expansion(self, node: ts.Node) -> BashValue:
         """Handle ${var} and other complex expansions including ${10}, ${11}, etc."""
@@ -1012,9 +1028,21 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         return text
 
-    def evaluate_variable_name(self, node: ts.Node) -> BashValue:
-        """Evaluate variable_name nodes - these are always literal identifiers."""
+    def evaluate_extglob_pattern(self, node: ts.Node) -> BashValue:
+        """Evaluate extglob pattern - return raw text for pattern matching."""
+        # Don't expand globs here - these are patterns for case statements
         return self._get_text(node)
+
+    def evaluate_variable_name(self, node: ts.Node) -> BashValue:
+        """Evaluate variable_name nodes.
+
+        Returns the literal name by default. When _resolve_vars is True (set by
+        arithmetic contexts), looks up the variable's value instead.
+        """
+        var_name = self._get_text(node)
+        if self._resolve_vars:
+            return self._env.get(var_name, '')
+        return var_name
 
     def evaluate_binary_expression(self, node: ts.Node) -> BashValue:
         """Evaluate binary arithmetic expressions."""
@@ -1220,70 +1248,37 @@ class ShipBashInterpreter(BashCSTVisitor):
         # Arithmetic operators
         match op_text:
             case '+':
-                if (isinstance(left_val, list) and isinstance(right_val, str)) or (
-                    isinstance(left_val, int) or isinstance(right_val, int)
-                ):
-                    return left_val + right_val  # type: ignore
-                else:
-                    raise ValueError('Invalid binary operand types')
+                # Array concatenation: list + str
+                if isinstance(left_val, list) and isinstance(right_val, str):
+                    return left_val + [right_val]
+                # Arithmetic addition: convert both to int
+                return _bash_to_int(left_val) + right_val
             case '-':
-                if isinstance(left_val, int) and isinstance(right_val, int):
-                    return left_val - right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                return _bash_to_int(left_val) - right_val
             case '*':
-                if isinstance(left_val, int) and isinstance(right_val, int):
-                    return left_val * right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                return _bash_to_int(left_val) * right_val
             case '/':
-                if (
-                    isinstance(left_val, int)
-                    and isinstance(right_val, int)
-                    and right_val != 0
-                ):
-                    return left_val // right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                left_int = _bash_to_int(left_val)
+                if right_val != 0:
+                    return left_int // right_val
+                raise ValueError('Division by zero')
             case '%':
-                if (
-                    isinstance(left_val, int)
-                    and isinstance(right_val, int)
-                    and right_val != 0
-                ):
-                    return left_val % right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                left_int = _bash_to_int(left_val)
+                if right_val != 0:
+                    return left_int % right_val
+                raise ValueError('Division by zero')
             case '**':
-                if isinstance(left_val, int) and isinstance(right_val, int):
-                    return left_val**right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                return _bash_to_int(left_val) ** right_val
             case '<<':
-                if isinstance(left_val, int) and isinstance(right_val, int):
-                    return left_val << right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                return _bash_to_int(left_val) << right_val
             case '>>':
-                if isinstance(left_val, int) and isinstance(right_val, int):
-                    return left_val >> right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                return _bash_to_int(left_val) >> right_val
             case '&':
-                if isinstance(left_val, int) and isinstance(right_val, int):
-                    return left_val & right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                return _bash_to_int(left_val) & right_val
             case '|':
-                if isinstance(left_val, int) and isinstance(right_val, int):
-                    return left_val | right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                return _bash_to_int(left_val) | right_val
             case '^':
-                if isinstance(left_val, int) and isinstance(right_val, int):
-                    return left_val ^ right_val
-                else:
-                    raise ValueError('Invalid binary operand types')
+                return _bash_to_int(left_val) ^ right_val
             case '<':
                 if isinstance(left_val, int) and isinstance(right_val, int):
                     return 1 if left_val < right_val else 0
@@ -2008,15 +2003,21 @@ class ShipBashInterpreter(BashCSTVisitor):
 
     def visit_compound_statement(self, node: ts.Node):
         """Execute arithmetic compound statement: (( expression ))"""
-        # Find the expression inside (( ... ))
-        for child in node.children:
-            if child.is_named:
-                # Evaluate the expression (handles assignments, arithmetic, etc.)
-                result = _bash_to_int(self.evaluate(child))
-                # Exit code: 0 if non-zero result, 1 if zero
-                self._env.last_exit = 0 if result else 1
-                return
-        self._env.last_exit = 0
+        # Enable variable resolution for arithmetic context
+        old_resolve_vars = self._resolve_vars
+        self._resolve_vars = True
+        try:
+            # Find the expression inside (( ... ))
+            for child in node.children:
+                if child.is_named:
+                    # Evaluate the expression (handles assignments, arithmetic, etc.)
+                    result = _bash_to_int(self.evaluate(child))
+                    # Exit code: 0 if non-zero result, 1 if zero
+                    self._env.last_exit = 0 if result else 1
+                    return
+            self._env.last_exit = 0
+        finally:
+            self._resolve_vars = old_resolve_vars
 
     def visit_unset_command(self, node: ts.Node):
         """Handle unset command to remove variables"""
@@ -2043,22 +2044,22 @@ class ShipBashInterpreter(BashCSTVisitor):
     def visit_while_statement(self, node: ts.Node):
         # Loop while condition is true (exit code 0)
         while True:
-            # Execute condition statements
-            condition_nodes = node.children_by_field_name('condition')
-            for cond_node in condition_nodes:
-                self.visit(cond_node)
+            # Execute condition (first named child with field 'condition')
+            condition_node = node.child_by_field_name('condition')
+            if condition_node:
+                self.visit(condition_node)
 
-            # Check exit code
-            exit_code = self._env.get('?', 0)
-
-            # If condition failed, exit loop
-            if exit_code != 0:
+            # If condition failed (non-zero exit), exit loop
+            if self._env.last_exit != 0:
                 break
 
             # Execute body (do_group)
             body_node = node.child_by_field_name('body')
             if body_node:
                 self.visit_children(body_node)
+
+        # While loop that never executes body returns 0
+        self._env.last_exit = 0
 
 
 def print_bash_tree(bash_code: str, show_unnamed: bool = False):

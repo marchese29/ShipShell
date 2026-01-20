@@ -52,5 +52,20 @@
   {"name": "if_test_ne", "category": "if_statement", "code": "X=5; if [ \"$X\" != \"6\" ]; then echo diff; fi"},
 
   {"name": "arithmetic_assign", "category": "arithmetic", "code": "(( x = 5 )); echo $x"},
-  {"name": "arithmetic_expr", "category": "arithmetic", "code": "(( y = 2 + 3 )); echo $y"}
+  {"name": "arithmetic_expr", "category": "arithmetic", "code": "(( y = 2 + 3 )); echo $y"},
+  {"name": "arithmetic_increment", "category": "arithmetic", "code": "i=0; i=$((i+1)); i=$((i+1)); echo $i"},
+
+  {"name": "while_basic", "category": "while_loop", "code": "i=0; while [ $i -lt 3 ]; do echo $i; i=$((i+1)); done"},
+  {"name": "while_no_iterations", "category": "while_loop", "code": "i=5; while [ $i -lt 3 ]; do echo $i; i=$((i+1)); done"},
+  {"name": "while_single_iteration", "category": "while_loop", "code": "i=0; while [ $i -lt 1 ]; do echo loop; i=1; done"},
+
+  {"name": "for_basic", "category": "for_loop", "code": "for i in 1 2 3; do echo $i; done"},
+  {"name": "for_strings", "category": "for_loop", "code": "for x in a b c; do echo item:$x; done"},
+  {"name": "for_single", "category": "for_loop", "code": "for x in one; do echo $x; done"},
+  {"name": "for_empty", "category": "for_loop", "code": "for i in; do echo $i; done"},
+
+  {"name": "case_simple", "category": "case_statement", "code": "x=foo; case $x in foo) echo matched;; esac"},
+  {"name": "case_multiple", "category": "case_statement", "code": "x=bar; case $x in foo) echo foo;; bar) echo bar;; esac"},
+  {"name": "case_default", "category": "case_statement", "code": "x=baz; case $x in foo) echo foo;; *) echo default;; esac"},
+  {"name": "case_glob", "category": "case_statement", "code": "x=hello; case $x in h*) echo starts with h;; esac"}
 ]
