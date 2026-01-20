@@ -269,6 +269,8 @@ class BashTest:
     """A test case for bash compatibility."""
     code: str
     name: str = ''
+    category: str = ''  # Test category for grouping (e.g., 'echo', 'variable', 'heredoc')
     description: str = ''
     setup_env: dict[str, str] = field(default_factory=dict)
     skip: str | None = None
+    check_stdout: bool = True  # Whether to compare stdout (False for exit-code-only tests)

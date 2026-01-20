@@ -35,8 +35,10 @@ print(result.env)  # {'FOO': 'bar'}
 BashTest(
     code='echo $FOO',           # Bash code to run
     name='var_expansion',       # Test name (optional)
+    category='variable',        # Category for grouping (optional)
     setup_env={'FOO': 'bar'},   # Environment setup
     skip='reason',              # Skip with reason (optional)
+    check_stdout=True,          # Whether to compare stdout (default True)
 )
 ```
 
@@ -52,7 +54,27 @@ assert check(result.stdout, LinesUnordered(['line1', 'line2']))
 assert check(result.stderr, Ignore())  # Don't check
 ```
 
-## Writing Integration Tests
+## Adding Bash Compatibility Tests
+
+Tests are defined in `bash_compat_tests.json` for easy maintenance. To add a new test:
+
+```json
+{"name": "my_test", "category": "echo", "code": "echo hello"}
+```
+
+With environment setup:
+```json
+{"name": "var_test", "category": "variable", "code": "echo $FOO", "setup_env": {"FOO": "bar"}}
+```
+
+Exit-code-only test (don't compare stdout):
+```json
+{"name": "exit_test", "category": "exit_code", "code": "exit 42", "check_stdout": false}
+```
+
+Categories help organize test output: `echo/my_test`, `variable/var_test`, etc.
+
+## Writing Custom Integration Tests
 
 Pattern for comparing against real bash:
 

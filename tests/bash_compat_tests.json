@@ -1,0 +1,46 @@
+[
+  {"name": "simple_echo", "category": "echo", "code": "echo hello"},
+  {"name": "echo_multiple_args", "category": "echo", "code": "echo hello world"},
+  {"name": "echo_quoted", "category": "echo", "code": "echo \"hello world\""},
+  {"name": "echo_single_quoted", "category": "echo", "code": "echo 'hello world'"},
+
+  {"name": "var_expansion", "category": "variable", "code": "echo $FOO", "setup_env": {"FOO": "bar"}},
+  {"name": "var_braces", "category": "variable", "code": "echo ${FOO}", "setup_env": {"FOO": "bar"}},
+  {"name": "var_default", "category": "variable", "code": "echo ${UNSET:-default}"},
+  {"name": "var_default_set", "category": "variable", "code": "echo ${FOO:-default}", "setup_env": {"FOO": "bar"}},
+
+  {"name": "and_operator", "category": "control_flow", "code": "echo one && echo two"},
+  {"name": "or_operator_first_succeeds", "category": "control_flow", "code": "echo one || echo two"},
+  {"name": "semicolon", "category": "control_flow", "code": "echo one; echo two"},
+
+  {"name": "ansi_newline", "category": "ansi_c_string", "code": "echo $'hello\\nworld'"},
+  {"name": "ansi_tab", "category": "ansi_c_string", "code": "echo $'col1\\tcol2'"},
+  {"name": "ansi_quote", "category": "ansi_c_string", "code": "echo $'it\\'s working'"},
+  {"name": "ansi_backslash", "category": "ansi_c_string", "code": "echo $'back\\\\slash'"},
+  {"name": "ansi_hex", "category": "ansi_c_string", "code": "echo $'\\x48\\x49'"},
+  {"name": "ansi_octal", "category": "ansi_c_string", "code": "echo $'\\110\\111'"},
+  {"name": "ansi_escape", "category": "ansi_c_string", "code": "echo $'\\e[31mred\\e[0m'"},
+
+  {"name": "simple_brace", "category": "brace_expansion", "code": "echo {a,b,c}"},
+  {"name": "brace_with_prefix", "category": "brace_expansion", "code": "echo file{1,2}.txt"},
+  {"name": "brace_range", "category": "brace_expansion", "code": "echo {1..5}"},
+  {"name": "brace_cartesian", "category": "brace_expansion", "code": "echo {a,b}{1,2}"},
+
+  {"name": "true_command", "category": "exit_code", "code": "true", "check_stdout": false},
+  {"name": "false_command", "category": "exit_code", "code": "false", "check_stdout": false},
+  {"name": "exit_zero", "category": "exit_code", "code": "exit 0", "check_stdout": false},
+  {"name": "exit_one", "category": "exit_code", "code": "exit 1", "check_stdout": false},
+  {"name": "exit_42", "category": "exit_code", "code": "exit 42", "check_stdout": false},
+
+  {"name": "simple_heredoc", "category": "heredoc", "code": "cat <<EOF\nhello world\nEOF"},
+  {"name": "heredoc_with_var", "category": "heredoc", "code": "NAME=Alice; cat <<EOF\nhello $NAME\nEOF"},
+  {"name": "heredoc_leading_text", "category": "heredoc", "code": "NAME=Bob; cat <<EOF\nDear $NAME, welcome!\nEOF"},
+  {"name": "heredoc_multiple_vars", "category": "heredoc", "code": "A=1; B=2; cat <<EOF\n$A + $B = 3\nEOF"},
+  {"name": "heredoc_multiline", "category": "heredoc", "code": "cat <<EOF\nline one\nline two\nline three\nEOF"},
+  {"name": "heredoc_tab_strip", "category": "heredoc", "code": "cat <<-EOF\n\thello\n\tworld\nEOF"},
+  {"name": "heredoc_with_leading_tab", "category": "heredoc", "code": "cat <<EOF\n\thello\n\tworld\nEOF"},
+
+  {"name": "simple_herestring", "category": "herestring", "code": "cat <<< \"hello\""},
+  {"name": "herestring_with_var", "category": "herestring", "code": "NAME=world; cat <<< \"hello $NAME\""},
+  {"name": "herestring_unquoted", "category": "herestring", "code": "cat <<< hello"}
+]
