@@ -216,6 +216,7 @@ def _expand_braces(string: str) -> list[str]:
                 for prefix in result:
                     for option in expanded_options:
                         new_result.append(prefix + option)
+                result = new_result
                 i = j
             else:
                 # Unclosed brackets are treated like normal text

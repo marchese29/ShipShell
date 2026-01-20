@@ -65,6 +65,25 @@ CONTROL_FLOW_TESTS = [
     ),
 ]
 
+BRACE_EXPANSION_TESTS = [
+    BashTest(
+        name='simple_brace',
+        code='echo {a,b,c}',
+    ),
+    BashTest(
+        name='brace_with_prefix',
+        code='echo file{1,2}.txt',
+    ),
+    BashTest(
+        name='brace_range',
+        code='echo {1..5}',
+    ),
+    BashTest(
+        name='brace_cartesian',
+        code='echo {a,b}{1,2}',
+    ),
+]
+
 EXIT_CODE_TESTS = [
     BashTest(
         name='true_command',
@@ -125,6 +144,19 @@ def test_variables(test: BashTest):
 @pytest.mark.parametrize('test', CONTROL_FLOW_TESTS, ids=make_test_id)
 def test_control_flow(test: BashTest):
     """Test control flow operators."""
+    if test.skip:
+        pytest.skip(test.skip)
+
+    ours = run_isolated(test.code, test.setup_env)
+    bash = run_bash_reference(test.code, test.setup_env)
+
+    assert ours.stdout == bash.stdout, f'stdout mismatch'
+    assert ours.exit_code == bash.exit_code, f'exit_code mismatch'
+
+
+@pytest.mark.parametrize('test', BRACE_EXPANSION_TESTS, ids=make_test_id)
+def test_brace_expansion(test: BashTest):
+    """Test brace expansion."""
     if test.skip:
         pytest.skip(test.skip)
 

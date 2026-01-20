@@ -23,6 +23,26 @@ uv remove <package>        # Remove dependency
 uv sync                    # Sync lockfile with pyproject.toml
 ```
 
+## Testing
+
+Run all tests with:
+```bash
+uv run pytest tests/ -v
+```
+
+Test organization:
+- `tests/test_bash_compat.py` - Integration tests comparing against real bash
+- `tests/test_bash_pure.py` - Unit tests for pure functions
+- `tests/test_harness_smoke.py` - Harness smoke tests
+
+See `tests/AGENTS.md` for detailed testing patterns and the test harness API.
+
+## Component Documentation
+
+Component-specific patterns and debugging utilities:
+- `tests/AGENTS.md` - Test harness API and testing patterns
+- `shell/compat/AGENTS.md` - Bash interpreter debugging and visitor patterns
+
 ## Landing the Plane (Session Completion)
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
