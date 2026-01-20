@@ -65,6 +65,37 @@ CONTROL_FLOW_TESTS = [
     ),
 ]
 
+ANSI_C_STRING_TESTS = [
+    BashTest(
+        name='ansi_newline',
+        code=r"echo $'hello\nworld'",
+    ),
+    BashTest(
+        name='ansi_tab',
+        code=r"echo $'col1\tcol2'",
+    ),
+    BashTest(
+        name='ansi_quote',
+        code=r"echo $'it\'s working'",
+    ),
+    BashTest(
+        name='ansi_backslash',
+        code=r"echo $'back\\slash'",
+    ),
+    BashTest(
+        name='ansi_hex',
+        code=r"echo $'\x48\x49'",
+    ),
+    BashTest(
+        name='ansi_octal',
+        code=r"echo $'\110\111'",
+    ),
+    BashTest(
+        name='ansi_escape',
+        code=r"echo $'\e[31mred\e[0m'",
+    ),
+]
+
 BRACE_EXPANSION_TESTS = [
     BashTest(
         name='simple_brace',
@@ -104,6 +135,52 @@ EXIT_CODE_TESTS = [
     BashTest(
         name='exit_42',
         code='exit 42',
+    ),
+]
+
+HEREDOC_TESTS = [
+    BashTest(
+        name='simple_heredoc',
+        code='cat <<EOF\nhello world\nEOF',
+    ),
+    BashTest(
+        name='heredoc_with_var',
+        code='NAME=Alice; cat <<EOF\nhello $NAME\nEOF',
+    ),
+    BashTest(
+        name='heredoc_leading_text',
+        code='NAME=Bob; cat <<EOF\nDear $NAME, welcome!\nEOF',
+    ),
+    BashTest(
+        name='heredoc_multiple_vars',
+        code='A=1; B=2; cat <<EOF\n$A + $B = 3\nEOF',
+    ),
+    BashTest(
+        name='heredoc_multiline',
+        code='cat <<EOF\nline one\nline two\nline three\nEOF',
+    ),
+    BashTest(
+        name='heredoc_tab_strip',
+        code='cat <<-EOF\n\thello\n\tworld\nEOF',
+    ),
+    BashTest(
+        name='heredoc_with_leading_tab',
+        code='cat <<EOF\n\thello\n\tworld\nEOF',
+    ),
+]
+
+HERESTRING_TESTS = [
+    BashTest(
+        name='simple_herestring',
+        code='cat <<< "hello"',
+    ),
+    BashTest(
+        name='herestring_with_var',
+        code='NAME=world; cat <<< "hello $NAME"',
+    ),
+    BashTest(
+        name='herestring_unquoted',
+        code='cat <<< hello',
     ),
 ]
 
@@ -154,6 +231,19 @@ def test_control_flow(test: BashTest):
     assert ours.exit_code == bash.exit_code, f'exit_code mismatch'
 
 
+@pytest.mark.parametrize('test', ANSI_C_STRING_TESTS, ids=make_test_id)
+def test_ansi_c_strings(test: BashTest):
+    """Test ANSI-C quoted strings ($'...')."""
+    if test.skip:
+        pytest.skip(test.skip)
+
+    ours = run_isolated(test.code, test.setup_env)
+    bash = run_bash_reference(test.code, test.setup_env)
+
+    assert ours.stdout == bash.stdout, f'stdout mismatch'
+    assert ours.exit_code == bash.exit_code, f'exit_code mismatch'
+
+
 @pytest.mark.parametrize('test', BRACE_EXPANSION_TESTS, ids=make_test_id)
 def test_brace_expansion(test: BashTest):
     """Test brace expansion."""
@@ -177,3 +267,29 @@ def test_exit_codes(test: BashTest):
     bash = run_bash_reference(test.code, test.setup_env)
 
     assert ours.exit_code == bash.exit_code, f'exit_code mismatch: ours={ours.exit_code}, bash={bash.exit_code}'
+
+
+@pytest.mark.parametrize('test', HEREDOC_TESTS, ids=make_test_id)
+def test_heredocs(test: BashTest):
+    """Test heredoc redirects."""
+    if test.skip:
+        pytest.skip(test.skip)
+
+    ours = run_isolated(test.code, test.setup_env)
+    bash = run_bash_reference(test.code, test.setup_env)
+
+    assert ours.stdout == bash.stdout, f'stdout mismatch'
+    assert ours.exit_code == bash.exit_code, f'exit_code mismatch'
+
+
+@pytest.mark.parametrize('test', HERESTRING_TESTS, ids=make_test_id)
+def test_herestrings(test: BashTest):
+    """Test here string redirects (<<<)."""
+    if test.skip:
+        pytest.skip(test.skip)
+
+    ours = run_isolated(test.code, test.setup_env)
+    bash = run_bash_reference(test.code, test.setup_env)
+
+    assert ours.stdout == bash.stdout, f'stdout mismatch'
+    assert ours.exit_code == bash.exit_code, f'exit_code mismatch'

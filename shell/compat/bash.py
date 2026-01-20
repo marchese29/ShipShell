@@ -6,6 +6,7 @@ import os
 import re
 import stat
 import sys
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -284,6 +285,25 @@ class ShipBashInterpreter(BashCSTVisitor):
         self._positional_params = args if args is not None else []
         self._script_name = script_name
         self._env = env
+        self._temp_files: list[str] = []  # Temp files to clean up (e.g., heredocs)
+
+    def cleanup(self):
+        """Clean up temporary resources created during execution."""
+        for path in self._temp_files:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass  # File may already be deleted
+        self._temp_files.clear()
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - ensures cleanup is called."""
+        self.cleanup()
+        return False  # Don't suppress exceptions
 
     def _get_text(self, node: ts.Node) -> str:
         return self._source[node.start_byte : node.end_byte]
@@ -553,8 +573,93 @@ class ShipBashInterpreter(BashCSTVisitor):
             case _:
                 return value_str
 
-    def evaluate_ansi_c_str(self, node: ts.Node) -> BashValue:
-        raise NotImplementedError('ansi_c_str expression')
+    def evaluate_ansi_c_string(self, node: ts.Node) -> BashValue:
+        """Evaluate ANSI-C quoted strings: $'...'
+
+        Supports escape sequences like \\n, \\t, \\xHH, \\NNN, etc.
+        """
+        text = self._get_text(node)
+        # Strip $' prefix and ' suffix
+        if text.startswith("$'") and text.endswith("'"):
+            content = text[2:-1]
+        else:
+            return text
+
+        result = []
+        i = 0
+        while i < len(content):
+            if content[i] == '\\' and i + 1 < len(content):
+                next_char = content[i + 1]
+                match next_char:
+                    case 'a':
+                        result.append('\a')
+                        i += 2
+                    case 'b':
+                        result.append('\b')
+                        i += 2
+                    case 'e' | 'E':
+                        result.append('\x1b')  # Escape
+                        i += 2
+                    case 'f':
+                        result.append('\f')
+                        i += 2
+                    case 'n':
+                        result.append('\n')
+                        i += 2
+                    case 'r':
+                        result.append('\r')
+                        i += 2
+                    case 't':
+                        result.append('\t')
+                        i += 2
+                    case 'v':
+                        result.append('\v')
+                        i += 2
+                    case '\\':
+                        result.append('\\')
+                        i += 2
+                    case "'":
+                        result.append("'")
+                        i += 2
+                    case '"':
+                        result.append('"')
+                        i += 2
+                    case '?':
+                        result.append('?')
+                        i += 2
+                    case 'x':
+                        # Hex escape: \xHH
+                        hex_chars = content[i + 2 : i + 4]
+                        if len(hex_chars) >= 1 and all(
+                            c in '0123456789abcdefABCDEF' for c in hex_chars
+                        ):
+                            result.append(chr(int(hex_chars, 16)))
+                            i += 2 + len(hex_chars)
+                        else:
+                            result.append('\\x')
+                            i += 2
+                    case c if c in '0123456789':
+                        # Octal escape: \NNN (1-3 digits)
+                        octal_chars = ''
+                        j = i + 1
+                        while j < len(content) and j < i + 4 and content[j] in '01234567':
+                            octal_chars += content[j]
+                            j += 1
+                        if octal_chars:
+                            result.append(chr(int(octal_chars, 8) % 256))
+                            i = j
+                        else:
+                            result.append(content[i])
+                            i += 1
+                    case _:
+                        # Unknown escape - keep the backslash
+                        result.append('\\')
+                        i += 1
+            else:
+                result.append(content[i])
+                i += 1
+
+        return ''.join(result)
 
     def evaluate_arithmetic_expansion(self, node: ts.Node) -> BashValue:
         parts = []
@@ -841,6 +946,36 @@ class ShipBashInterpreter(BashCSTVisitor):
 
     def evaluate_string_content(self, node: ts.Node) -> BashValue:
         """Content inside double-quoted strings"""
+        return self._get_text(node)
+
+    def evaluate_heredoc_body(self, node: ts.Node) -> BashValue:
+        """Evaluate heredoc body with variable/command expansion.
+
+        Tree-sitter-bash doesn't create child nodes for:
+        - Text before the first expansion
+        - Text-only heredocs (no children at all)
+        So we track byte positions to capture these gaps.
+        """
+        result = []
+        current_pos = node.start_byte
+
+        for child in node.children:
+            # Capture literal text before this child
+            if child.start_byte > current_pos:
+                result.append(self._source[current_pos:child.start_byte])
+
+            # Evaluate the child
+            result.append(_bash_to_str(self.evaluate(child)))
+            current_pos = child.end_byte
+
+        # Capture trailing literal text (or all text if no children)
+        if node.end_byte > current_pos:
+            result.append(self._source[current_pos:node.end_byte])
+
+        return ''.join(result)
+
+    def evaluate_heredoc_content(self, node: ts.Node) -> BashValue:
+        """Literal content inside heredoc body"""
         return self._get_text(node)
 
     def evaluate_simple_expansion(self, node: ts.Node) -> BashValue:
@@ -1401,7 +1536,10 @@ class ShipBashInterpreter(BashCSTVisitor):
     def _apply_redirects(
         self, runnable: ShellRunnable, node: ts.Node
     ) -> ShellRunnable:
-        """Apply all redirect nodes to a runnable and return the modified runnable."""
+        """Apply all redirect nodes to a runnable and return the modified runnable.
+
+        Temp files (e.g., for heredocs) are tracked in self._temp_files for cleanup.
+        """
         for redirect_node in node.children_by_field_name('redirect'):
             if redirect_node.type == 'file_redirect':
                 dest_nodes = _expect(
@@ -1419,7 +1557,69 @@ class ShipBashInterpreter(BashCSTVisitor):
                 else:
                     runnable = runnable > dest_file
             elif redirect_node.type == 'heredoc_redirect':
-                raise NotImplementedError('heredoc')
+                # Check for tab-stripping mode (<<-)
+                strip_tabs = any(c.type == '<<-' for c in redirect_node.children)
+
+                # Find heredoc content by extracting between start marker and end marker
+                # Tree-sitter's heredoc_body has incorrect byte boundaries (misses leading content)
+                start_end = None
+                end_start = None
+                body_node = None
+                for child in redirect_node.children:
+                    if child.type == 'heredoc_start':
+                        start_end = child.end_byte
+                    elif child.type == 'heredoc_end':
+                        end_start = child.start_byte
+                    elif child.type == 'heredoc_body':
+                        body_node = child
+
+                if start_end is not None and end_start is not None:
+                    # Extract raw content between markers (skip newline after start)
+                    raw_content = self._source[start_end + 1 : end_start]
+
+                    # If there are expansions, we need to evaluate them
+                    if body_node is not None and body_node.named_children:
+                        # Use evaluate which handles expansions with byte tracking
+                        body_content = _bash_to_str(self.evaluate(body_node))
+                        # Prepend any content before the body node started
+                        prefix = self._source[start_end + 1 : body_node.start_byte]
+                        body_content = prefix + body_content
+                    else:
+                        body_content = raw_content
+                else:
+                    body_content = ''
+
+                # Strip leading tabs from each line if <<- was used
+                if strip_tabs:
+                    body_content = '\n'.join(
+                        line.lstrip('\t') for line in body_content.split('\n')
+                    )
+
+                # Write to temp file and track for cleanup
+                with tempfile.NamedTemporaryFile(
+                    mode='w', delete=False, suffix='.heredoc'
+                ) as f:
+                    f.write(body_content)
+                    self._temp_files.append(f.name)
+
+                # Set stdin to temp file
+                runnable = runnable < self._temp_files[-1]
+            elif redirect_node.type == 'herestring_redirect':
+                # Here string: <<< "string" - evaluate and pipe to stdin
+                string_content = ''
+                for child in redirect_node.children:
+                    if child.type != '<<<':
+                        string_content = _bash_to_str(self.evaluate(child))
+                        break
+
+                # Write to temp file (same approach as heredoc)
+                with tempfile.NamedTemporaryFile(
+                    mode='w', delete=False, suffix='.herestring'
+                ) as f:
+                    f.write(string_content + '\n')  # Here strings add trailing newline
+                    self._temp_files.append(f.name)
+
+                runnable = runnable < self._temp_files[-1]
             else:
                 raise NotImplementedError(f'Redirect type {redirect_node.type}')
 
@@ -1540,6 +1740,8 @@ class ShipBashInterpreter(BashCSTVisitor):
 
     def visit_command(self, node: ts.Node):
         runnable = self._build_command_runnable(node)
+        # Apply any inline redirects (e.g., here strings: cat <<< "hello")
+        runnable = self._apply_redirects(runnable, node)
         runnable()
 
     def visit_declaration_command(self, node: ts.Node):
@@ -1907,9 +2109,9 @@ def run_bash_code(
     tree = parser.parse(bytes(bash_code, 'utf-8'))
 
     # Create interpreter and execute
-    try:
-        interpreter = ShipBashInterpreter(bash_code, args, script_name, env)
-        interpreter.visit(tree.root_node)
-    except BashScriptError as e:
-        print(f'bash: {e}', file=sys.stderr)
-        env['?'] = e.exit_code
+    with ShipBashInterpreter(bash_code, args, script_name, env) as interpreter:
+        try:
+            interpreter.visit(tree.root_node)
+        except BashScriptError as e:
+            print(f'bash: {e}', file=sys.stderr)
+            env['?'] = e.exit_code
