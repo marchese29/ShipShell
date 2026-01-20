@@ -67,5 +67,21 @@
   {"name": "case_simple", "category": "case_statement", "code": "x=foo; case $x in foo) echo matched;; esac"},
   {"name": "case_multiple", "category": "case_statement", "code": "x=bar; case $x in foo) echo foo;; bar) echo bar;; esac"},
   {"name": "case_default", "category": "case_statement", "code": "x=baz; case $x in foo) echo foo;; *) echo default;; esac"},
-  {"name": "case_glob", "category": "case_statement", "code": "x=hello; case $x in h*) echo starts with h;; esac"}
+  {"name": "case_glob", "category": "case_statement", "code": "x=hello; case $x in h*) echo starts with h;; esac"},
+
+  {"name": "pipe_simple", "category": "pipeline", "code": "echo hello | cat"},
+  {"name": "pipe_transform", "category": "pipeline", "code": "echo hello | tr a-z A-Z"},
+  {"name": "pipe_multi_stage", "category": "pipeline", "code": "echo hello | cat | cat"},
+  {"name": "pipe_word_count", "category": "pipeline", "code": "echo hello world | wc -w"},
+  {"name": "pipe_true_true", "category": "pipeline", "code": "true | true", "check_stdout": false},
+  {"name": "pipe_false_true", "category": "pipeline", "code": "false | true", "check_stdout": false},
+  {"name": "pipe_true_false", "category": "pipeline", "code": "true | false", "check_stdout": false},
+
+  {"name": "subshell_simple", "category": "subshell", "code": "(echo hello)"},
+  {"name": "subshell_multiple", "category": "subshell", "code": "(echo one; echo two)"},
+  {"name": "subshell_true", "category": "subshell", "code": "(true)", "check_stdout": false},
+  {"name": "subshell_false", "category": "subshell", "code": "(false)", "check_stdout": false},
+  {"name": "subshell_var_isolation", "category": "subshell", "code": "x=outer; (x=inner; echo $x); echo $x"},
+  {"name": "subshell_exit_code", "category": "subshell", "code": "(exit 42); echo $?"},
+  {"name": "subshell_in_pipeline", "category": "subshell", "code": "(echo hello) | cat"}
 ]
