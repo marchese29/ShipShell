@@ -565,3 +565,112 @@ def source(file: SourceFile, args: tuple[str, ...] = ()):
             __main__.__dict__.pop('__file__', None)
         else:
             __main__.__dict__['__file__'] = saved_file
+
+
+def _interpret_escapes(s: str) -> str:
+    """Interpret bash-style escape sequences.
+
+    Supports: \\\\ \\a \\b \\e \\E \\f \\n \\r \\t \\v \\0nnn \\xHH
+    """
+    result = []
+    i = 0
+    while i < len(s):
+        if s[i] == '\\' and i + 1 < len(s):
+            c = s[i + 1]
+            if c == '\\':
+                result.append('\\')
+                i += 2
+            elif c == 'a':
+                result.append('\a')
+                i += 2
+            elif c == 'b':
+                result.append('\b')
+                i += 2
+            elif c in ('e', 'E'):
+                result.append('\x1b')
+                i += 2
+            elif c == 'f':
+                result.append('\f')
+                i += 2
+            elif c == 'n':
+                result.append('\n')
+                i += 2
+            elif c == 'r':
+                result.append('\r')
+                i += 2
+            elif c == 't':
+                result.append('\t')
+                i += 2
+            elif c == 'v':
+                result.append('\v')
+                i += 2
+            elif c == '0':
+                # Octal: \0nnn (up to 3 octal digits)
+                octal = ''
+                j = i + 2
+                while j < len(s) and len(octal) < 3 and s[j] in '01234567':
+                    octal += s[j]
+                    j += 1
+                if octal:
+                    result.append(chr(int(octal, 8)))
+                else:
+                    result.append('\0')
+                i = j
+            elif c == 'x':
+                # Hex: \xHH (1-2 hex digits)
+                hex_chars = ''
+                j = i + 2
+                while j < len(s) and len(hex_chars) < 2 and s[j] in '0123456789abcdefABCDEF':
+                    hex_chars += s[j]
+                    j += 1
+                if hex_chars:
+                    result.append(chr(int(hex_chars, 16)))
+                    i = j
+                else:
+                    result.append(s[i])
+                    i += 1
+            else:
+                # Unknown escape - keep as-is
+                result.append(s[i])
+                i += 1
+        else:
+            result.append(s[i])
+            i += 1
+    return ''.join(result)
+
+
+@builtin_command
+def echo(
+    args: tuple[str, ...] = (),
+    escape: Annotated[bool, _Flag('e')] = False,
+    no_newline: Annotated[bool, _Flag('n')] = False,
+):
+    """Print arguments to stdout.
+
+    Args:
+        args: Strings to print, separated by spaces.
+        escape: If True (-e flag), interpret backslash escape sequences.
+        no_newline: If True (-n flag), do not output trailing newline.
+
+    Escape sequences (with -e):
+        \\\\  backslash
+        \\a  alert (bell)
+        \\b  backspace
+        \\e  escape character
+        \\f  form feed
+        \\n  newline
+        \\r  carriage return
+        \\t  horizontal tab
+        \\v  vertical tab
+        \\0nnn  octal value (up to 3 digits)
+        \\xHH  hexadecimal value (up to 2 digits)
+
+    Examples:
+        echo("hello", "world")      # Print "hello world"
+        echo("-n", "no newline")    # Print without trailing newline
+        echo("-e", "line1\\nline2") # Interpret escape sequences
+    """
+    output = ' '.join(args)
+    if escape:
+        output = _interpret_escapes(output)
+    print(output, end='' if no_newline else '\n')

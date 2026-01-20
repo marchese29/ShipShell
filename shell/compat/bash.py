@@ -956,6 +956,33 @@ class ShipBashInterpreter(BashCSTVisitor):
         # This will probably need to be something that adds to an accrued state
         raise NotImplementedError('process_substitution expression')
 
+    def evaluate_string(self, node: ts.Node) -> BashValue:
+        """Double-quoted strings with variable/command expansion.
+
+        We need to track byte positions to capture literal text (including newlines)
+        between named children, similar to heredoc handling.
+        """
+        result = []
+        # Skip opening quote
+        current_pos = node.start_byte + 1
+        end_pos = node.end_byte - 1  # Before closing quote
+
+        for child in node.children:
+            if not child.is_named:
+                continue
+            # Capture literal text before this child
+            if child.start_byte > current_pos:
+                result.append(self._source[current_pos : child.start_byte])
+            # Evaluate the child (handles expansions)
+            result.append(_bash_to_str(self.evaluate(child)))
+            current_pos = child.end_byte
+
+        # Capture any remaining literal text
+        if end_pos > current_pos:
+            result.append(self._source[current_pos:end_pos])
+
+        return ''.join(result)
+
     def evaluate_raw_string(self, node: ts.Node) -> BashValue:
         """Single-quoted strings are not given an expansion"""
         return self._get_text(node)[1:-1]

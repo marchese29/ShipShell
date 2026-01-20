@@ -302,6 +302,12 @@ class Builtin(ShellRunnable):
         actual_stdout = self._stdout if self._stdout is not None else stdout
         actual_stderr = self._stderr if self._stderr is not None else stderr
 
+        # Track whether we opened the fd (from a path) vs received it as an int
+        # We should only close fds we opened ourselves
+        stdin_opened = not isinstance(actual_stdin, int) and actual_stdin is not None
+        stdout_opened = not isinstance(actual_stdout, int) and actual_stdout is not None
+        stderr_opened = not isinstance(actual_stderr, int) and actual_stderr is not None
+
         # Resolve redirections to file descriptors
         stdin_fd = _resolve_fd(actual_stdin, os.O_RDONLY, None)
         stdout_flags = (
@@ -323,20 +329,20 @@ class Builtin(ShellRunnable):
             sys.stdout.flush()
             sys.stderr.flush()
 
-            # Apply redirections
+            # Apply redirections - only close fds we opened (not ones passed in)
             if stdin_fd is not None and stdin_fd != 0:
                 os.dup2(stdin_fd, 0)
-                if stdin_fd > 2:
+                if stdin_opened and stdin_fd > 2:
                     os.close(stdin_fd)
 
             if stdout_fd is not None and stdout_fd != 1:
                 os.dup2(stdout_fd, 1)
-                if stdout_fd > 2:
+                if stdout_opened and stdout_fd > 2:
                     os.close(stdout_fd)
 
             if stderr_fd is not None and stderr_fd != 2:
                 os.dup2(stderr_fd, 2)
-                if stderr_fd > 2:
+                if stderr_opened and stderr_fd > 2:
                     os.close(stderr_fd)
 
             # Run builtin function with redirected fds

@@ -83,6 +83,12 @@ def _run_in_child(
     os.close(stdout_w)
     os.close(stderr_w)
 
+    # Reassign sys.stdout/stderr to new file objects wrapping the redirected fds
+    # This is necessary because pytest's capture replaces sys.stdout/stderr with
+    # its own objects, and after fork those still point to pytest's buffers
+    sys.stdout = os.fdopen(1, 'w', buffering=1)
+    sys.stderr = os.fdopen(2, 'w', buffering=1)
+
     # Use the global env directly (we're forked, so changes don't affect parent)
     # This is necessary because resolve_cmd uses the global env for PATH lookup
     from shell.environment import env as global_env
