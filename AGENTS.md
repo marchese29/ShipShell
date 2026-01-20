@@ -12,6 +12,17 @@ bd close <id>         # Complete work
 bd sync               # Sync with git
 ```
 
+## Dependency Management
+
+Use `uv` for managing dependencies rather than editing `pyproject.toml` directly:
+
+```bash
+uv add <package>           # Add runtime dependency
+uv add --dev <package>     # Add dev dependency
+uv remove <package>        # Remove dependency
+uv sync                    # Sync lockfile with pyproject.toml
+```
+
 ## Landing the Plane (Session Completion)
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.

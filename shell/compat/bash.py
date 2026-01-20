@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import tree_sitter_bash as tsbash
 from tree_sitter import Language, Parser
 
-from shell.environment import env
+from shell.environment import ShellEnvironment, env as global_env
 from shell.model import ShellRunnable, capture, prog
 
 if TYPE_CHECKING:
@@ -273,11 +273,16 @@ class BashCSTVisitor:
 
 class ShipBashInterpreter(BashCSTVisitor):
     def __init__(
-        self, source: str, args: list[str] | None = None, script_name: str = 'bash'
+        self,
+        source: str,
+        args: list[str] | None = None,
+        script_name: str = 'bash',
+        env: ShellEnvironment = global_env,
     ):
         self._source = source
         self._positional_params = args if args is not None else []
         self._script_name = script_name
+        self._env = env
 
     def _get_text(self, node: ts.Node) -> str:
         return self._source[node.start_byte : node.end_byte]
@@ -632,12 +637,12 @@ class ShipBashInterpreter(BashCSTVisitor):
         if prefix_operator == '!':
             if operator is None:
                 # ${!varname}
-                indirect = _bash_to_str(env.get(self._get_text(value_node), None))
-                return _bash_to_str(env.get(indirect, None))
+                indirect = _bash_to_str(self._env.get(self._get_text(value_node), None))
+                return _bash_to_str(self._env.get(indirect, None))
             elif operator in ('@', '*'):
                 # ${!prefix@} and ${!prefix*}
                 prefix = self._get_text(value_node)
-                variables = [k for k in env.keys() if k.startswith(prefix)]
+                variables = [k for k in self._env.keys() if k.startswith(prefix)]
                 if operator == '@':
                     return variables
                 else:
@@ -645,7 +650,7 @@ class ShipBashInterpreter(BashCSTVisitor):
             else:
                 # ${!name[@]} and ${!name[*]}
                 var_name = self._get_text(value_node)
-                var_value = env.get(var_name, None)
+                var_value = self._env.get(var_name, None)
 
                 # TODO: Support for more complex types like sparse/associative arrays
                 if var_value is None or not isinstance(var_value, list):
@@ -669,7 +674,7 @@ class ShipBashInterpreter(BashCSTVisitor):
             elif var_name in ('@', '*'):
                 value = self._positional_params
             else:
-                value = _bash_to_str(env.get(var_name, None))
+                value = _bash_to_str(self._env.get(var_name, None))
         else:
             # Subscript
             value = self.evaluate(value_node)
@@ -700,7 +705,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                 if value is None:
                     var_name = self._get_text(value_node)
                     new_value = _bash_to_str(self.evaluate(_expect(arg1)))
-                    env[var_name] = new_value
+                    self._env[var_name] = new_value
                     return new_value
                 return _bash_to_str(value)
             case ':=':
@@ -708,7 +713,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                 if value is None or value == '':
                     var_name = self._get_text(value_node)
                     new_value = _bash_to_str(self.evaluate(_expect(arg1)))
-                    env[var_name] = new_value
+                    self._env[var_name] = new_value
                     return new_value
                 return _bash_to_str(value)
             case '?':
@@ -794,7 +799,7 @@ class ShipBashInterpreter(BashCSTVisitor):
         index_val = _bash_to_int(self.evaluate(index_node))
         var_name = self._get_text(var_name_node)
 
-        var_value = env.get(var_name)
+        var_value = self._env.get(var_name)
 
         if var_value is None or not isinstance(var_value, list):
             return ''
@@ -847,7 +852,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                 elif var_name in ('@', '*'):
                     return self._positional_params
                 else:
-                    return env.get(var_name, '')
+                    return self._env.get(var_name, '')
         return ''
 
     def evaluate_word(self, node: ts.Node) -> BashValue:
@@ -975,7 +980,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                 new_val = 0
 
             # Store and return
-            env[var_name] = str(new_val)
+            self._env[var_name] = str(new_val)
             return new_val
 
         # Non-assignment operators - evaluate both sides
@@ -1185,7 +1190,7 @@ class ShipBashInterpreter(BashCSTVisitor):
         var_name = self._get_text(operand_node)
 
         # Read current value directly from environment
-        var_value = env.get(var_name, 0)
+        var_value = self._env.get(var_name, 0)
         try:
             current = int(var_value)
         except Exception:
@@ -1193,10 +1198,10 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         # Post-increment/decrement returns old value but modifies variable
         if operator == '++':
-            env[var_name] = str(current + 1)
+            self._env[var_name] = str(current + 1)
             return current
         elif operator == '--':
-            env[var_name] = str(current - 1)
+            self._env[var_name] = str(current - 1)
             return current
 
         return current
@@ -1229,7 +1234,7 @@ class ShipBashInterpreter(BashCSTVisitor):
             var_name = self._get_text(operand)
 
             # Read current value directly from environment
-            var_value = env.get(var_name, '0')
+            var_value = self._env.get(var_name, '0')
             try:
                 current = int(var_value)
             except ValueError:
@@ -1240,7 +1245,7 @@ class ShipBashInterpreter(BashCSTVisitor):
             else:  # --
                 new_val = current - 1
 
-            env[var_name] = str(new_val)
+            self._env[var_name] = str(new_val)
             return new_val
 
         # Test operators (string tests return 1 for true, 0 for false)
@@ -1459,7 +1464,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                     return prog('true')()
 
                 # Get ALL current variables (not just exported)
-                all_vars = dict(env.items())
+                all_vars = dict(self._env.items())
 
                 # Return a runnable that executes bash with all variables
                 return prog('bash')('-c', commands_text).env(**all_vars)
@@ -1549,11 +1554,11 @@ class ShipBashInterpreter(BashCSTVisitor):
                 value = self.evaluate(value_node) if value_node else ''
 
                 # Set the variable
-                env[name] = value
+                self._env[name] = value
 
                 # Mark as exported if it's an export command
                 if keyword == 'export':
-                    env.export(name)
+                    self._env.export(name)
                 # TODO: Handle declare -x, typeset -x when needed
                 # TODO: Handle local when implementing functions
             elif child.type in ('word', 'string', 'raw_string', 'variable_name'):
@@ -1561,8 +1566,8 @@ class ShipBashInterpreter(BashCSTVisitor):
                 if keyword == 'export':
                     var_name = _bash_to_str(self._get_text(child))
                     # Only mark as exported if it exists
-                    if var_name in env:
-                        env.export(var_name)
+                    if var_name in self._env:
+                        self._env.export(var_name)
 
     def _execute_c_style_expr(self, node: ts.Node) -> int:
         """Execute a c-style for loop expression/statement and return its integer value.
@@ -1575,7 +1580,7 @@ class ShipBashInterpreter(BashCSTVisitor):
             self.visit(node)
             name_node = _expect(node.child_by_field_name('name'))
             var_name = self._get_text(name_node)
-            return _bash_to_int(env.get(var_name, 0))
+            return _bash_to_int(self._env.get(var_name, 0))
         else:
             # Regular expression - evaluate and return
             return _bash_to_int(self.evaluate(node))
@@ -1653,7 +1658,7 @@ class ShipBashInterpreter(BashCSTVisitor):
         body_node = node.child_by_field_name('body')
         if body_node:
             for value in values:
-                env[var_name] = value
+                self._env[var_name] = value
                 self.visit_children(body_node)
 
     def visit_function_definition(self, node: ts.Node):
@@ -1670,7 +1675,7 @@ class ShipBashInterpreter(BashCSTVisitor):
             child = next(it, None)
 
         # Return here if the condition doesn't pass
-        if env.get('?', 0) != 0:
+        if self._env.get('?', 0) != 0:
             return False
 
         # Otherwise run the body and report back that it ran
@@ -1691,7 +1696,7 @@ class ShipBashInterpreter(BashCSTVisitor):
         child = next(it, None)  # Consume the "then" node
 
         # Work through the body, running statements if condition was successful
-        run_body = env.get('?', 0) == 0
+        run_body = self._env.get('?', 0) == 0
         while child and child.type not in ('elif_clause', 'else_clause', 'fi'):
             if run_body:
                 self.visit(child)
@@ -1713,10 +1718,10 @@ class ShipBashInterpreter(BashCSTVisitor):
             if child.is_named:
                 self.visit(child)
             elif child.type == '&&':
-                if env.get('?', 0) != 0:
+                if self._env.get('?', 0) != 0:
                     return
             elif child.type == '||':
-                if env.get('?', 0) == 0:
+                if self._env.get('?', 0) == 0:
                     return
 
     def visit_negated_command(self, node: ts.Node):
@@ -1760,11 +1765,11 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         if not commands_text:
             # Empty subshell: ()
-            env['?'] = 0
+            self._env['?'] = 0
             return
 
         # Get ALL current variables (not just exported ones)
-        all_vars = dict(env.items())
+        all_vars = dict(self._env.items())
 
         # Execute bash with all variables passed via with_env
         sub_bash = prog('bash')('-c', commands_text).env(**all_vars)
@@ -1775,14 +1780,14 @@ class ShipBashInterpreter(BashCSTVisitor):
         child = next((c for c in node.children if c.is_named), None)
         if child is None:
             # Empty test - should fail
-            env['?'] = 1
+            self._env['?'] = 1
             return
 
         # Evaluate the expression using the existing evaluate() infrastructure
         result = _bash_to_int(self.evaluate(child))
 
         # Set exit code: 0 for true, 1 for false
-        env['?'] = 0 if result else 1
+        self._env['?'] = 0 if result else 1
 
     def visit_unset_command(self, node: ts.Node):
         """Handle unset command to remove variables"""
@@ -1792,8 +1797,8 @@ class ShipBashInterpreter(BashCSTVisitor):
             if child.type in ('word', 'variable_name'):
                 var_name = self._get_text(child)
                 # Use del to remove from environment (calls __delitem__)
-                if var_name in env:
-                    del env[var_name]
+                if var_name in self._env:
+                    del self._env[var_name]
 
     def visit_variable_assignment(self, node: ts.Node):
         """Handle variable assignment: var=value"""
@@ -1804,7 +1809,7 @@ class ShipBashInterpreter(BashCSTVisitor):
         value = self.evaluate(value_node)
 
         # Set in shell environment (not exported by default)
-        env[name] = value
+        self._env[name] = value
 
     def visit_while_statement(self, node: ts.Node):
         # Loop while condition is true (exit code 0)
@@ -1815,7 +1820,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                 self.visit(cond_node)
 
             # Check exit code
-            exit_code = env.get('?', 0)
+            exit_code = self._env.get('?', 0)
 
             # If condition failed, exit loop
             if exit_code != 0:
@@ -1871,7 +1876,10 @@ def print_bash_tree(bash_code: str, show_unnamed: bool = False):
 
 
 def run_bash_code(
-    bash_code: str, args: list[str] | None = None, script_name: str = 'bash'
+    bash_code: str,
+    args: list[str] | None = None,
+    script_name: str = 'bash',
+    env: ShellEnvironment = global_env,
 ):
     """Parse and execute bash code using the ShipBashInterpreter.
 
@@ -1879,6 +1887,7 @@ def run_bash_code(
         bash_code: A string containing bash code to parse and execute
         args: Optional list of positional parameters ($1, $2, etc.)
         script_name: Name of the script ($0), defaults to "bash"
+        env: Shell environment to use (defaults to global environment)
     """
     # Create the bash language and parser
     bash_language = Language(tsbash.language())
@@ -1889,7 +1898,7 @@ def run_bash_code(
 
     # Create interpreter and execute
     try:
-        interpreter = ShipBashInterpreter(bash_code, args, script_name)
+        interpreter = ShipBashInterpreter(bash_code, args, script_name, env)
         interpreter.visit(tree.root_node)
     except BashScriptError as e:
         print(f'bash: {e}', file=sys.stderr)

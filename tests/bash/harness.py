@@ -1,0 +1,270 @@
+"""Test harness for bash compatibility testing.
+
+Uses fork-based isolation to run bash code in a clean environment,
+then communicates results back via JSON over a pipe.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass
+class CapturedState:
+    """State captured from running bash code."""
+
+    stdout: str
+    stderr: str
+    exit_code: int
+    env: dict[str, Any]
+
+
+def run_isolated(
+    code: str,
+    setup_env: dict[str, str] | None = None,
+    probe_env_vars: list[str] | None = None,
+) -> CapturedState:
+    """Run bash code in a forked child process with isolation.
+
+    Args:
+        code: Bash code to execute
+        setup_env: Environment variables to set before running
+        probe_env_vars: Environment variable names to capture after running
+
+    Returns:
+        CapturedState with stdout, stderr, exit_code, and probed env vars
+    """
+    setup_env = setup_env or {}
+    probe_env_vars = probe_env_vars or []
+
+    # Pipe for JSON results (exit code + env vars)
+    result_r, result_w = os.pipe()
+
+    # Pipes for stdout/stderr capture
+    stdout_r, stdout_w = os.pipe()
+    stderr_r, stderr_w = os.pipe()
+
+    # Flush before forking
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+    pid = os.fork()
+    if pid == 0:
+        # === CHILD PROCESS (isolated) ===
+        _run_in_child(code, setup_env, probe_env_vars, result_w, stdout_w, stderr_w)
+        # _run_in_child calls os._exit(), should never return
+    else:
+        # === PARENT PROCESS ===
+        return _collect_from_child(pid, result_r, stdout_r, stderr_r, result_w, stdout_w, stderr_w)
+
+
+def _run_in_child(
+    code: str,
+    setup_env: dict[str, str],
+    probe_env_vars: list[str],
+    result_w: int,
+    stdout_w: int,
+    stderr_w: int,
+) -> None:
+    """Child process: run bash code and write results to pipes."""
+    # Close read ends
+    # (result_r, stdout_r, stderr_r are closed by parent, we don't have refs here)
+
+    # Redirect stdout/stderr to capture pipes
+    os.dup2(stdout_w, 1)
+    os.dup2(stderr_w, 2)
+    os.close(stdout_w)
+    os.close(stderr_w)
+
+    # Use the global env directly (we're forked, so changes don't affect parent)
+    # This is necessary because resolve_cmd uses the global env for PATH lookup
+    from shell.environment import env as global_env
+
+    # Clear and reinitialize the environment
+    global_env._env.clear()
+    global_env._exported.clear()
+    global_env.initialize()
+
+    # Populate with setup vars
+    for key, value in setup_env.items():
+        global_env._env[key] = value
+
+    # Import and run bash code with the global env
+    from shell.compat.bash import run_bash_code
+
+    exit_code = 0
+    try:
+        run_bash_code(code, env=global_env)
+        exit_code = global_env.get('?', 0)
+    except Exception as e:
+        print(f'Error: {e}', file=sys.stderr)
+        exit_code = 1
+
+    # Flush output before collecting results
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+    # Collect probed state
+    result = {
+        'exit_code': exit_code,
+        'env': {var: global_env.get(var) for var in probe_env_vars},
+    }
+
+    # Write JSON to result pipe
+    with os.fdopen(result_w, 'w') as f:
+        json.dump(result, f)
+
+    os._exit(0)
+
+
+def _collect_from_child(
+    pid: int,
+    result_r: int,
+    stdout_r: int,
+    stderr_r: int,
+    result_w: int,
+    stdout_w: int,
+    stderr_w: int,
+) -> CapturedState:
+    """Parent process: wait for child and collect results from pipes."""
+    # Close write ends (child uses these)
+    os.close(result_w)
+    os.close(stdout_w)
+    os.close(stderr_w)
+
+    # Wait for child to complete
+    os.waitpid(pid, 0)
+
+    # Read captured outputs
+    with os.fdopen(stdout_r) as f:
+        stdout = f.read()
+    with os.fdopen(stderr_r) as f:
+        stderr = f.read()
+    with os.fdopen(result_r) as f:
+        result = json.load(f)
+
+    return CapturedState(
+        stdout=stdout,
+        stderr=stderr,
+        exit_code=result['exit_code'],
+        env=result['env'],
+    )
+
+
+def run_bash_reference(
+    code: str,
+    setup_env: dict[str, str] | None = None,
+) -> CapturedState:
+    """Run bash code using the system bash for reference comparison.
+
+    Args:
+        code: Bash code to execute
+        setup_env: Environment variables to set before running
+
+    Returns:
+        CapturedState with stdout, stderr, exit_code (env is always empty)
+    """
+    setup_env = setup_env or {}
+
+    # Build minimal environment for bash
+    env = {
+        'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+        'HOME': os.environ.get('HOME', '/tmp'),
+        **setup_env,
+    }
+
+    result = subprocess.run(
+        ['bash', '-c', code],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    return CapturedState(
+        stdout=result.stdout,
+        stderr=result.stderr,
+        exit_code=result.returncode,
+        env={},  # Can't probe env from subprocess
+    )
+
+
+# === Check Types (for explicit expectations) ===
+
+
+@dataclass
+class Exact:
+    """Must match exactly."""
+    value: str
+
+
+@dataclass
+class Contains:
+    """Must contain all these substrings (order doesn't matter)."""
+    substrings: list[str]
+
+
+@dataclass
+class LinesUnordered:
+    """Must have exactly these lines, but order doesn't matter."""
+    lines: list[str]
+
+
+@dataclass
+class Regex:
+    """Must match this regex pattern."""
+    pattern: str
+
+
+@dataclass
+class Ignore:
+    """Don't check this output."""
+    pass
+
+
+# Union of all check types
+Check = Exact | Contains | LinesUnordered | Regex | Ignore
+
+
+def check(actual: str, expected: Check) -> bool:
+    """Check if actual value matches the expected Check.
+
+    Returns True if check passes, False otherwise.
+    Use with pytest: assert check(result.stdout, Contains(['hello']))
+    """
+    match expected:
+        case Exact(value):
+            return actual == value
+
+        case Contains(substrings):
+            return all(s in actual for s in substrings)
+
+        case LinesUnordered(lines):
+            actual_lines = set(actual.strip().split('\n')) if actual.strip() else set()
+            return actual_lines == set(lines)
+
+        case Regex(pattern):
+            return re.search(pattern, actual) is not None
+
+        case Ignore():
+            return True
+
+    return False
+
+
+# === Test Case ===
+
+
+@dataclass
+class BashTest:
+    """A test case for bash compatibility."""
+    code: str
+    name: str = ''
+    description: str = ''
+    setup_env: dict[str, str] = field(default_factory=dict)
+    skip: str | None = None
