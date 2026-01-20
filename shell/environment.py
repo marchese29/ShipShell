@@ -80,6 +80,16 @@ class ShellEnvironment(MutableMapping):
         self._pysh_config_dir: Path = Path.home() / '.config' / 'pysh'
         self._shlvl: int = 0
 
+    @property
+    def last_exit(self) -> int:
+        """Get the last exit code ($?)."""
+        return self._last_exit
+
+    @last_exit.setter
+    def last_exit(self, code: int):
+        """Set the last exit code ($?)."""
+        self._last_exit = code
+
     # Variables with computed values that can't be set via __setitem__
     # TODO: We should be able to inherit some of these from the parent environment
     # (e.g. HOME, PATH) rather than always computing them ourselves

@@ -72,10 +72,11 @@ def _run_in_child(
     stdout_w: int,
     stderr_w: int,
 ) -> None:
-    """Child process: run bash code and write results to pipes."""
-    # Close read ends
-    # (result_r, stdout_r, stderr_r are closed by parent, we don't have refs here)
+    """Child process: run bash code and exit with the result code.
 
+    The exit code is communicated via the process exit status (waitpid).
+    Only probed env vars are written to the result pipe.
+    """
     # Redirect stdout/stderr to capture pipes
     os.dup2(stdout_w, 1)
     os.dup2(stderr_w, 2)
@@ -101,26 +102,22 @@ def _run_in_child(
     exit_code = 0
     try:
         run_bash_code(code, env=global_env)
-        exit_code = global_env.get('?', 0)
+        exit_code = global_env.last_exit
     except Exception as e:
         print(f'Error: {e}', file=sys.stderr)
         exit_code = 1
 
-    # Flush output before collecting results
+    # Flush output before writing results
     sys.stdout.flush()
     sys.stderr.flush()
 
-    # Collect probed state
-    result = {
-        'exit_code': exit_code,
-        'env': {var: global_env.get(var) for var in probe_env_vars},
-    }
-
-    # Write JSON to result pipe
+    # Write probed env vars to result pipe (only env, not exit_code)
+    probed_env = {var: global_env.get(var) for var in probe_env_vars}
     with os.fdopen(result_w, 'w') as f:
-        json.dump(result, f)
+        json.dump(probed_env, f)
 
-    os._exit(0)
+    # Exit with the actual exit code - parent reads this via waitpid
+    os._exit(exit_code)
 
 
 def _collect_from_child(
@@ -138,8 +135,14 @@ def _collect_from_child(
     os.close(stdout_w)
     os.close(stderr_w)
 
-    # Wait for child to complete
-    os.waitpid(pid, 0)
+    # Wait for child and get exit status
+    _, status = os.waitpid(pid, 0)
+    if os.WIFEXITED(status):
+        exit_code = os.WEXITSTATUS(status)
+    elif os.WIFSIGNALED(status):
+        exit_code = 128 + os.WTERMSIG(status)
+    else:
+        exit_code = 1
 
     # Read captured outputs
     with os.fdopen(stdout_r) as f:
@@ -147,13 +150,14 @@ def _collect_from_child(
     with os.fdopen(stderr_r) as f:
         stderr = f.read()
     with os.fdopen(result_r) as f:
-        result = json.load(f)
+        content = f.read()
+        probed_env = json.loads(content) if content else {}
 
     return CapturedState(
         stdout=stdout,
         stderr=stderr,
-        exit_code=result['exit_code'],
-        env=result['env'],
+        exit_code=exit_code,
+        env=probed_env,
     )
 
 

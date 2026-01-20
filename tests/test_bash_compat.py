@@ -21,7 +21,6 @@ ECHO_TESTS = [
     BashTest(
         name='echo_quoted',
         code='echo "hello world"',
-        skip='ShipShell-kq2: double-quoted strings not working',
     ),
     BashTest(
         name='echo_single_quoted',
@@ -63,6 +62,29 @@ CONTROL_FLOW_TESTS = [
     BashTest(
         name='semicolon',
         code='echo one; echo two',
+    ),
+]
+
+EXIT_CODE_TESTS = [
+    BashTest(
+        name='true_command',
+        code='true',
+    ),
+    BashTest(
+        name='false_command',
+        code='false',
+    ),
+    BashTest(
+        name='exit_zero',
+        code='exit 0',
+    ),
+    BashTest(
+        name='exit_one',
+        code='exit 1',
+    ),
+    BashTest(
+        name='exit_42',
+        code='exit 42',
     ),
 ]
 
@@ -111,3 +133,15 @@ def test_control_flow(test: BashTest):
 
     assert ours.stdout == bash.stdout, f'stdout mismatch'
     assert ours.exit_code == bash.exit_code, f'exit_code mismatch'
+
+
+@pytest.mark.parametrize('test', EXIT_CODE_TESTS, ids=make_test_id)
+def test_exit_codes(test: BashTest):
+    """Test exit code capture."""
+    if test.skip:
+        pytest.skip(test.skip)
+
+    ours = run_isolated(test.code, test.setup_env)
+    bash = run_bash_reference(test.code, test.setup_env)
+
+    assert ours.exit_code == bash.exit_code, f'exit_code mismatch: ours={ours.exit_code}, bash={bash.exit_code}'

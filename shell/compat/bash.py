@@ -819,8 +819,9 @@ class ShipBashInterpreter(BashCSTVisitor):
     def evaluate_number(self, node: ts.Node) -> BashValue:
         """Evaluate numbers.  Bash only supports integers"""
         # Expression evaluating to a number
-        if named_child := node.named_child(0):
-            return _bash_to_int(self.evaluate(named_child))
+        if node.named_child_count > 0:
+            child = _expect(node.named_child(0))
+            return _bash_to_int(self.evaluate(child))
 
         # Text as number
         try:
@@ -836,6 +837,10 @@ class ShipBashInterpreter(BashCSTVisitor):
     def evaluate_raw_string(self, node: ts.Node) -> BashValue:
         """Single-quoted strings are not given an expansion"""
         return self._get_text(node)[1:-1]
+
+    def evaluate_string_content(self, node: ts.Node) -> BashValue:
+        """Content inside double-quoted strings"""
+        return self._get_text(node)
 
     def evaluate_simple_expansion(self, node: ts.Node) -> BashValue:
         for child in node.named_children:
@@ -870,6 +875,10 @@ class ShipBashInterpreter(BashCSTVisitor):
             return matches if matches else text
 
         return text
+
+    def evaluate_variable_name(self, node: ts.Node) -> BashValue:
+        """Evaluate variable_name nodes - these are always literal identifiers."""
+        return self._get_text(node)
 
     def evaluate_binary_expression(self, node: ts.Node) -> BashValue:
         """Evaluate binary arithmetic expressions."""
@@ -1551,7 +1560,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                     continue
 
                 name = _bash_to_str(self.evaluate(name_node))
-                value = self.evaluate(value_node) if value_node else ''
+                value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
 
                 # Set the variable
                 self._env[name] = value
@@ -1803,10 +1812,10 @@ class ShipBashInterpreter(BashCSTVisitor):
     def visit_variable_assignment(self, node: ts.Node):
         """Handle variable assignment: var=value"""
         name_node = _expect(node.child_by_field_name('name'))
-        value_node = _expect(node.child_by_field_name('value'))
+        value_node = node.child_by_field_name('value')
 
-        name = _bash_to_str(self.evaluate(name_node))
-        value = self.evaluate(value_node)
+        name = self._get_text(name_node)
+        value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
 
         # Set in shell environment (not exported by default)
         self._env[name] = value

@@ -129,14 +129,17 @@ def run(
             # Parent - wait for child
             _, status = os.waitpid(pid, 0)
             if os.WIFEXITED(status):
-                return ShellResult(os.WEXITSTATUS(status))
+                result = ShellResult(os.WEXITSTATUS(status))
             elif os.WIFSIGNALED(status):
-                return ShellResult(128 + os.WTERMSIG(status))
+                result = ShellResult(128 + os.WTERMSIG(status))
             else:
                 raise RuntimeError('Unexpected process status')
     else:
         # Everything else handles its own execution model
-        return runnable._exec(stdin=stdin, stdout=stdout, stderr=stderr)
+        result = runnable._exec(stdin=stdin, stdout=stdout, stderr=stderr)
+
+    env.last_exit = result.exit_code
+    return result
 
 
 class ShellRunnable(ABC):
@@ -535,10 +538,18 @@ class Program:
     def __init__(self, name: str):
         self._cmd = name
 
-    def __call__(self, *args: Any, **env_overlay: Any) -> Command:
+    def __call__(self, *args: Any, **env_overlay: Any) -> Command | Builtin:
         return self.args(*args, **env_overlay)
 
-    def args(self, *args: Any, **env_overlay: Any) -> Command:
+    def args(self, *args: Any, **env_overlay: Any) -> Command | Builtin:
+        # Check if it's a builtin first
+        if builtin_factory := resolve_builtin(self._cmd):
+            builtin = builtin_factory(*args)
+            if len(env_overlay) > 0:
+                builtin.env(**env_overlay)
+            return builtin
+
+        # External command
         command = Command(self._cmd, *args)
         if len(env_overlay) > 0:
             command.env(**env_overlay)

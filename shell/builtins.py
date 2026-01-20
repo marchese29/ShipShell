@@ -207,10 +207,12 @@ def builtin_command[**P](f: Callable[P, None]) -> Callable[..., Builtin]:
             for i, value in enumerate(positional_args):
                 parsed_kwargs[positional_params[i]] = value
 
-        return Builtin(f.__name__, impl, parsed_kwargs)
+        return Builtin(builtin_name, impl, parsed_kwargs)
 
     # Register this builtin
-    BUILTIN_REGISTRY[f.__name__] = factory
+    # Strip trailing underscore (used to avoid Python keyword conflicts like exit_)
+    builtin_name = f.__name__.rstrip('_')
+    BUILTIN_REGISTRY[builtin_name] = factory
 
     return factory
 
@@ -414,7 +416,7 @@ def exit_(code: int = 0):
         exit_()     # Exit with code 0
         exit_(1)    # Exit with code 1
     """
-    sys.exit(code)
+    os._exit(code)
 
 
 def _find_in_path(name: str, find_all: bool = False) -> list[Path]:
