@@ -42,5 +42,15 @@
 
   {"name": "simple_herestring", "category": "herestring", "code": "cat <<< \"hello\""},
   {"name": "herestring_with_var", "category": "herestring", "code": "NAME=world; cat <<< \"hello $NAME\""},
-  {"name": "herestring_unquoted", "category": "herestring", "code": "cat <<< hello"}
+  {"name": "herestring_unquoted", "category": "herestring", "code": "cat <<< hello"},
+
+  {"name": "if_true", "category": "if_statement", "code": "if true; then echo yes; fi"},
+  {"name": "if_false", "category": "if_statement", "code": "if false; then echo yes; fi"},
+  {"name": "if_else", "category": "if_statement", "code": "if false; then echo yes; else echo no; fi"},
+  {"name": "if_elif", "category": "if_statement", "code": "if false; then echo one; elif true; then echo two; fi"},
+  {"name": "if_test_eq", "category": "if_statement", "code": "X=5; if [ \"$X\" = \"5\" ]; then echo match; fi"},
+  {"name": "if_test_ne", "category": "if_statement", "code": "X=5; if [ \"$X\" != \"6\" ]; then echo diff; fi"},
+
+  {"name": "arithmetic_assign", "category": "arithmetic", "code": "(( x = 5 )); echo $x"},
+  {"name": "arithmetic_expr", "category": "arithmetic", "code": "(( y = 2 + 3 )); echo $y"}
 ]

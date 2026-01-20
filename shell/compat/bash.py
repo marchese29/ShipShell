@@ -1024,8 +1024,10 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         op_text = self._get_text(op_node)
 
-        # Handle assignment operators
-        if op_text in (
+        # Handle assignment operators (only if left side is a variable name)
+        # In test contexts like [ "$X" = "5" ], left side is a string node, not variable_name
+        is_assignment_target = left_node is not None and left_node.type == 'variable_name'
+        if is_assignment_target and op_text in (
             '=',
             '+=',
             '-=',
@@ -1924,6 +1926,9 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         if child and child.type == 'else_clause':
             self.visit_children(child)
+        else:
+            # No branch executed - bash returns 0 in this case
+            self._env.last_exit = 0
 
     def visit_list(self, node: ts.Node):
         for child in node.children:
@@ -1977,7 +1982,7 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         if not commands_text:
             # Empty subshell: ()
-            self._env['?'] = 0
+            self._env.last_exit = 0
             return
 
         # Get ALL current variables (not just exported ones)
@@ -1992,14 +1997,26 @@ class ShipBashInterpreter(BashCSTVisitor):
         child = next((c for c in node.children if c.is_named), None)
         if child is None:
             # Empty test - should fail
-            self._env['?'] = 1
+            self._env.last_exit = 1
             return
 
         # Evaluate the expression using the existing evaluate() infrastructure
         result = _bash_to_int(self.evaluate(child))
 
         # Set exit code: 0 for true, 1 for false
-        self._env['?'] = 0 if result else 1
+        self._env.last_exit = 0 if result else 1
+
+    def visit_compound_statement(self, node: ts.Node):
+        """Execute arithmetic compound statement: (( expression ))"""
+        # Find the expression inside (( ... ))
+        for child in node.children:
+            if child.is_named:
+                # Evaluate the expression (handles assignments, arithmetic, etc.)
+                result = _bash_to_int(self.evaluate(child))
+                # Exit code: 0 if non-zero result, 1 if zero
+                self._env.last_exit = 0 if result else 1
+                return
+        self._env.last_exit = 0
 
     def visit_unset_command(self, node: ts.Node):
         """Handle unset command to remove variables"""
