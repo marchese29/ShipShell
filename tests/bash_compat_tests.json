@@ -183,5 +183,24 @@
   {"name": "positional_in_string", "category": "positional_params", "code": "set -- x y z; echo \"args: $@\""},
   {"name": "positional_count", "category": "positional_params", "code": "set -- one two three; echo $#"},
   {"name": "positional_individual", "category": "positional_params", "code": "set -- first second third; echo $1 $2 $3"},
-  {"name": "positional_clear", "category": "positional_params", "code": "set -- a b c; set --; echo \"count:$#\""}
+  {"name": "positional_clear", "category": "positional_params", "code": "set -- a b c; set --; echo \"count:$#\""},
+
+  {"name": "unset_simple", "category": "unset", "code": "X=hello; unset X; echo ${X:-gone}"},
+  {"name": "unset_multiple", "category": "unset", "code": "A=1; B=2; C=3; unset A C; echo ${A:-a} ${B} ${C:-c}"},
+  {"name": "unset_nonexistent", "category": "unset", "code": "unset DOES_NOT_EXIST_XYZ; echo ok"},
+  {"name": "unset_preserves_others", "category": "unset", "code": "X=x; Y=y; Z=z; unset Y; echo $X $Z"},
+
+  {"name": "file_exists", "category": "file_test", "code": "[ -e /dev/null ]; echo $?"},
+  {"name": "file_not_exists", "category": "file_test", "code": "[ -e /nonexistent_path_xyz ]; echo $?"},
+  {"name": "file_is_file", "category": "file_test", "code": "[ -f /etc/passwd ]; echo $?"},
+  {"name": "file_is_dir", "category": "file_test", "code": "[ -d /tmp ]; echo $?"},
+  {"name": "file_not_dir", "category": "file_test", "code": "[ -d /dev/null ]; echo $?"},
+  {"name": "file_readable", "category": "file_test", "code": "[ -r /dev/null ]; echo $?"},
+  {"name": "file_writable", "category": "file_test", "code": "[ -w /dev/null ]; echo $?"},
+  {"name": "file_size_nonzero", "category": "file_test", "code": "[ -s /etc/passwd ]; echo $?"},
+  {"name": "file_size_zero", "category": "file_test", "code": "[ -s /dev/null ]; echo $?"},
+  {"name": "file_chardev", "category": "file_test", "code": "[ -c /dev/null ]; echo $?"},
+  {"name": "file_not_chardev", "category": "file_test", "code": "[ -c /tmp ]; echo $?"},
+  {"name": "file_test_bracket", "category": "file_test", "code": "[[ -e /dev/null ]]; echo $?"},
+  {"name": "file_combined_and", "category": "file_test", "code": "[ -e /dev/null ] && [ -d /tmp ]; echo $?"}
 ]
