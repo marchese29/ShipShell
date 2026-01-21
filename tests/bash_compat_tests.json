@@ -202,5 +202,15 @@
   {"name": "file_chardev", "category": "file_test", "code": "[ -c /dev/null ]; echo $?"},
   {"name": "file_not_chardev", "category": "file_test", "code": "[ -c /tmp ]; echo $?"},
   {"name": "file_test_bracket", "category": "file_test", "code": "[[ -e /dev/null ]]; echo $?"},
-  {"name": "file_combined_and", "category": "file_test", "code": "[ -e /dev/null ] && [ -d /tmp ]; echo $?"}
+  {"name": "file_combined_and", "category": "file_test", "code": "[ -e /dev/null ] && [ -d /tmp ]; echo $?"},
+
+  {"name": "array_assign", "category": "array", "code": "arr=(a b c); echo ${arr[0]}"},
+  {"name": "array_subscript_all", "category": "array", "code": "arr=(one two three); echo ${arr[@]}"},
+  {"name": "array_subscript_star", "category": "array", "code": "arr=(one two three); echo ${arr[*]}"},
+  {"name": "array_subscript_indices", "category": "array", "code": "arr=(a b c); echo ${arr[0]} ${arr[1]} ${arr[2]}"},
+  {"name": "array_length", "category": "array", "code": "arr=(a b c d e); echo ${#arr[@]}"},
+  {"name": "array_quoted_at", "category": "array", "code": "arr=(one two three); echo \"${arr[@]}\""},
+  {"name": "array_in_string", "category": "array", "code": "arr=(x y z); echo \"items: ${arr[@]}\""},
+  {"name": "array_empty", "category": "array", "code": "arr=(); echo \"len:${#arr[@]}\""},
+  {"name": "array_single_element", "category": "array", "code": "arr=(only); echo ${arr[0]} ${#arr[@]}"}
 ]

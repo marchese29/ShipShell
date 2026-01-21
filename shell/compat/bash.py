@@ -919,6 +919,9 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         # Return the value as-is if no operators
         if operator is None:
+            # Preserve lists (arrays with @ or * subscript)
+            if isinstance(value, list):
+                return value
             return _bash_to_str(value)
 
         match operator:
@@ -1028,7 +1031,8 @@ class ShipBashInterpreter(BashCSTVisitor):
         var_name_node = _expect(node.child_by_field_name('name'))
         index_node = _expect(node.child_by_field_name('index'))
 
-        index_val = _bash_to_int(self.evaluate(index_node))
+        # Get the raw index text to check for special subscripts @ and *
+        index_text = self._get_text(index_node)
         var_name = self._get_text(var_name_node)
 
         var_value = self._env.get(var_name)
@@ -1036,8 +1040,24 @@ class ShipBashInterpreter(BashCSTVisitor):
         if var_value is None:
             self._check_nounset(var_name)
             return ''
+
+        # Handle special subscripts @ and * for arrays
+        if index_text in ('@', '*'):
+            if isinstance(var_value, list):
+                # @ and * both return all elements as a list
+                # (The difference is in quoting context, handled elsewhere)
+                return var_value
+            else:
+                # Scalar variable with @ or * subscript returns the value
+                return var_value
+
+        # Regular numeric index
         if not isinstance(var_value, list):
-            return ''
+            # Scalar with numeric subscript - index 0 returns value, others empty
+            index_val = _bash_to_int(self.evaluate(index_node))
+            return var_value if index_val == 0 else ''
+
+        index_val = _bash_to_int(self.evaluate(index_node))
         if isinstance(index_val, list):
             return ''
         if isinstance(index_val, str):
@@ -2241,7 +2261,13 @@ class ShipBashInterpreter(BashCSTVisitor):
         value_node = node.child_by_field_name('value')
 
         name = self._get_text(name_node)
-        value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
+        if value_node:
+            value = self.evaluate(value_node)
+            # Preserve arrays as-is, convert other types to strings
+            if not isinstance(value, list):
+                value = _bash_to_str(value)
+        else:
+            value = ''
 
         # Set in shell environment (not exported by default)
         self._env[name] = value
