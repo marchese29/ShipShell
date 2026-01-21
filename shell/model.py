@@ -368,10 +368,13 @@ class Builtin(ShellRunnable):
 
 
 class Pipeline(ShellRunnable):
-    def __init__(self, predecessors: list[NotPipeline], final_cmd: NotPipeline):
+    def __init__(
+        self, predecessors: list[NotPipeline], final_cmd: NotPipeline, pipefail: bool = False
+    ):
         super().__init__()
         self.predecessors = predecessors
         self.final_cmd = final_cmd
+        self.pipefail = pipefail
 
     @override
     def _exec(
@@ -450,9 +453,23 @@ class Pipeline(ShellRunnable):
         # Close the final input pipe
         os.close(current_pipe_read)
 
-        # Wait for all children
+        # Wait for all children and collect exit codes
+        exit_codes = []
         for pid in child_pids:
-            os.waitpid(pid, 0)
+            _, status = os.waitpid(pid, 0)
+            if os.WIFEXITED(status):
+                exit_codes.append(os.WEXITSTATUS(status))
+            elif os.WIFSIGNALED(status):
+                exit_codes.append(128 + os.WTERMSIG(status))
+            else:
+                exit_codes.append(1)
+
+        # If pipefail, use first non-zero exit code from pipeline stages
+        if self.pipefail:
+            for code in exit_codes:
+                if code != 0:
+                    result.exit_code = code
+                    break
 
         return result
 
@@ -463,9 +480,10 @@ class Pipeline(ShellRunnable):
             return Pipeline(
                 [*self.predecessors, self.final_cmd, *pipeline.predecessors],
                 pipeline.final_cmd,
+                pipefail=self.pipefail or pipeline.pipefail,
             )
         value = cast(NotPipeline, value)
-        return Pipeline([*self.predecessors, self.final_cmd], value)
+        return Pipeline([*self.predecessors, self.final_cmd], value, pipefail=self.pipefail)
 
 
 class Subshell(ShellRunnable):

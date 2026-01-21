@@ -144,5 +144,35 @@
   {"name": "test_bracket_int_eq", "category": "test_bracket", "code": "[[ 5 -eq 5 ]]; echo $?"},
   {"name": "test_bracket_int_ne", "category": "test_bracket", "code": "[[ 5 -ne 6 ]]; echo $?"},
   {"name": "test_bracket_logical_and", "category": "test_bracket", "code": "[[ 1 -eq 1 && 2 -eq 2 ]]; echo $?"},
-  {"name": "test_bracket_logical_or", "category": "test_bracket", "code": "[[ 1 -eq 1 || 2 -eq 3 ]]; echo $?"}
+  {"name": "test_bracket_logical_or", "category": "test_bracket", "code": "[[ 1 -eq 1 || 2 -eq 3 ]]; echo $?"},
+
+  {"name": "set_errexit_stops", "category": "set_command", "code": "set -e; false; echo should_not_print", "check_stdout": false},
+  {"name": "set_errexit_success", "category": "set_command", "code": "set -e; true; echo ok"},
+  {"name": "set_errexit_disable", "category": "set_command", "code": "set -e; set +e; false; echo still_running"},
+  {"name": "set_errexit_if_condition", "category": "set_command", "code": "set -e; if false; then echo no; fi; echo yes"},
+  {"name": "set_errexit_and_chain", "category": "set_command", "code": "set -e; false && echo no; echo yes"},
+  {"name": "set_errexit_or_chain", "category": "set_command", "code": "set -e; false || echo recovered; echo yes"},
+  {"name": "set_errexit_negated", "category": "set_command", "code": "set -e; ! false; echo yes"},
+  {"name": "set_errexit_while_condition", "category": "set_command", "code": "set -e; while false; do echo no; done; echo yes"},
+  {"name": "set_errexit_combined_flags", "category": "set_command", "code": "set -ex; true; echo ok", "check_stdout": false},
+  {"name": "set_errexit_long_form", "category": "set_command", "code": "set -o errexit; false; echo nope", "check_stdout": false},
+  {"name": "set_euo_pipefail", "category": "set_command", "code": "set -euo pipefail; true; echo ok"},
+
+  {"name": "nounset_undefined", "category": "nounset", "code": "set -u; echo $UNDEFINED_VAR_XYZ", "check_stdout": false},
+  {"name": "nounset_defined", "category": "nounset", "code": "set -u; X=hello; echo $X"},
+  {"name": "nounset_with_default", "category": "nounset", "code": "set -u; echo ${UNDEFINED_VAR:-default}"},
+  {"name": "nounset_with_assign", "category": "nounset", "code": "set -u; echo ${NEWVAR:=assigned}; echo $NEWVAR"},
+  {"name": "nounset_disabled", "category": "nounset", "code": "set -u; set +u; echo ${UNDEFINED}done"},
+  {"name": "nounset_special_vars", "category": "nounset", "code": "set -u; echo $?$#"},
+  {"name": "nounset_with_plus", "category": "nounset", "code": "set -u; X=val; echo ${X:+replacement}"},
+  {"name": "nounset_empty_with_plus", "category": "nounset", "code": "set -u; X=; echo ${X:+replacement}done"},
+
+  {"name": "pipefail_false_true", "category": "pipefail", "code": "set -o pipefail; false | true; echo $?"},
+  {"name": "pipefail_true_false", "category": "pipefail", "code": "set -o pipefail; true | false; echo $?"},
+  {"name": "pipefail_all_true", "category": "pipefail", "code": "set -o pipefail; true | true; echo $?"},
+  {"name": "pipefail_all_false", "category": "pipefail", "code": "set -o pipefail; false | false; echo $?"},
+  {"name": "pipefail_disabled", "category": "pipefail", "code": "false | true; echo $?"},
+  {"name": "pipefail_three_stage", "category": "pipefail", "code": "set -o pipefail; true | false | true; echo $?"},
+  {"name": "pipefail_first_fails", "category": "pipefail", "code": "set -o pipefail; false | true | true; echo $?"},
+  {"name": "pipefail_short_flag", "category": "pipefail", "code": "set -o pipefail; false | echo ok; echo $?"}
 ]

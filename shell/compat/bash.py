@@ -8,14 +8,15 @@ import stat
 import sys
 import tempfile
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import tree_sitter_bash as tsbash
 from tree_sitter import Language, Parser
 
 from shell.environment import ShellEnvironment, env as global_env
-from shell.model import ShellRunnable, capture, prog
+from shell.model import NotPipeline, Pipeline, ShellRunnable, capture, prog
 
 if TYPE_CHECKING:
     import tree_sitter as ts
@@ -273,6 +274,30 @@ class BashCSTVisitor:
         return ''.join([_bash_to_str(p) for p in parts])
 
 
+# Mapping of short flags to shell option names for `set` command
+FLAG_TO_OPTION = {
+    'a': 'allexport',
+    'b': 'notify',
+    'e': 'errexit',
+    'f': 'noglob',
+    'h': 'hashall',
+    'k': 'keyword',
+    'm': 'monitor',
+    'n': 'noexec',
+    'p': 'privileged',
+    't': 'onecmd',
+    'u': 'nounset',
+    'v': 'verbose',
+    'x': 'xtrace',
+    'B': 'braceexpand',
+    'C': 'noclobber',
+    'E': 'errtrace',
+    'H': 'histexpand',
+    'P': 'physical',
+    'T': 'functrace',
+}
+
+
 class ShipBashInterpreter(BashCSTVisitor):
     def __init__(
         self,
@@ -287,6 +312,40 @@ class ShipBashInterpreter(BashCSTVisitor):
         self._env = env
         self._temp_files: list[str] = []  # Temp files to clean up (e.g., heredocs)
         self._resolve_vars = False  # When True, variable_name nodes are looked up
+
+        # Shell options (set -o). All are parsed; behavior implemented incrementally.
+        self._shell_options: dict[str, bool] = {
+            'errexit': False,
+            'nounset': False,
+            'xtrace': False,
+            'pipefail': False,
+            'noglob': False,
+            'allexport': False,
+            'verbose': False,
+            'noexec': False,
+            'braceexpand': True,    # ON by default
+            'noclobber': False,
+            'errtrace': False,
+            'functrace': False,
+            'physical': False,
+            'hashall': True,        # ON by default
+            'keyword': False,
+            'onecmd': False,
+            'privileged': False,
+            'histexpand': False,
+            'notify': False,
+            'monitor': False,
+            'emacs': False,
+            'vi': False,
+            'history': False,
+            'ignoreeof': False,
+            'interactive-comments': True,  # ON by default
+            'posix': False,
+            'nolog': False,
+        }
+
+        # True when inside a context where errexit shouldn't trigger (conditions, && chains)
+        self._errexit_suppressed = False
 
     def cleanup(self):
         """Clean up temporary resources created during execution."""
@@ -305,6 +364,54 @@ class ShipBashInterpreter(BashCSTVisitor):
         """Context manager exit - ensures cleanup is called."""
         self.cleanup()
         return False  # Don't suppress exceptions
+
+    # --- Shell option helpers ---
+
+    @contextmanager
+    def _suppress_errexit(self):
+        """Context manager to suppress errexit (for conditions, && chains, etc.)."""
+        was_suppressed = self._errexit_suppressed
+        self._errexit_suppressed = True
+        try:
+            yield
+        finally:
+            self._errexit_suppressed = was_suppressed
+
+    def _check_errexit(self):
+        """Raise BashScriptError if errexit conditions met."""
+        if (
+            self._shell_options['errexit']
+            and not self._errexit_suppressed
+            and self._env.last_exit != 0
+        ):
+            raise BashScriptError(
+                f'set -e: command exited with status {self._env.last_exit}',
+                self._env.last_exit,
+            )
+
+    def _check_nounset(self, var_name: str) -> None:
+        """Raise BashScriptError if nounset enabled and variable is unset.
+
+        Special variables ($?, $#, $$, $!, $@, $*) are always available.
+        """
+        # Special variables are always defined - skip nounset check
+        if var_name in ('?', '#', '$', '!', '@', '*', '-', '_'):
+            return
+        if self._shell_options['nounset'] and var_name not in self._env:
+            raise BashScriptError(f'{var_name}: unbound variable', 127)
+
+    def _build_shellopts(self) -> str:
+        """Build SHELLOPTS string for subshell inheritance."""
+        return ':'.join(name for name, enabled in self._shell_options.items() if enabled)
+
+    def visit(self, node: ts.Node):
+        """Override to check errexit after each statement."""
+        super().visit(node)
+        # Don't check errexit for 'list' nodes - they contain && or || chains
+        # which shouldn't trigger errexit. Individual commands inside are
+        # handled separately with suppression.
+        if node.type != 'list':
+            self._check_errexit()
 
     def _get_text(self, node: ts.Node) -> str:
         return self._source[node.start_byte : node.end_byte]
@@ -796,6 +903,9 @@ class ShipBashInterpreter(BashCSTVisitor):
             elif var_name in ('@', '*'):
                 value = self._positional_params
             else:
+                # Check nounset unless operator handles unset explicitly
+                if operator not in ('-', ':-', '=', ':=', '+', ':+', '?', ':?'):
+                    self._check_nounset(var_name)
                 value = _bash_to_str(self._env.get(var_name, None))
         else:
             # Subscript
@@ -923,7 +1033,10 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         var_value = self._env.get(var_name)
 
-        if var_value is None or not isinstance(var_value, list):
+        if var_value is None:
+            self._check_nounset(var_name)
+            return ''
+        if not isinstance(var_value, list):
             return ''
         if isinstance(index_val, list):
             return ''
@@ -1027,6 +1140,8 @@ class ShipBashInterpreter(BashCSTVisitor):
                 var_name = self._get_text(child)
                 if var_name == '0':
                     return self._script_name
+                elif var_name == '#':
+                    return len(self._positional_params)
                 elif var_name.isnumeric():
                     idx = int(var_name) - 1
                     if 0 <= idx < len(self._positional_params):
@@ -1036,6 +1151,7 @@ class ShipBashInterpreter(BashCSTVisitor):
                 elif var_name in ('@', '*'):
                     return self._positional_params
                 else:
+                    self._check_nounset(var_name)
                     return self._env.get(var_name, '')
         return ''
 
@@ -1634,15 +1750,20 @@ class ShipBashInterpreter(BashCSTVisitor):
 
     def _build_pipeline_runnable(self, pipeline_node: ts.Node) -> ShellRunnable:
         """Build a runnable from a pipeline node by chaining commands."""
-        runnable = None
-        for cmd in [child for child in pipeline_node.children if child.is_named]:
-            if runnable is None:
-                runnable = self._node_to_runnable(cmd)
-            else:
-                runnable |= self._node_to_runnable(cmd)
-        if runnable is None:
+        commands = [
+            self._node_to_runnable(child)
+            for child in pipeline_node.children
+            if child.is_named
+        ]
+        if not commands:
             raise ValueError('Empty pipeline')
-        return runnable
+        if len(commands) == 1:
+            return commands[0]
+        # Create Pipeline with pipefail option from shell state
+        # Cast is safe: pipeline children are commands, not nested pipelines
+        predecessors = cast(list[NotPipeline], commands[:-1])
+        final_cmd = cast(NotPipeline, commands[-1])
+        return Pipeline(predecessors, final_cmd, pipefail=self._shell_options['pipefail'])
 
     def _node_to_runnable(self, node: ts.Node) -> ShellRunnable:
         """Convert any executable node to a ShipRunnable.
@@ -1666,6 +1787,11 @@ class ShipBashInterpreter(BashCSTVisitor):
 
                 # Get ALL current variables (not just exported)
                 all_vars = dict(self._env.items())
+
+                # Pass shell options via SHELLOPTS for inheritance
+                shellopts = self._build_shellopts()
+                if shellopts:
+                    all_vars['SHELLOPTS'] = shellopts
 
                 # Return a runnable that executes bash with all variables
                 return prog('bash')('-c', commands_text).env(**all_vars)
@@ -1729,7 +1855,54 @@ class ShipBashInterpreter(BashCSTVisitor):
                     # ;; - default termination, stop processing
                     return
 
+    def _handle_set_command(self, node: ts.Node):
+        """Handle the set builtin for shell options.
+
+        Supports:
+        - Short flags: set -e, set +e, set -ex, set -euo
+        - Long form: set -o errexit, set +o errexit
+        - Combined: set -o errexit -x, set -euo pipefail
+        """
+        args = [self._get_text(arg) for arg in node.children_by_field_name('argument')]
+
+        i = 0
+        while i < len(args):
+            arg = args[i]
+
+            if arg in ('-o', '+o'):
+                # -o option or +o option (with space)
+                enable = arg[0] == '-'
+                i += 1
+                if i < len(args):
+                    opt_name = args[i]
+                    if opt_name in self._shell_options:
+                        self._shell_options[opt_name] = enable
+            elif arg.startswith(('-o', '+o')):
+                # -oerrexit (no space)
+                enable = arg[0] == '-'
+                opt_name = arg[2:]
+                if opt_name in self._shell_options:
+                    self._shell_options[opt_name] = enable
+            elif arg.startswith(('-', '+')):
+                # -e, +e, -ex, -eux, etc.
+                enable = arg[0] == '-'
+                flags = arg[1:]
+                for flag in flags:
+                    if flag in FLAG_TO_OPTION:
+                        opt_name = FLAG_TO_OPTION[flag]
+                        self._shell_options[opt_name] = enable
+
+            i += 1
+
+        self._env.last_exit = 0
+
     def visit_command(self, node: ts.Node):
+        # Intercept 'set' builtin - it modifies interpreter state, not a real command
+        name_node = node.child_by_field_name('name')
+        if name_node and self._get_text(name_node) == 'set':
+            self._handle_set_command(node)
+            return
+
         runnable = self._build_command_runnable(node)
         # Apply any inline redirects (e.g., here strings: cat <<< "hello")
         runnable = self._apply_redirects(runnable, node)
@@ -1870,12 +2043,13 @@ class ShipBashInterpreter(BashCSTVisitor):
     def _visit_elif_clause(self, node: ts.Node) -> bool:
         it = iter(node.children)
 
-        # Run through everything before the "then" node
+        # Run through everything before the "then" node (condition - suppress errexit)
         child = next(it, None)
-        while child and child.type != 'then':
-            if child.is_named:
-                self.visit(child)
-            child = next(it, None)
+        with self._suppress_errexit():
+            while child and child.type != 'then':
+                if child.is_named:
+                    self.visit(child)
+                child = next(it, None)
 
         # Return here if the condition doesn't pass
         if self._env.get('?', 0) != 0:
@@ -1890,12 +2064,13 @@ class ShipBashInterpreter(BashCSTVisitor):
     def visit_if_statement(self, node: ts.Node):
         it = iter(node.children)
 
-        # Run through everything before the "then" node
+        # Run through everything before the "then" node (condition - suppress errexit)
         child = next(it, None)
-        while child and child.type != 'then':
-            if child.is_named:
-                self.visit(child)
-            child = next(it, None)
+        with self._suppress_errexit():
+            while child and child.type != 'then':
+                if child.is_named:
+                    self.visit(child)
+                child = next(it, None)
         child = next(it, None)  # Consume the "then" node
 
         # Work through the body, running statements if condition was successful
@@ -1920,9 +2095,16 @@ class ShipBashInterpreter(BashCSTVisitor):
             self._env.last_exit = 0
 
     def visit_list(self, node: ts.Node):
+        # Check if this list contains && or || (errexit suppressed for those)
+        has_and_or = any(c.type in ('&&', '||') for c in node.children)
+
         for child in node.children:
             if child.is_named:
-                self.visit(child)
+                if has_and_or:
+                    with self._suppress_errexit():
+                        self.visit(child)
+                else:
+                    self.visit(child)
             elif child.type == '&&':
                 if self._env.get('?', 0) != 0:
                     return
@@ -1935,9 +2117,10 @@ class ShipBashInterpreter(BashCSTVisitor):
         if not child_nodes:
             raise ValueError('Negated command has no child')
 
-        # Build a runnable from the child and negate it
-        runnable = self._node_to_runnable(child_nodes[0])
-        runnable.neg()()
+        # Build a runnable from the child and negate it (suppress errexit - negation inverts result)
+        with self._suppress_errexit():
+            runnable = self._node_to_runnable(child_nodes[0])
+            runnable.neg()()
 
     def visit_pipeline(self, node: ts.Node):
         # Build and execute the pipeline using the helper method
@@ -1976,6 +2159,11 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         # Get ALL current variables (not just exported ones)
         all_vars = dict(self._env.items())
+
+        # Pass shell options via SHELLOPTS for inheritance
+        shellopts = self._build_shellopts()
+        if shellopts:
+            all_vars['SHELLOPTS'] = shellopts
 
         # Execute bash with all variables passed via with_env
         sub_bash = prog('bash')('-c', commands_text).env(**all_vars)
@@ -2046,10 +2234,11 @@ class ShipBashInterpreter(BashCSTVisitor):
     def visit_while_statement(self, node: ts.Node):
         # Loop while condition is true (exit code 0)
         while True:
-            # Execute condition (first named child with field 'condition')
+            # Execute condition (suppress errexit - condition failure is expected)
             condition_node = node.child_by_field_name('condition')
             if condition_node:
-                self.visit(condition_node)
+                with self._suppress_errexit():
+                    self.visit(condition_node)
 
             # If condition failed (non-zero exit), exit loop
             if self._env.last_exit != 0:
@@ -2134,4 +2323,4 @@ def run_bash_code(
             interpreter.visit(tree.root_node)
         except BashScriptError as e:
             print(f'bash: {e}', file=sys.stderr)
-            env['?'] = e.exit_code
+            env.last_exit = e.exit_code
