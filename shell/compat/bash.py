@@ -377,6 +377,16 @@ class ShipBashInterpreter(BashCSTVisitor):
         finally:
             self._errexit_suppressed = was_suppressed
 
+    @contextmanager
+    def _arithmetic_context(self):
+        """Context manager for arithmetic evaluation where bare words are variables."""
+        old_resolve_vars = self._resolve_vars
+        self._resolve_vars = True
+        try:
+            yield
+        finally:
+            self._resolve_vars = old_resolve_vars
+
     def _check_errexit(self):
         """Raise BashScriptError if errexit conditions met."""
         if (
@@ -770,10 +780,7 @@ class ShipBashInterpreter(BashCSTVisitor):
         return ''.join(result)
 
     def evaluate_arithmetic_expansion(self, node: ts.Node) -> BashValue:
-        # Enable variable resolution for arithmetic context
-        old_resolve_vars = self._resolve_vars
-        self._resolve_vars = True
-        try:
+        with self._arithmetic_context():
             parts = []
             for child in node.named_children:
                 parts.append(self.evaluate(child))
@@ -783,8 +790,6 @@ class ShipBashInterpreter(BashCSTVisitor):
                 return parts[0]
             else:
                 return ''.join([_bash_to_str(p) for p in parts])
-        finally:
-            self._resolve_vars = old_resolve_vars
 
     def evaluate_brace_expression(self, node: ts.Node) -> BashValue:
         result = _expand_range(self._get_text(node)[1:-1])
@@ -1188,6 +1193,10 @@ class ShipBashInterpreter(BashCSTVisitor):
     def evaluate_word(self, node: ts.Node) -> BashValue:
         text = self._get_text(node)
 
+        # In arithmetic context, bare words are variable references
+        if self._resolve_vars and text.isidentifier():
+            return self._env.get(text, '')
+
         # Expand tilde at the start of the word (unquoted words only)
         # os.path.expanduser handles ~, ~/path, ~username, and ~username/path
         if text.startswith('~'):
@@ -1227,7 +1236,16 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         # Handle assignment operators (only if left side is a variable name)
         # In test contexts like [ "$X" = "5" ], left side is a string node, not variable_name
-        is_assignment_target = left_node is not None and left_node.type == 'variable_name'
+        # In arithmetic contexts (C-style for loops), words that are identifiers are valid targets
+        is_word_identifier = (
+            self._resolve_vars
+            and left_node is not None
+            and left_node.type == 'word'
+            and self._get_text(left_node).isidentifier()
+        )
+        is_assignment_target = (
+            left_node is not None and left_node.type == 'variable_name'
+        ) or is_word_identifier
         if is_assignment_target and op_text in (
             '=',
             '+=',
@@ -1420,45 +1438,23 @@ class ShipBashInterpreter(BashCSTVisitor):
             case '^':
                 return _bash_to_int(left_val) ^ right_val
             case '<':
-                if isinstance(left_val, int) and isinstance(right_val, int):
-                    return 1 if left_val < right_val else 0
-                else:
-                    raise ValueError('Invalid binary operand types')
+                return 1 if _bash_to_int(left_val) < right_val else 0
             case '>':
-                if isinstance(left_val, int) and isinstance(right_val, int):
-                    return 1 if left_val > right_val else 0
-                else:
-                    raise ValueError('Invalid binary operand types')
+                return 1 if _bash_to_int(left_val) > right_val else 0
             case '<=':
-                if isinstance(left_val, int) and isinstance(right_val, int):
-                    return 1 if left_val <= right_val else 0
-                else:
-                    raise ValueError('Invalid binary operand types')
+                return 1 if _bash_to_int(left_val) <= right_val else 0
             case '>=':
-                if isinstance(left_val, int) and isinstance(right_val, int):
-                    return 1 if left_val >= right_val else 0
-                else:
-                    raise ValueError('Invalid binary operand types')
+                return 1 if _bash_to_int(left_val) >= right_val else 0
             case '==':
-                if isinstance(left_val, int) and isinstance(right_val, int):
-                    return 1 if left_val == right_val else 0
-                else:
-                    raise ValueError('Invalid binary operand types')
+                # In arithmetic context, == is numeric equality
+                # String equality is handled earlier with = and == in test context
+                return 1 if _bash_to_int(left_val) == right_val else 0
             case '!=':
-                if isinstance(left_val, int) and isinstance(right_val, int):
-                    return 1 if left_val != right_val else 0
-                else:
-                    raise ValueError('Invalid binary operand types')
+                return 1 if _bash_to_int(left_val) != right_val else 0
             case '&&':
-                if isinstance(left_val, int) and isinstance(right_val, int):
-                    return 1 if left_val and right_val else 0
-                else:
-                    raise ValueError('Invalid binary operand types')
+                return 1 if _bash_to_int(left_val) and right_val else 0
             case '||':
-                if isinstance(left_val, int) and isinstance(right_val, int):
-                    return 1 if left_val or right_val else 0
-                else:
-                    raise ValueError('Invalid binary operand types')
+                return 1 if _bash_to_int(left_val) or right_val else 0
             case _:
                 return 0
 
@@ -1986,15 +1982,16 @@ class ShipBashInterpreter(BashCSTVisitor):
         C-style for loops can contain both expressions (like i++, i<10) and
         statements (like variable_assignment). This helper handles both cases.
         """
-        if node.type == 'variable_assignment':
-            # Execute the assignment and return the assigned value
-            self.visit(node)
-            name_node = _expect(node.child_by_field_name('name'))
-            var_name = self._get_text(name_node)
-            return _bash_to_int(self._env.get(var_name, 0))
-        else:
-            # Regular expression - evaluate and return
-            return _bash_to_int(self.evaluate(node))
+        with self._arithmetic_context():
+            if node.type == 'variable_assignment':
+                # Execute the assignment and return the assigned value
+                self.visit(node)
+                name_node = _expect(node.child_by_field_name('name'))
+                var_name = self._get_text(name_node)
+                return _bash_to_int(self._env.get(var_name, 0))
+            else:
+                # Regular expression - evaluate and return
+                return _bash_to_int(self.evaluate(node))
 
     def visit_c_style_for_statement(self, node: ts.Node):
         """Handle c-style for loops: `for ((i=0; i<10; i++)); do ...; done`"""
@@ -2228,10 +2225,7 @@ class ShipBashInterpreter(BashCSTVisitor):
 
     def visit_compound_statement(self, node: ts.Node):
         """Execute arithmetic compound statement: (( expression ))"""
-        # Enable variable resolution for arithmetic context
-        old_resolve_vars = self._resolve_vars
-        self._resolve_vars = True
-        try:
+        with self._arithmetic_context():
             # Find the expression inside (( ... ))
             for child in node.children:
                 if child.is_named:
@@ -2241,8 +2235,6 @@ class ShipBashInterpreter(BashCSTVisitor):
                     self._env.last_exit = 0 if result else 1
                     return
             self._env.last_exit = 0
-        finally:
-            self._resolve_vars = old_resolve_vars
 
     def visit_unset_command(self, node: ts.Node):
         """Handle unset command to remove variables"""

@@ -212,5 +212,13 @@
   {"name": "array_quoted_at", "category": "array", "code": "arr=(one two three); echo \"${arr[@]}\""},
   {"name": "array_in_string", "category": "array", "code": "arr=(x y z); echo \"items: ${arr[@]}\""},
   {"name": "array_empty", "category": "array", "code": "arr=(); echo \"len:${#arr[@]}\""},
-  {"name": "array_single_element", "category": "array", "code": "arr=(only); echo ${arr[0]} ${#arr[@]}"}
+  {"name": "array_single_element", "category": "array", "code": "arr=(only); echo ${arr[0]} ${#arr[@]}"},
+
+  {"name": "cstyle_for_basic", "category": "cstyle_for", "code": "for ((i=0; i<3; i++)); do echo $i; done"},
+  {"name": "cstyle_for_decrement", "category": "cstyle_for", "code": "for ((i=3; i>0; i--)); do echo $i; done"},
+  {"name": "cstyle_for_step", "category": "cstyle_for", "code": "for ((i=0; i<10; i+=2)); do echo $i; done"},
+  {"name": "cstyle_for_multiply", "category": "cstyle_for", "code": "for ((i=1; i<=16; i*=2)); do echo $i; done"},
+  {"name": "cstyle_for_nested_expr", "category": "cstyle_for", "code": "for ((i=0; i<2+1; i++)); do echo $i; done"},
+  {"name": "cstyle_for_no_body", "category": "cstyle_for", "code": "for ((i=0; i<3; i++)); do :; done; echo done"},
+  {"name": "cstyle_for_var_compare", "category": "cstyle_for", "code": "n=3; for ((i=0; i<n; i++)); do echo $i; done"}
 ]
