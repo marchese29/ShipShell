@@ -174,5 +174,14 @@
   {"name": "pipefail_disabled", "category": "pipefail", "code": "false | true; echo $?"},
   {"name": "pipefail_three_stage", "category": "pipefail", "code": "set -o pipefail; true | false | true; echo $?"},
   {"name": "pipefail_first_fails", "category": "pipefail", "code": "set -o pipefail; false | true | true; echo $?"},
-  {"name": "pipefail_short_flag", "category": "pipefail", "code": "set -o pipefail; false | echo ok; echo $?"}
+  {"name": "pipefail_short_flag", "category": "pipefail", "code": "set -o pipefail; false | echo ok; echo $?"},
+
+  {"name": "positional_at_unquoted", "category": "positional_params", "code": "set -- a b c; echo $@"},
+  {"name": "positional_at_quoted", "category": "positional_params", "code": "set -- a b c; echo \"$@\""},
+  {"name": "positional_star_unquoted", "category": "positional_params", "code": "set -- a b c; echo $*"},
+  {"name": "positional_star_quoted", "category": "positional_params", "code": "set -- a b c; echo \"$*\""},
+  {"name": "positional_in_string", "category": "positional_params", "code": "set -- x y z; echo \"args: $@\""},
+  {"name": "positional_count", "category": "positional_params", "code": "set -- one two three; echo $#"},
+  {"name": "positional_individual", "category": "positional_params", "code": "set -- first second third; echo $1 $2 $3"},
+  {"name": "positional_clear", "category": "positional_params", "code": "set -- a b c; set --; echo \"count:$#\""}
 ]

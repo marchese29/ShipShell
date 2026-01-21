@@ -1087,7 +1087,12 @@ class ShipBashInterpreter(BashCSTVisitor):
             if child.start_byte > current_pos:
                 result.append(self._source[current_pos : child.start_byte])
             # Evaluate the child (handles expansions)
-            result.append(_bash_to_str(self.evaluate(child)))
+            # In string context, $@ and $* expand to all elements joined by space
+            child_value = self.evaluate(child)
+            if isinstance(child_value, list):
+                result.append(' '.join(child_value))
+            else:
+                result.append(_bash_to_str(child_value))
             current_pos = child.end_byte
 
         # Capture any remaining literal text
@@ -1121,7 +1126,12 @@ class ShipBashInterpreter(BashCSTVisitor):
                 result.append(self._source[current_pos:child.start_byte])
 
             # Evaluate the child
-            result.append(_bash_to_str(self.evaluate(child)))
+            # In heredoc context, $@ and $* expand to all elements joined by space
+            child_value = self.evaluate(child)
+            if isinstance(child_value, list):
+                result.append(' '.join(child_value))
+            else:
+                result.append(_bash_to_str(child_value))
             current_pos = child.end_byte
 
         # Capture trailing literal text (or all text if no children)
@@ -1856,12 +1866,13 @@ class ShipBashInterpreter(BashCSTVisitor):
                     return
 
     def _handle_set_command(self, node: ts.Node):
-        """Handle the set builtin for shell options.
+        """Handle the set builtin for shell options and positional params.
 
         Supports:
         - Short flags: set -e, set +e, set -ex, set -euo
         - Long form: set -o errexit, set +o errexit
         - Combined: set -o errexit -x, set -euo pipefail
+        - Positional params: set -- arg1 arg2 (sets $1, $2, etc.)
         """
         args = [self._get_text(arg) for arg in node.children_by_field_name('argument')]
 
@@ -1869,7 +1880,11 @@ class ShipBashInterpreter(BashCSTVisitor):
         while i < len(args):
             arg = args[i]
 
-            if arg in ('-o', '+o'):
+            if arg == '--':
+                # set -- args: everything after -- becomes positional params
+                self._positional_params = args[i + 1 :]
+                break
+            elif arg in ('-o', '+o'):
                 # -o option or +o option (with space)
                 enable = arg[0] == '-'
                 i += 1

@@ -692,3 +692,75 @@ def echo(
     if escape:
         output = _interpret_escapes(output)
     print(output, end='' if no_newline else '\n')
+
+
+@builtin_command
+def source_bash_code(code: str):
+    """Execute bash code in the current shell environment.
+
+    Runs the provided bash code string using the bash interpreter.
+    Variables and state changes persist in the shell environment.
+
+    Args:
+        code: Bash code string to execute.
+
+    Examples:
+        source_bash_code("echo hello")()
+        source_bash_code("for i in 1 2 3; do echo $i; done")()
+        capture(source_bash_code("seq 1 10")).read_stdout()
+    """
+    from shell.compat import run_bash_code
+    from shell.compat.bash import BashScriptError
+
+    try:
+        run_bash_code(code, env=env)
+    except BashScriptError as e:
+        raise ShellError(str(e), exit_code=e.exit_code) from e
+
+
+def _bash_file_arg(arg: Any) -> Path:
+    """Validate and resolve a bash script file path."""
+    if arg is None:
+        raise ShellError('missing file argument', exit_code=1)
+    if isinstance(arg, Path):
+        result = arg
+    elif isinstance(arg, str):
+        result = Path(arg).expanduser().resolve()
+    else:
+        raise ShellError(f'invalid file argument: {arg!r}', exit_code=2)
+
+    if not result.exists():
+        raise ShellError(f'no such file: {result}')
+    if not result.is_file():
+        raise ShellError(f'not a file: {result}')
+    return result
+
+
+BashFile = Annotated[str | Path, BeforeValidator(_bash_file_arg)]
+
+
+@builtin_command
+def source_bash_file(file: BashFile, args: tuple[str, ...] = ()):
+    """Execute a bash script file in the current shell environment.
+
+    Reads and executes the bash script. Positional arguments are passed
+    to the script as $1, $2, etc.
+
+    Args:
+        file: Path to the bash script file (supports ~ expansion).
+        args: Optional arguments passed to the script as positional parameters.
+
+    Examples:
+        source_bash_file("script.sh")()
+        source_bash_file("setup.sh", "arg1", "arg2")()
+        capture(source_bash_file("generate.sh")).read_stdout()
+    """
+    from shell.compat.bash import BashScriptError, run_bash_code
+
+    file = cast(Path, file)
+    code = file.read_text()
+
+    try:
+        run_bash_code(code, args=list(args), script_name=str(file), env=env)
+    except BashScriptError as e:
+        raise ShellError(str(e), exit_code=e.exit_code) from e
