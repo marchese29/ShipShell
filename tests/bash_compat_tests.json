@@ -287,10 +287,10 @@
   {"name": "arithmetic_bitnot", "category": "arithmetic", "code": "(( x = ~0 )); echo $x"},
   {"name": "arithmetic_bitnot_positive", "category": "arithmetic", "code": "(( x = ~5 )); echo $x"},
 
-  {"name": "file_newer_than", "category": "file_comparison", "code": "touch -d '2020-01-01' /tmp/old_$$; touch /tmp/new_$$; [ /tmp/new_$$ -nt /tmp/old_$$ ]; r=$?; rm -f /tmp/old_$$ /tmp/new_$$; echo $r", "skip": "ShipShell-0pi"},
-  {"name": "file_older_than", "category": "file_comparison", "code": "touch -d '2020-01-01' /tmp/old_$$; touch /tmp/new_$$; [ /tmp/old_$$ -ot /tmp/new_$$ ]; r=$?; rm -f /tmp/old_$$ /tmp/new_$$; echo $r", "skip": "ShipShell-0pi"},
-  {"name": "file_not_newer", "category": "file_comparison", "code": "touch -d '2020-01-01' /tmp/old_$$; touch /tmp/new_$$; [ /tmp/old_$$ -nt /tmp/new_$$ ]; r=$?; rm -f /tmp/old_$$ /tmp/new_$$; echo $r"},
-  {"name": "file_same_file", "category": "file_comparison", "code": "touch /tmp/f1_$$; ln /tmp/f1_$$ /tmp/f2_$$; [ /tmp/f1_$$ -ef /tmp/f2_$$ ]; r=$?; rm -f /tmp/f1_$$ /tmp/f2_$$; echo $r", "skip": "ShipShell-0pi"},
-  {"name": "file_not_same_file", "category": "file_comparison", "code": "touch /tmp/f1_$$; touch /tmp/f2_$$; [ /tmp/f1_$$ -ef /tmp/f2_$$ ]; r=$?; rm -f /tmp/f1_$$ /tmp/f2_$$; echo $r"},
-  {"name": "file_same_as_self", "category": "file_comparison", "code": "touch /tmp/f1_$$; [ /tmp/f1_$$ -ef /tmp/f1_$$ ]; r=$?; rm -f /tmp/f1_$$; echo $r", "skip": "ShipShell-0pi"}
+  {"name": "file_newer_than", "category": "file_comparison", "code": "touch /tmp/shipshell_old; sleep 1; touch /tmp/shipshell_new; [ /tmp/shipshell_new -nt /tmp/shipshell_old ]; r=$?; rm -f /tmp/shipshell_old /tmp/shipshell_new; echo $r"},
+  {"name": "file_older_than", "category": "file_comparison", "code": "touch /tmp/shipshell_old; sleep 1; touch /tmp/shipshell_new; [ /tmp/shipshell_old -ot /tmp/shipshell_new ]; r=$?; rm -f /tmp/shipshell_old /tmp/shipshell_new; echo $r"},
+  {"name": "file_not_newer", "category": "file_comparison", "code": "touch /tmp/shipshell_old; sleep 1; touch /tmp/shipshell_new; [ /tmp/shipshell_old -nt /tmp/shipshell_new ]; r=$?; rm -f /tmp/shipshell_old /tmp/shipshell_new; echo $r"},
+  {"name": "file_same_file", "category": "file_comparison", "code": "touch /tmp/shipshell_f1; ln /tmp/shipshell_f1 /tmp/shipshell_f2; [ /tmp/shipshell_f1 -ef /tmp/shipshell_f2 ]; r=$?; rm -f /tmp/shipshell_f1 /tmp/shipshell_f2; echo $r"},
+  {"name": "file_not_same_file", "category": "file_comparison", "code": "touch /tmp/shipshell_f1; touch /tmp/shipshell_f2; [ /tmp/shipshell_f1 -ef /tmp/shipshell_f2 ]; r=$?; rm -f /tmp/shipshell_f1 /tmp/shipshell_f2; echo $r"},
+  {"name": "file_same_as_self", "category": "file_comparison", "code": "touch /tmp/shipshell_f1; [ /tmp/shipshell_f1 -ef /tmp/shipshell_f1 ]; r=$?; rm -f /tmp/shipshell_f1; echo $r"}
 ]

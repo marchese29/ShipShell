@@ -867,8 +867,12 @@ class ShipBashInterpreter(BashCSTVisitor):
         """Concatenate child nodes, expanding variables and other constructs."""
         parts: list[str] = []
         for child in node.children:
-            # Evaluate each child and convert to string
-            value = self.evaluate(child)
+            # Handle anonymous '$' node with text '$$' (PID) - tree-sitter quirk
+            # where $$ in concatenations isn't wrapped in simple_expansion
+            if child.type == '$' and self._get_text(child) == '$$':
+                value = self._env.get('$', '')
+            else:
+                value = self.evaluate(child)
             parts.append(_bash_to_str(value))
         result = ''.join(parts)
         # Apply brace expansion to the final result
