@@ -581,15 +581,13 @@ class ShipBashInterpreter(BashCSTVisitor):
                 return value_str
 
             case '%':
-                # Remove shortest suffix match
+                # Remove shortest suffix match - search from right to find rightmost match
                 if arg1_str is None:
                     return value_str
-                regex = self._glob_pattern_to_regex(
-                    arg1_str, anchor_end=True, greedy=False
-                )
-                match = regex.search(value_str)
-                if match:
-                    return value_str[: match.start()]
+                regex = self._glob_pattern_to_regex(arg1_str, anchor_end=True)
+                for i in range(len(value_str) - 1, -1, -1):
+                    if regex.match(value_str[i:]):
+                        return value_str[:i]
                 return value_str
 
             case r'%%':

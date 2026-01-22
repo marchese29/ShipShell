@@ -263,15 +263,15 @@
 
   {"name": "pattern_prefix_short", "category": "pattern_removal", "code": "x=hello_world_hello; echo ${x#*_}"},
   {"name": "pattern_prefix_long", "category": "pattern_removal", "code": "x=hello_world_hello; echo ${x##*_}"},
-  {"name": "pattern_suffix_short", "category": "pattern_removal", "code": "x=hello_world_hello; echo ${x%_*}", "skip": "ShipShell-1vr"},
+  {"name": "pattern_suffix_short", "category": "pattern_removal", "code": "x=hello_world_hello; echo ${x%_*}"},
   {"name": "pattern_suffix_long", "category": "pattern_removal", "code": "x=hello_world_hello; echo ${x%%_*}"},
   {"name": "pattern_prefix_no_match", "category": "pattern_removal", "code": "x=hello; echo ${x#xyz}"},
   {"name": "pattern_suffix_no_match", "category": "pattern_removal", "code": "x=hello; echo ${x%xyz}"},
   {"name": "pattern_prefix_literal", "category": "pattern_removal", "code": "x=hello; echo ${x#he}"},
   {"name": "pattern_suffix_literal", "category": "pattern_removal", "code": "x=hello; echo ${x%lo}"},
-  {"name": "pattern_file_extension", "category": "pattern_removal", "code": "f=document.tar.gz; echo ${f%.*}", "skip": "ShipShell-1vr"},
+  {"name": "pattern_file_extension", "category": "pattern_removal", "code": "f=document.tar.gz; echo ${f%.*}"},
   {"name": "pattern_file_basename", "category": "pattern_removal", "code": "f=/path/to/file.txt; echo ${f##*/}"},
-  {"name": "pattern_file_dirname", "category": "pattern_removal", "code": "f=/path/to/file.txt; echo ${f%/*}", "skip": "ShipShell-1vr"},
+  {"name": "pattern_file_dirname", "category": "pattern_removal", "code": "f=/path/to/file.txt; echo ${f%/*}"},
 
   {"name": "replace_first", "category": "pattern_replace", "code": "x=hello_hello; echo ${x/hello/world}", "skip": "ShipShell-pkg"},
   {"name": "replace_all", "category": "pattern_replace", "code": "x=hello_hello; echo ${x//hello/world}", "skip": "ShipShell-pkg"},
