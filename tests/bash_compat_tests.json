@@ -220,5 +220,23 @@
   {"name": "cstyle_for_multiply", "category": "cstyle_for", "code": "for ((i=1; i<=16; i*=2)); do echo $i; done"},
   {"name": "cstyle_for_nested_expr", "category": "cstyle_for", "code": "for ((i=0; i<2+1; i++)); do echo $i; done"},
   {"name": "cstyle_for_no_body", "category": "cstyle_for", "code": "for ((i=0; i<3; i++)); do :; done; echo done"},
-  {"name": "cstyle_for_var_compare", "category": "cstyle_for", "code": "n=3; for ((i=0; i<n; i++)); do echo $i; done"}
+  {"name": "cstyle_for_var_compare", "category": "cstyle_for", "code": "n=3; for ((i=0; i<n; i++)); do echo $i; done"},
+
+  {"name": "test_and_int_eq", "category": "test_logical", "code": "[ 1 -eq 1 -a 2 -eq 2 ]; echo $?"},
+  {"name": "test_and_int_eq_fail", "category": "test_logical", "code": "[ 1 -eq 1 -a 2 -eq 3 ]; echo $?"},
+  {"name": "test_or_int_eq", "category": "test_logical", "code": "[ 1 -eq 1 -o 2 -eq 3 ]; echo $?"},
+  {"name": "test_or_both_fail", "category": "test_logical", "code": "[ 1 -eq 2 -o 3 -eq 4 ]; echo $?"},
+  {"name": "test_not_comparison", "category": "test_logical", "code": "[ ! 1 -eq 2 ]; echo $?"},
+  {"name": "test_not_comparison_fail", "category": "test_logical", "code": "[ ! 1 -eq 1 ]; echo $?"},
+  {"name": "test_not_file", "category": "test_logical", "code": "[ ! -f /nonexistent_xyz ]; echo $?"},
+  {"name": "test_and_file_tests", "category": "test_logical", "code": "[ -f /etc/passwd -a -d /tmp ]; echo $?"},
+  {"name": "test_or_string_tests", "category": "test_logical", "code": "[ -z \"\" -o -n \"hello\" ]; echo $?"},
+  {"name": "test_and_string_eq", "category": "test_logical", "code": "[ \"a\" = \"a\" -a \"b\" = \"b\" ]; echo $?"},
+  {"name": "test_and_string_eq_fail", "category": "test_logical", "code": "[ \"a\" = \"a\" -a \"b\" = \"c\" ]; echo $?"},
+  {"name": "test_complex_and_or", "category": "test_logical", "code": "[ 1 -eq 1 -o 0 -eq 1 -a 0 -eq 1 ]; echo $?"},
+  {"name": "test_not_not", "category": "test_logical", "code": "[ ! ! 1 -eq 1 ]; echo $?"},
+  {"name": "test_and_unquoted_vars", "category": "test_logical", "code": "X=a; Y=b; [ $X = a -a $Y = b ]; echo $?"},
+  {"name": "test_or_unquoted_vars", "category": "test_logical", "code": "X=a; Y=b; [ $X = z -o $Y = b ]; echo $?"},
+  {"name": "test_and_quoted_vars", "category": "test_logical", "code": "X=foo; Y=bar; [ \"$X\" = \"foo\" -a \"$Y\" = \"bar\" ]; echo $?"},
+  {"name": "test_arith_expansion", "category": "test_logical", "code": "[ $((1+1)) -eq 2 -a $((2*3)) -eq 6 ]; echo $?"}
 ]

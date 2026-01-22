@@ -10,16 +10,14 @@ import tempfile
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
+import tree_sitter as ts
 import tree_sitter_bash as tsbash
 from tree_sitter import Language, Parser
 
 from shell.environment import ShellEnvironment, env as global_env
 from shell.model import NotPipeline, Pipeline, ShellRunnable, capture, prog
-
-if TYPE_CHECKING:
-    import tree_sitter as ts
 
 
 def _expect[T](thing: T | None) -> T:
@@ -239,6 +237,52 @@ class BashScriptError(Exception):
         super().__init__(message)
 
 
+class SyntheticNode:
+    """A programmatically constructed AST node for expression restructuring.
+
+    Used to fix tree-sitter-bash's incorrect operator precedence in test
+    expressions. Implements the minimal interface that evaluate_* methods need.
+    """
+
+    __slots__ = ('type', '_fields', '_children')
+
+    def __init__(self, node_type: str, fields: dict | None = None):
+        self.type = node_type
+        self._fields = fields or {}
+        # Build children list from fields for iteration
+        self._children: list = []
+        for v in self._fields.values():
+            if isinstance(v, list):
+                self._children.extend(v)
+            elif v is not None:
+                self._children.append(v)
+
+    def child_by_field_name(self, name: str):
+        return self._fields.get(name)
+
+    def children_by_field_name(self, name: str) -> list:
+        val = self._fields.get(name)
+        if val is None:
+            return []
+        return val if isinstance(val, list) else [val]
+
+    @property
+    def children(self) -> list:
+        return self._children
+
+    @property
+    def child_count(self) -> int:
+        return len(self._children)
+
+    @property
+    def is_named(self) -> bool:
+        return True
+
+    @property
+    def named_children(self) -> list:
+        return self._children
+
+
 class BashCSTVisitor:
     # Statements
     def visit(self, node: ts.Node):
@@ -258,14 +302,16 @@ class BashCSTVisitor:
             self.visit(child)
 
     # Expressions
-    def evaluate(self, node: ts.Node) -> BashValue:
+    def evaluate(self, node: ts.Node | SyntheticNode) -> BashValue:
         method_name = f'evaluate_{node.type}'
-        method: Callable[[ts.Node], BashValue] | None = getattr(self, method_name, None)
+        method = getattr(self, method_name, None)
 
         if method is not None:
             return method(node)
-        else:
+        elif isinstance(node, ts.Node):
             return self.evaluate_children(node)
+        else:
+            raise ValueError(f'No handler for {type(node).__name__} with type: {node.type}')
 
     def evaluate_children(self, node: ts.Node) -> BashValue:
         parts: list[BashValue] = []
@@ -2201,26 +2247,160 @@ class ShipBashInterpreter(BashCSTVisitor):
         sub_bash = prog('bash')('-c', commands_text).env(**all_vars)
         sub_bash()
 
+    # --- Test expression precedence fix (ShipShell-53a) ---
+    #
+    # tree-sitter-bash parses -a, -o, and ! with incorrect precedence.
+    # We fix this by collecting leaf tokens and rebuilding the tree with
+    # correct precedence, then evaluating the restructured tree.
+    #
+    # Precedence (lowest to highest):
+    #   1. -o  (OR)
+    #   2. -a  (AND)
+    #   3. !   (NOT)
+    #   4. primaries: comparisons (-eq, =), unary tests (-f, -z)
+
+    _TEST_LOGICAL_OPS = frozenset({'-a', '-o', '!'})
+    _TEST_UNARY_OPS = frozenset({
+        '-e', '-f', '-d', '-r', '-w', '-x', '-s', '-L', '-h',
+        '-b', '-c', '-p', '-S', '-G', '-O', '-N', '-k', '-t', '-u', '-g',
+        '-z', '-n',
+    })
+    _TEST_BINARY_OPS = frozenset({
+        '-eq', '-ne', '-lt', '-le', '-gt', '-ge',
+        '=', '==', '!=', '<', '>',
+        '-nt', '-ot', '-ef', '=~',
+    })
+
+    # Expression structure nodes we recurse into; everything else is a leaf
+    _TEST_EXPR_NODES = frozenset({'binary_expression', 'unary_expression'})
+
+    def _collect_test_leaves(self, node: ts.Node) -> list[ts.Node]:
+        """Collect leaf nodes from test expression in left-to-right order."""
+        leaves: list[ts.Node] = []
+
+        def walk(n: ts.Node):
+            if n.type in self._TEST_EXPR_NODES:
+                for child in n.children:
+                    walk(child)
+            elif self._get_text(n) not in ('[', ']', '[[', ']]'):
+                leaves.append(n)
+
+        walk(node)
+        return leaves
+
+    def _test_needs_restructuring(self, node: ts.Node) -> bool:
+        """Check if test expression contains -a, -o, or ! needing precedence fix."""
+        def has_logical_op(n: ts.Node) -> bool:
+            if n.child_count == 0:
+                return self._get_text(n) in self._TEST_LOGICAL_OPS
+            return any(has_logical_op(c) for c in n.children)
+        return has_logical_op(node)
+
+    def _build_test_tree(self, leaves: list[ts.Node]) -> ts.Node | SyntheticNode:
+        """Build correctly-structured tree from leaf tokens."""
+        node, _ = self._build_test_or(leaves, 0)
+        return node
+
+    def _build_test_or(
+        self, leaves: list[ts.Node], pos: int
+    ) -> tuple[ts.Node | SyntheticNode, int]:
+        """Build OR level (-o) - lowest precedence."""
+        left, pos = self._build_test_and(leaves, pos)
+        while pos < len(leaves) and self._get_text(leaves[pos]) == '-o':
+            op = leaves[pos]
+            pos += 1
+            right, pos = self._build_test_and(leaves, pos)
+            left = SyntheticNode('binary_expression', {
+                'left': left, 'operator': op, 'right': [right]
+            })
+        return left, pos
+
+    def _build_test_and(
+        self, leaves: list[ts.Node], pos: int
+    ) -> tuple[ts.Node | SyntheticNode, int]:
+        """Build AND level (-a)."""
+        left, pos = self._build_test_not(leaves, pos)
+        while pos < len(leaves) and self._get_text(leaves[pos]) == '-a':
+            op = leaves[pos]
+            pos += 1
+            right, pos = self._build_test_not(leaves, pos)
+            left = SyntheticNode('binary_expression', {
+                'left': left, 'operator': op, 'right': [right]
+            })
+        return left, pos
+
+    def _build_test_not(
+        self, leaves: list[ts.Node], pos: int
+    ) -> tuple[ts.Node | SyntheticNode, int]:
+        """Build NOT level (!) - right-associative."""
+        if pos < len(leaves) and self._get_text(leaves[pos]) == '!':
+            op = leaves[pos]
+            pos += 1
+            inner, pos = self._build_test_not(leaves, pos)
+            return SyntheticNode('unary_expression', {'operator': op, 'inner': inner}), pos
+        return self._build_test_primary(leaves, pos)
+
+    def _build_test_primary(
+        self, leaves: list[ts.Node], pos: int
+    ) -> tuple[ts.Node | SyntheticNode, int]:
+        """Build primary expressions (unary tests, binary comparisons, values)."""
+        if pos >= len(leaves):
+            # Shouldn't happen in well-formed input
+            return SyntheticNode('word', {}), pos
+
+        token = self._get_text(leaves[pos])
+
+        # Unary test operators: -f file, -z string, etc.
+        if token in self._TEST_UNARY_OPS:
+            op = leaves[pos]
+            pos += 1
+            if pos < len(leaves) and self._get_text(leaves[pos]) not in self._TEST_LOGICAL_OPS:
+                operand = leaves[pos]
+                pos += 1
+                return SyntheticNode('unary_expression', {'operator': op, 'operand': operand}), pos
+            # Missing operand - return what we have
+            return SyntheticNode('unary_expression', {'operator': op}), pos
+
+        # Value - check if followed by binary operator
+        left = leaves[pos]
+        pos += 1
+
+        if pos < len(leaves) and self._get_text(leaves[pos]) in self._TEST_BINARY_OPS:
+            op = leaves[pos]
+            pos += 1
+            if pos < len(leaves) and self._get_text(leaves[pos]) not in self._TEST_LOGICAL_OPS:
+                right = leaves[pos]
+                pos += 1
+                return SyntheticNode('binary_expression', {
+                    'left': left, 'operator': op, 'right': [right]
+                }), pos
+            # Missing right operand
+            return SyntheticNode('binary_expression', {
+                'left': left, 'operator': op, 'right': []
+            }), pos
+
+        # Single value (true if non-empty, like -n)
+        return left, pos
+
     def visit_test_command(self, node: ts.Node):
         """Execute a test command: [[ expression ]] or [ expression ]
 
-        Known limitation: tree-sitter-bash parses -a, -o, and ! operators with
-        incorrect precedence relative to comparison operators like -eq:
-          - [ 1 -eq 1 -a 2 -eq 2 ] parses as ((1 -eq 1) -a 2) -eq 2
-          - [ ! 1 -eq 2 ] parses as (!1) -eq 2
-        This would require patching the tree-sitter grammar to fix properly.
-        See: ShipShell-53a
+        Restructures the AST to fix tree-sitter-bash's incorrect precedence
+        for -a, -o, and ! operators before evaluation.
         """
         child = next((c for c in node.children if c.is_named), None)
         if child is None:
-            # Empty test - should fail
             self._env.last_exit = 1
             return
 
-        # Evaluate the expression using the existing evaluate() infrastructure
-        result = _bash_to_int(self.evaluate(child))
+        # Restructure tree if it contains logical operators with precedence issues
+        if self._test_needs_restructuring(child):
+            leaves = self._collect_test_leaves(child)
+            fixed_tree = self._build_test_tree(leaves)
+            result = _bash_to_int(self.evaluate(fixed_tree))
+        else:
+            result = _bash_to_int(self.evaluate(child))
 
-        # Set exit code: 0 for true, 1 for false
         self._env.last_exit = 0 if result else 1
 
     def visit_compound_statement(self, node: ts.Node):
