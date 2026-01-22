@@ -8,7 +8,7 @@ import sys
 import pytest
 
 from shell.environment import env
-from shell.model import CallableRunner, capture, prog
+from shell.model import InProcessCallable, capture, prog
 
 
 @pytest.fixture(autouse=True)
@@ -70,7 +70,7 @@ def test_callable_exit_code_int():
     def fail():
         return 42
 
-    runner = CallableRunner(fail)
+    runner = InProcessCallable(fail)
     result = runner()
     assert result.exit_code == 42
 
@@ -81,7 +81,7 @@ def test_callable_exit_code_bool_true():
     def success():
         return True
 
-    runner = CallableRunner(success)
+    runner = InProcessCallable(success)
     result = runner()
     assert result.exit_code == 0
 
@@ -92,7 +92,7 @@ def test_callable_exit_code_bool_false():
     def failure():
         return False
 
-    runner = CallableRunner(failure)
+    runner = InProcessCallable(failure)
     result = runner()
     assert result.exit_code == 1
 
@@ -103,7 +103,7 @@ def test_callable_exception():
     def explode():
         raise ValueError('boom')
 
-    runner = CallableRunner(explode)
+    runner = InProcessCallable(explode)
     result = runner()
     assert result.exit_code == 1
 
@@ -115,7 +115,7 @@ def test_async_callable_rejected():
         pass
 
     with pytest.raises(TypeError, match='Async callables cannot be used'):
-        CallableRunner(async_func)
+        InProcessCallable(async_func)
 
 
 def test_async_generator_rejected():
@@ -125,7 +125,7 @@ def test_async_generator_rejected():
         yield 1
 
     with pytest.raises(TypeError, match='Async callables cannot be used'):
-        CallableRunner(async_gen)
+        InProcessCallable(async_gen)
 
 
 def test_pipeline_chain():

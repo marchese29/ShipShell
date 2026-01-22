@@ -18,7 +18,7 @@ from typing import (
 from pydantic import BeforeValidator, ConfigDict, ValidationError, validate_call
 
 from .environment import env
-from .model import BUILTIN_REGISTRY, Builtin
+from .model import BUILTIN_REGISTRY, InProcessCallable
 from .types import ShellError, ShellInt, ShellPath
 
 
@@ -61,7 +61,7 @@ def _is_variadic_tuple(hint) -> bool:
 
 
 
-def builtin_command[**P](f: Callable[P, None]) -> Callable[..., Builtin]:
+def builtin_command[**P](f: Callable[P, None]) -> Callable[..., InProcessCallable]:
     """Decorator that wraps a function to behave as a shell builtin.
 
     Returns a Builtin runnable that can be composed with other shell operations
@@ -134,8 +134,8 @@ def builtin_command[**P](f: Callable[P, None]) -> Callable[..., Builtin]:
             return 1
 
     @wraps(f)
-    def factory(*args, **kwargs) -> Builtin:
-        """Parse arguments and return a Builtin runnable."""
+    def factory(*args, **kwargs) -> InProcessCallable:
+        """Parse arguments and return an InProcessCallable runnable."""
         if args and kwargs:
             raise ShellError(
                 'cannot mix positional and keyword arguments', exit_code=2
@@ -143,7 +143,7 @@ def builtin_command[**P](f: Callable[P, None]) -> Callable[..., Builtin]:
 
         # Keyword style: pass through directly
         if kwargs:
-            return Builtin(f.__name__, impl, kwargs)
+            return InProcessCallable(lambda kw=kwargs: impl(**kw), name=f.__name__)
 
         # Bash style: parse args into kwargs
         parsed_kwargs: dict[str, Any] = {}
@@ -225,7 +225,9 @@ def builtin_command[**P](f: Callable[P, None]) -> Callable[..., Builtin]:
             for i, value in enumerate(positional_args):
                 parsed_kwargs[positional_params[i]] = value
 
-        return Builtin(builtin_name, impl, parsed_kwargs)
+        return InProcessCallable(
+            lambda kw=parsed_kwargs: impl(**kw), name=builtin_name
+        )
 
     # Register this builtin
     # Strip trailing underscore (used to avoid Python keyword conflicts like exit_)
@@ -261,9 +263,9 @@ CdTarget = Annotated[Literal['-'] | str | Path | None, BeforeValidator(_cd_args)
 
 
 @overload
-def cd(*args: Any) -> Builtin: ...
+def cd(*args: Any) -> InProcessCallable: ...
 @overload
-def cd(*, target: CdTarget = ..., physical: bool = ...) -> Builtin: ...
+def cd(*, target: CdTarget = ..., physical: bool = ...) -> InProcessCallable: ...
 @builtin_command
 def cd(target: CdTarget = None, physical: Annotated[bool, _Flag('P')] = False):
     """Change the current working directory.
@@ -288,9 +290,9 @@ def cd(target: CdTarget = None, physical: Annotated[bool, _Flag('P')] = False):
 
 
 @overload
-def pwd(*args: Any) -> Builtin: ...
+def pwd(*args: Any) -> InProcessCallable: ...
 @overload
-def pwd(*, physical: bool = ...) -> Builtin: ...
+def pwd(*, physical: bool = ...) -> InProcessCallable: ...
 @builtin_command
 def pwd(physical: Annotated[bool, _Flag('P')] = False):
     """Print the current working directory.
@@ -309,9 +311,9 @@ def pwd(physical: Annotated[bool, _Flag('P')] = False):
 
 
 @overload
-def pushd(*args: Any) -> Builtin: ...
+def pushd(*args: Any) -> InProcessCallable: ...
 @overload
-def pushd(*, target: ShellInt | ShellPath | None = ...) -> Builtin: ...
+def pushd(*, target: ShellInt | ShellPath | None = ...) -> InProcessCallable: ...
 @builtin_command
 def pushd(target: ShellInt | ShellPath | None = None):
     """Push a directory onto the stack and change to it.
@@ -349,9 +351,9 @@ def pushd(target: ShellInt | ShellPath | None = None):
 
 
 @overload
-def popd(*args: Any) -> Builtin: ...
+def popd(*args: Any) -> InProcessCallable: ...
 @overload
-def popd(*, index: ShellInt | None = ...) -> Builtin: ...
+def popd(*, index: ShellInt | None = ...) -> InProcessCallable: ...
 @builtin_command
 def popd(index: ShellInt | None = None):
     """Pop a directory from the stack.
@@ -375,14 +377,14 @@ def popd(index: ShellInt | None = None):
 
 
 @overload
-def dirs(*args: Any) -> Builtin: ...
+def dirs(*args: Any) -> InProcessCallable: ...
 @overload
 def dirs(
     *,
     clear: bool = ...,
     long_format: bool = ...,
     per_line: bool = ...,
-) -> Builtin: ...
+) -> InProcessCallable: ...
 @builtin_command
 def dirs(
     clear: Annotated[bool, _Flag('c')] = False,
@@ -420,9 +422,9 @@ def dirs(
 
 
 @overload
-def exit_(*args: Any) -> Builtin: ...
+def exit_(*args: Any) -> InProcessCallable: ...
 @overload
-def exit_(*, code: int = ...) -> Builtin: ...
+def exit_(*, code: int = ...) -> InProcessCallable: ...
 @builtin_command
 def exit_(code: int = 0):
     """Exit the shell with the given exit code.
