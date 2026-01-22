@@ -908,8 +908,12 @@ class ShipBashInterpreter(BashCSTVisitor):
                 next_node = next(node_iterator)
                 text = self._get_text(next_node)
         if not next_node.is_named and text != '}':
-            next(node_iterator)  # Consume the argument separator
-            arg2 = next(node_iterator)
+            # next_node is the argument separator (like '/' or ':')
+            # Get the next node to see if there's an arg2
+            next_node = next(node_iterator)
+            if next_node.is_named:
+                arg2 = next_node
+            # else: it's '}', meaning arg2 is empty (e.g., ${x/pattern/})
 
         value: BashValue | None = None
         if prefix_operator == '!':
