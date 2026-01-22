@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import sys
 from abc import ABC, abstractmethod
@@ -164,10 +165,16 @@ class ShellRunnable(ABC):
     def __call__(self) -> ShellResult:
         return run(self)
 
-    def __or__(self, value: ShellRunnable) -> Pipeline:
+    def __or__(self, value: ShellRunnable | Callable[[], Any]) -> Pipeline:
         """
         Allows for building pipeline like `cmd("arg") | cmd2("arg2")`
+
+        Also supports plain callables: `cmd("arg") | my_function`
         """
+        # Auto-wrap plain callables
+        if callable(value) and not isinstance(value, ShellRunnable):
+            value = CallableRunner(value)
+
         if isinstance(self, Pipeline):
             raise RuntimeError('Pipeline should override | operator')
 
@@ -176,6 +183,17 @@ class ShellRunnable(ABC):
             return Pipeline([self, *pipeline.predecessors], pipeline.final_cmd)
         value = cast(NotPipeline, value)
         return Pipeline([self], value)
+
+    def __ror__(self, value: Callable[[], Any]) -> Pipeline:
+        """
+        Handle callable | ShellRunnable (when callable is on the left).
+
+        Example: my_function | grep("pattern")
+        """
+        if callable(value) and not isinstance(value, ShellRunnable):
+            left = CallableRunner(value)
+            return left | self
+        return NotImplemented
 
     def pipe(self, value: ShellRunnable) -> Pipeline:
         return self | value
@@ -319,31 +337,38 @@ class Builtin(ShellRunnable):
         )
         stderr_fd = _resolve_fd(actual_stderr, stderr_flags, None)
 
-        # Save current fds before modifying
+        # Save current fds and Python file objects before modifying
         saved_stdin = os.dup(0) if stdin_fd is not None else None
         saved_stdout = os.dup(1) if stdout_fd is not None else None
         saved_stderr = os.dup(2) if stderr_fd is not None else None
+        saved_sys_stdin = sys.stdin
+        saved_sys_stdout = sys.stdout
+        saved_sys_stderr = sys.stderr
 
         try:
             # Flush Python's buffers before redirecting
             sys.stdout.flush()
             sys.stderr.flush()
 
-            # Apply redirections - only close fds we opened (not ones passed in)
+            # Apply redirections and reassign Python file objects
+            # This is necessary because print() uses sys.stdout, not fd 1 directly
             if stdin_fd is not None and stdin_fd != 0:
                 os.dup2(stdin_fd, 0)
                 if stdin_opened and stdin_fd > 2:
                     os.close(stdin_fd)
+                sys.stdin = os.fdopen(0, 'r', closefd=False)
 
             if stdout_fd is not None and stdout_fd != 1:
                 os.dup2(stdout_fd, 1)
                 if stdout_opened and stdout_fd > 2:
                     os.close(stdout_fd)
+                sys.stdout = os.fdopen(1, 'w', closefd=False)
 
             if stderr_fd is not None and stderr_fd != 2:
                 os.dup2(stderr_fd, 2)
                 if stderr_opened and stderr_fd > 2:
                     os.close(stderr_fd)
+                sys.stderr = os.fdopen(2, 'w', closefd=False)
 
             # Run builtin function with redirected fds
             exit_code = self._impl(**self._kwargs)
@@ -355,16 +380,19 @@ class Builtin(ShellRunnable):
             return ShellResult(exit_code)
 
         finally:
-            # Restore original fds
+            # Restore original fds and Python file objects
             if saved_stdin is not None:
                 os.dup2(saved_stdin, 0)
                 os.close(saved_stdin)
+                sys.stdin = saved_sys_stdin
             if saved_stdout is not None:
                 os.dup2(saved_stdout, 1)
                 os.close(saved_stdout)
+                sys.stdout = saved_sys_stdout
             if saved_stderr is not None:
                 os.dup2(saved_stderr, 2)
                 os.close(saved_stderr)
+                sys.stderr = saved_sys_stderr
 
 
 class Pipeline(ShellRunnable):
@@ -474,7 +502,11 @@ class Pipeline(ShellRunnable):
         return result
 
     @override
-    def __or__(self, value: ShellRunnable) -> Pipeline:
+    def __or__(self, value: ShellRunnable | Callable[[], Any]) -> Pipeline:
+        # Auto-wrap plain callables
+        if callable(value) and not isinstance(value, ShellRunnable):
+            value = CallableRunner(value)
+
         # Pipelines flatten into one another
         if isinstance(pipeline := value, Pipeline):
             return Pipeline(
@@ -555,7 +587,143 @@ class Negated(ShellRunnable):
         return ~result
 
 
-NotPipeline = Command | Builtin | Subshell | Negated
+# TODO(ShipShell-3ht): Extract duplicated FD redirection logic from Builtin/CallableRunner
+class CallableRunner(ShellRunnable):
+    """Wraps a Python callable for use in shell pipelines.
+
+    Enables arbitrary Python functions to participate in pipelines:
+        def my_filter():
+            for line in sys.stdin:
+                if "error" in line:
+                    print(line, end='')
+
+        cat("log.txt") | my_filter | head(10)
+
+    Generator functions are supported - each yielded value is printed:
+        def lines():
+            yield "line 1"
+            yield "line 2"
+
+        lines | grep("1")  # Works!
+    """
+
+    def __init__(self, func: Callable[[], Any]):
+        super().__init__()
+        # Ban async callables - they need a fundamentally different execution model
+        if inspect.iscoroutinefunction(func) or inspect.isasyncgenfunction(func):
+            raise TypeError(
+                f'Async callables cannot be used in pipelines: {func.__name__}. '
+                'Use a synchronous function instead.'
+            )
+        self._func = func
+
+    @override
+    def _exec(
+        self,
+        stdin: FileLike | None = None,
+        stdout: FileLike | None = None,
+        stderr: FileLike | None = None,
+    ) -> ShellResult:
+        # Merge instance vars with params - instance vars override
+        actual_stdin = self._stdin if self._stdin is not None else stdin
+        actual_stdout = self._stdout if self._stdout is not None else stdout
+        actual_stderr = self._stderr if self._stderr is not None else stderr
+
+        # Track whether we opened the fd (from a path) vs received it as an int
+        stdin_opened = not isinstance(actual_stdin, int) and actual_stdin is not None
+        stdout_opened = not isinstance(actual_stdout, int) and actual_stdout is not None
+        stderr_opened = not isinstance(actual_stderr, int) and actual_stderr is not None
+
+        # Resolve redirections to file descriptors
+        stdin_fd = _resolve_fd(actual_stdin, os.O_RDONLY, None)
+        stdout_flags = (
+            os.O_WRONLY | os.O_CREAT | (os.O_APPEND if self._append_out else os.O_TRUNC)
+        )
+        stdout_fd = _resolve_fd(actual_stdout, stdout_flags, None)
+        stderr_flags = (
+            os.O_WRONLY | os.O_CREAT | (os.O_APPEND if self._append_err else os.O_TRUNC)
+        )
+        stderr_fd = _resolve_fd(actual_stderr, stderr_flags, None)
+
+        # Save current fds and Python file objects before modifying
+        saved_stdin = os.dup(0) if stdin_fd is not None else None
+        saved_stdout = os.dup(1) if stdout_fd is not None else None
+        saved_stderr = os.dup(2) if stderr_fd is not None else None
+        saved_sys_stdin = sys.stdin
+        saved_sys_stdout = sys.stdout
+        saved_sys_stderr = sys.stderr
+
+        try:
+            # Flush Python's buffers before redirecting
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            # Apply redirections and reassign Python file objects
+            # This is necessary because print() uses sys.stdout, not fd 1 directly
+            if stdin_fd is not None and stdin_fd != 0:
+                os.dup2(stdin_fd, 0)
+                if stdin_opened and stdin_fd > 2:
+                    os.close(stdin_fd)
+                sys.stdin = os.fdopen(0, 'r', closefd=False)
+
+            if stdout_fd is not None and stdout_fd != 1:
+                os.dup2(stdout_fd, 1)
+                if stdout_opened and stdout_fd > 2:
+                    os.close(stdout_fd)
+                sys.stdout = os.fdopen(1, 'w', closefd=False)
+
+            if stderr_fd is not None and stderr_fd != 2:
+                os.dup2(stderr_fd, 2)
+                if stderr_opened and stderr_fd > 2:
+                    os.close(stderr_fd)
+                sys.stderr = os.fdopen(2, 'w', closefd=False)
+
+            # Call the function
+            try:
+                result = self._func()
+
+                # Handle generators - iterate and print each yielded value
+                if inspect.isgenerator(result):
+                    for item in result:
+                        print(item)
+                    exit_code = 0
+                elif result is None:
+                    exit_code = 0
+                elif isinstance(result, bool):
+                    # Check bool before int since bool is a subclass of int
+                    exit_code = 0 if result else 1
+                elif isinstance(result, int):
+                    exit_code = result
+                else:
+                    # Non-int return value treated as success
+                    exit_code = 0
+            except Exception:
+                # Exception during execution = failure
+                exit_code = 1
+
+            # Flush after execution so output goes to redirected fds
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            return ShellResult(exit_code)
+
+        finally:
+            # Restore original fds and Python file objects
+            if saved_stdin is not None:
+                os.dup2(saved_stdin, 0)
+                os.close(saved_stdin)
+                sys.stdin = saved_sys_stdin
+            if saved_stdout is not None:
+                os.dup2(saved_stdout, 1)
+                os.close(saved_stdout)
+                sys.stdout = saved_sys_stdout
+            if saved_stderr is not None:
+                os.dup2(saved_stderr, 2)
+                os.close(saved_stderr)
+                sys.stderr = saved_sys_stderr
+
+
+NotPipeline = Command | Builtin | Subshell | Negated | CallableRunner
 
 
 class Program:
