@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import os
 import sys
+import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
@@ -200,6 +201,20 @@ class ShellRunnable(ABC):
     def __init__(self):
         self._env_overlay: dict[str, Any] = {}
         self._io = IOConfig()  # Single object for all IO configuration
+
+    def __bool__(self) -> bool:
+        """Warn when ShellRunnable is used in boolean context.
+
+        Using a runnable in `if cmd:` or `cmd1 and cmd2` does NOT execute it.
+        This warning helps catch a common mistake in the REPL.
+        """
+        warnings.warn(
+            'ShellRunnable used in boolean context does not execute the command. '
+            'Use cmd() to execute, or capture(cmd) to run and check the result.',
+            UserWarning,
+            stacklevel=2,
+        )
+        return True  # Runnables are truthy (they exist), just not executed
 
     @abstractmethod
     def _exec(self, io: IOConfig | None = None) -> ShellResult:
