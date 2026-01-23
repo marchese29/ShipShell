@@ -4,7 +4,6 @@ These functions have no side effects and can be tested directly without
 fork-based isolation.
 """
 
-import pytest
 
 from shell.compat.bash import (
     _bash_to_file,
@@ -14,7 +13,6 @@ from shell.compat.bash import (
     _expand_range,
     _split_commas,
 )
-
 
 # === _bash_to_str tests ===
 

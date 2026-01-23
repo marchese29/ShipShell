@@ -9,6 +9,7 @@ import sys
 import tempfile
 from collections.abc import Callable
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
@@ -17,7 +18,7 @@ import tree_sitter_bash as tsbash
 from tree_sitter import Language, Parser
 
 from shell.environment import ShellEnvironment, env as global_env
-from shell.model import NotPipeline, Pipeline, ShellRunnable, capture, prog
+from shell.model import InProcessCallable, NotPipeline, Pipeline, ShellRunnable, capture, prog
 
 
 def _expect[T](thing: T | None) -> T:
@@ -26,6 +27,23 @@ def _expect[T](thing: T | None) -> T:
 
 
 BashValue = str | int | list[str]
+
+
+@dataclass
+class CallFrame:
+    """Represents a function call's execution context."""
+
+    func_name: str
+    positional_params: list[str]
+    local_vars: dict[str, BashValue] = field(default_factory=dict)
+
+
+class BashReturnException(Exception):
+    """Raised when a return statement is executed inside a function."""
+
+    def __init__(self, exit_code: int = 0):
+        self.exit_code = exit_code
+        super().__init__(f'return {exit_code}')
 
 
 def _bash_to_str(value: BashValue | None) -> str:
@@ -393,6 +411,15 @@ class ShipBashInterpreter(BashCSTVisitor):
         # True when inside a context where errexit shouldn't trigger (conditions, && chains)
         self._errexit_suppressed = False
 
+        # Function definitions: name -> compound_statement body node
+        self._functions: dict[str, ts.Node] = {}
+
+        # Call stack for function scope management
+        self._call_stack: list[CallFrame] = []
+
+        # Track cleanup state for __del__
+        self._cleaned_up = False
+
     def cleanup(self):
         """Clean up temporary resources created during execution."""
         for path in self._temp_files:
@@ -401,6 +428,12 @@ class ShipBashInterpreter(BashCSTVisitor):
             except OSError:
                 pass  # File may already be deleted
         self._temp_files.clear()
+        self._cleaned_up = True
+
+    def __del__(self):
+        """Destructor - cleanup when garbage collected (for wired functions)."""
+        if not getattr(self, '_cleaned_up', False):
+            self.cleanup()
 
     def __enter__(self):
         """Context manager entry."""
@@ -410,6 +443,32 @@ class ShipBashInterpreter(BashCSTVisitor):
         """Context manager exit - ensures cleanup is called."""
         self.cleanup()
         return False  # Don't suppress exceptions
+
+    def _execute_function_body(
+        self, func_name: str, args: list[str], body_node: ts.Node
+    ) -> int:
+        """Execute a function body with the given arguments.
+
+        This is the shared implementation for both direct function calls
+        (from _build_function_runnable) and Python-wired function calls.
+
+        Args:
+            func_name: Name of the function being called
+            args: Positional arguments passed to the function
+            body_node: The compound_statement AST node containing the function body
+
+        Returns:
+            The exit code from the function execution
+        """
+        frame = CallFrame(func_name=func_name, positional_params=args)
+        self._call_stack.append(frame)
+        try:
+            self.visit_children(body_node)
+        except BashReturnException as e:
+            self._env.last_exit = e.exit_code
+        finally:
+            self._call_stack.pop()
+        return self._env.last_exit
 
     # --- Shell option helpers ---
 
@@ -449,12 +508,73 @@ class ShipBashInterpreter(BashCSTVisitor):
         """Raise BashScriptError if nounset enabled and variable is unset.
 
         Special variables ($?, $#, $$, $!, $@, $*) are always available.
+
+        Note: Prefer using _get_variable(check_unset=True) which includes this check.
         """
         # Special variables are always defined - skip nounset check
         if var_name in ('?', '#', '$', '!', '@', '*', '-', '_'):
             return
+        # Check local scopes first
+        for frame in reversed(self._call_stack):
+            if var_name in frame.local_vars:
+                return
         if self._shell_options['nounset'] and var_name not in self._env:
             raise BashScriptError(f'{var_name}: unbound variable', 127)
+
+    def _get_positional_params(self) -> list[str]:
+        """Get positional params from current call frame or script level."""
+        if self._call_stack:
+            return self._call_stack[-1].positional_params
+        return self._positional_params
+
+    def _get_variable(self, name: str, *, check_unset: bool = True) -> BashValue | None:
+        """Get variable with dynamic scoping. Returns None if unset.
+
+        Resolution order (first match wins):
+        1. Local variables in call stack (most recent frame first)
+        2. Environment variables
+
+        Args:
+            name: Variable name to look up
+            check_unset: If True (default), raises BashScriptError when nounset
+                         is enabled and variable is unset. Set to False when the
+                         caller handles unset explicitly (e.g., ${var-default}).
+
+        Returns:
+            Variable value, or None if unset.
+
+        Raises:
+            BashScriptError: If nounset enabled, check_unset=True, and var is unset.
+        """
+        # Check local scopes first (dynamic scoping)
+        for frame in reversed(self._call_stack):
+            if name in frame.local_vars:
+                return frame.local_vars[name]
+
+        # Check environment
+        if name in self._env:
+            return self._env[name]
+
+        # Variable is unset - check nounset if requested
+        if check_unset and self._shell_options['nounset']:
+            # Special variables are always defined
+            if name not in ('?', '#', '$', '!', '@', '*', '-', '_'):
+                raise BashScriptError(f'{name}: unbound variable', 127)
+
+        return None
+
+    def _set_variable(self, name: str, value: BashValue) -> None:
+        """Set variable respecting local scope.
+
+        If variable is declared local in any active frame, set it there.
+        Otherwise, set in environment (global).
+        """
+        for frame in reversed(self._call_stack):
+            if name in frame.local_vars:
+                frame.local_vars[name] = value
+                return
+        # Global scope
+        self._env[name] = value if isinstance(value, list) else _bash_to_str(value)
 
     def _build_shellopts(self) -> str:
         """Build SHELLOPTS string for subshell inheritance."""
@@ -922,9 +1042,11 @@ class ShipBashInterpreter(BashCSTVisitor):
         value: BashValue | None = None
         if prefix_operator == '!':
             if operator is None:
-                # ${!varname}
-                indirect = _bash_to_str(self._env.get(self._get_text(value_node), None))
-                return _bash_to_str(self._env.get(indirect, None))
+                # ${!varname} - indirect variable reference
+                var_text = self._get_text(value_node)
+                indirect = _bash_to_str(self._get_variable(var_text, check_unset=False))
+                indirect_value = self._get_variable(indirect, check_unset=False)
+                return _bash_to_str(indirect_value)
             elif operator in ('@', '*'):
                 # ${!prefix@} and ${!prefix*}
                 prefix = self._get_text(value_node)
@@ -936,7 +1058,7 @@ class ShipBashInterpreter(BashCSTVisitor):
             else:
                 # ${!name[@]} and ${!name[*]}
                 var_name = self._get_text(value_node)
-                var_value = self._env.get(var_name, None)
+                var_value = self._get_variable(var_name, check_unset=False)
 
                 # TODO: Support for more complex types like sparse/associative arrays
                 if var_value is None or not isinstance(var_value, list):
@@ -953,17 +1075,17 @@ class ShipBashInterpreter(BashCSTVisitor):
                 value = self._script_name
             elif var_name.isnumeric():
                 idx = int(var_name) - 1
-                if 0 <= idx < len(self._positional_params):
-                    value = self._positional_params[idx]
+                params = self._get_positional_params()
+                if 0 <= idx < len(params):
+                    value = params[idx]
                 else:
                     value = ''
             elif var_name in ('@', '*'):
-                value = self._positional_params
+                value = self._get_positional_params()
             else:
-                # Check nounset unless operator handles unset explicitly
-                if operator not in ('-', ':-', '=', ':=', '+', ':+', '?', ':?'):
-                    self._check_nounset(var_name)
-                value = _bash_to_str(self._env.get(var_name, None))
+                # Operators that handle unset explicitly should skip nounset check
+                check_unset = operator not in ('-', ':-', '=', ':=', '+', ':+', '?', ':?')
+                value = self._get_variable(var_name, check_unset=check_unset)
         else:
             # Subscript
             value = self.evaluate(value_node)
@@ -1228,18 +1350,20 @@ class ShipBashInterpreter(BashCSTVisitor):
                 if var_name == '0':
                     return self._script_name
                 elif var_name == '#':
-                    return len(self._positional_params)
+                    return len(self._get_positional_params())
                 elif var_name.isnumeric():
                     idx = int(var_name) - 1
-                    if 0 <= idx < len(self._positional_params):
-                        return self._positional_params[idx]
+                    params = self._get_positional_params()
+                    if 0 <= idx < len(params):
+                        return params[idx]
                     else:
                         return ''
                 elif var_name in ('@', '*'):
-                    return self._positional_params
+                    return self._get_positional_params()
                 else:
-                    self._check_nounset(var_name)
-                    return self._env.get(var_name, '')
+                    # _get_variable handles nounset check
+                    value = self._get_variable(var_name)
+                    return value if value is not None else ''
         return ''
 
     def evaluate_word(self, node: ts.Node) -> BashValue:
@@ -1247,7 +1371,8 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         # In arithmetic context, bare words are variable references
         if self._resolve_vars and text.isidentifier():
-            return self._env.get(text, '')
+            value = self._get_variable(text)
+            return value if value is not None else ''
 
         # Expand tilde at the start of the word (unquoted words only)
         # os.path.expanduser handles ~, ~/path, ~username, and ~username/path
@@ -1810,6 +1935,18 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         return runnable
 
+    def _build_function_runnable(self, func_name: str, args: list[str]) -> ShellRunnable:
+        """Build a runnable for a user-defined function call.
+
+        Uses InProcessCallable to enable function execution in pipelines
+        and command substitution with proper FD redirection.
+        """
+        body_node = self._functions[func_name]
+        return InProcessCallable(
+            lambda: self._execute_function_body(func_name, args, body_node),
+            name=func_name,
+        )
+
     def _build_command_runnable(self, cmd_node: ts.Node) -> ShellRunnable:
         name_node = _expect(cmd_node.child_by_field_name('name'))
 
@@ -1823,6 +1960,10 @@ class ShipBashInterpreter(BashCSTVisitor):
                 cmd_args.extend([_bash_to_str(v) for v in arg_value])
             else:
                 cmd_args.append(_bash_to_str(arg_value))
+
+        # Check if it's a user-defined function
+        if cmd_name in self._functions:
+            return self._build_function_runnable(cmd_name, cmd_args)
 
         return prog(cmd_name)(*cmd_args)
 
@@ -1980,16 +2121,44 @@ class ShipBashInterpreter(BashCSTVisitor):
         self._env.last_exit = 0
 
     def visit_command(self, node: ts.Node):
-        # Intercept 'set' builtin - it modifies interpreter state, not a real command
+        # Intercept special builtins that modify interpreter state
         name_node = node.child_by_field_name('name')
-        if name_node and self._get_text(name_node) == 'set':
-            self._handle_set_command(node)
-            return
+        if name_node:
+            cmd_name = self._get_text(name_node)
+            if cmd_name == 'set':
+                self._handle_set_command(node)
+                return
+            if cmd_name == 'return':
+                self._handle_return_command(node)
+                return
+            if cmd_name == ':':
+                # Colon is a noop builtin that returns 0
+                self._env.last_exit = 0
+                return
 
         runnable = self._build_command_runnable(node)
         # Apply any inline redirects (e.g., here strings: cat <<< "hello")
         runnable = self._apply_redirects(runnable, node)
         runnable()
+
+    def _handle_return_command(self, node: ts.Node):
+        """Handle the return builtin - exits from a function with an exit code."""
+        if not self._call_stack:
+            # Not inside a function - bash prints error and continues
+            print('bash: return: can only `return` from a function or sourced script',
+                  file=sys.stderr)
+            self._env.last_exit = 1
+            return
+
+        # Get optional exit code argument
+        arg_nodes = list(node.children_by_field_name('argument'))
+        if arg_nodes:
+            exit_code = _bash_to_int(self.evaluate(arg_nodes[0]))
+        else:
+            # Use last exit code
+            exit_code = self._env.last_exit
+
+        raise BashReturnException(exit_code)
 
     def visit_declaration_command(self, node: ts.Node):
         """Handle export, declare, typeset, readonly, local"""
@@ -1999,6 +2168,31 @@ class ShipBashInterpreter(BashCSTVisitor):
             return
 
         keyword = self._get_text(keyword_node)
+
+        # Handle 'local' - only valid inside functions
+        if keyword == 'local':
+            if not self._call_stack:
+                print('bash: local: can only be used in a function', file=sys.stderr)
+                self._env.last_exit = 1
+                return
+
+            current_frame = self._call_stack[-1]
+            for child in node.children:
+                if child.type == 'variable_assignment':
+                    name_node = child.child_by_field_name('name')
+                    value_node = child.child_by_field_name('value')
+                    if name_node:
+                        name = _bash_to_str(self.evaluate(name_node))
+                        value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
+                        current_frame.local_vars[name] = value
+                elif child.type in ('word', 'variable_name') and child != keyword_node:
+                    # local VAR (declare local without value)
+                    var_name = self._get_text(child)
+                    if var_name not in current_frame.local_vars:
+                        current_frame.local_vars[var_name] = ''
+
+            self._env.last_exit = 0
+            return
 
         # Handle variable assignments in the command
         for child in node.children:
@@ -2019,7 +2213,6 @@ class ShipBashInterpreter(BashCSTVisitor):
                 if keyword == 'export':
                     self._env.export(name)
                 # TODO: Handle declare -x, typeset -x when needed
-                # TODO: Handle local when implementing functions
             elif child.type in ('word', 'string', 'raw_string', 'variable_name'):
                 # export VAR (without assignment - export existing var)
                 if keyword == 'export':
@@ -2122,7 +2315,34 @@ class ShipBashInterpreter(BashCSTVisitor):
                 self.visit_children(body_node)
 
     def visit_function_definition(self, node: ts.Node):
-        raise NotImplementedError('function_definition')
+        """Register a function definition.
+
+        Handles all three syntaxes:
+        - function foo { ... }
+        - foo() { ... }
+        - function foo() { ... }
+
+        All produce a function_definition node with:
+        - name: word node containing function name
+        - body: compound_statement node containing the function body
+        """
+        # Extract function name - first word child is the name
+        name_node = next((c for c in node.children if c.type == 'word'), None)
+        if name_node is None:
+            raise BashScriptError('function definition without name')
+
+        func_name = self._get_text(name_node)
+
+        # Extract function body (compound_statement)
+        body_node = next((c for c in node.children if c.type == 'compound_statement'), None)
+        if body_node is None:
+            raise BashScriptError(f'function {func_name} has no body')
+
+        # Store the function (allows redefinition)
+        self._functions[func_name] = body_node
+
+        # Function definition returns 0
+        self._env.last_exit = 0
 
     def _visit_elif_clause(self, node: ts.Node) -> bool:
         it = iter(node.children)
@@ -2447,8 +2667,8 @@ class ShipBashInterpreter(BashCSTVisitor):
         else:
             value = ''
 
-        # Set in shell environment (not exported by default)
-        self._env[name] = value
+        # Set variable (respects local scope if in a function)
+        self._set_variable(name, value)
 
     def visit_while_statement(self, node: ts.Node):
         # Loop while condition is true (exit code 0)
@@ -2515,11 +2735,94 @@ def print_bash_tree(bash_code: str, show_unnamed: bool = False):
     print_node(tree.root_node)
 
 
+def _wire_functions(
+    interpreter: ShipBashInterpreter,
+    scope: str | None,
+) -> None:
+    """Wire bash functions from interpreter into Python namespace.
+
+    Creates callable wrappers that hold a reference to the interpreter,
+    allowing efficient function calls without creating new interpreters.
+    The interpreter stays alive as long as any wired function exists.
+
+    Functions with invalid Python identifiers or Python keywords are skipped
+    with a warning. Functions that shadow Python builtins are allowed but
+    warned about.
+    """
+    import builtins
+    import keyword
+    import types
+    import warnings
+
+    import __main__
+
+    # Get or create target namespace
+    if scope is None or scope == '__main__':
+        target_ns = __main__.__dict__
+    else:
+        if hasattr(__main__, scope):
+            module = getattr(__main__, scope)
+        else:
+            module = types.ModuleType(scope)
+            setattr(__main__, scope, module)
+        target_ns = module.__dict__
+
+    # Create callable wrapper for each function
+    for func_name, body_node in interpreter._functions.items():
+        # Transform name to valid Python identifier
+        py_name = func_name.replace('-', '_')  # my-func -> my_func
+
+        # Handle names starting with digits by prefixing with underscore
+        if py_name and py_name[0].isdigit():
+            py_name = '_' + py_name  # 123func -> _123func
+
+        # Append underscore for Python keywords (like exit_ for exit builtin)
+        if keyword.iskeyword(py_name):
+            py_name = py_name + '_'  # None -> None_
+
+        # Final validation - skip if still invalid
+        if not py_name.isidentifier():
+            warnings.warn(
+                f"Bash function '{func_name}' cannot be converted to valid Python "
+                f"identifier; skipping wiring",
+                stacklevel=3,
+            )
+            continue
+
+        # Warn about transformations
+        if py_name != func_name:
+            warnings.warn(
+                f"Bash function '{func_name}' wired as '{py_name}'",
+                stacklevel=3,
+            )
+
+        # Warn about builtin shadowing
+        if hasattr(builtins, py_name):
+            warnings.warn(
+                f"Bash function '{func_name}' shadows Python builtin '{py_name}'",
+                stacklevel=3,
+            )
+            # Still wire it - user may intentionally want to override
+
+        # Create a closure that captures the interpreter and body node
+        def make_wrapper(interp: ShipBashInterpreter, name: str, body: ts.Node):
+            def wrapper(*args: str) -> int:
+                """Call bash function with arguments. Returns exit code."""
+                return interp._execute_function_body(name, [str(a) for a in args], body)
+
+            wrapper.__name__ = name
+            wrapper.__doc__ = f'Bash function: {name}'
+            return wrapper
+
+        target_ns[py_name] = make_wrapper(interpreter, func_name, body_node)
+
+
 def run_bash_code(
     bash_code: str,
     args: list[str] | None = None,
     script_name: str = 'bash',
     env: ShellEnvironment = global_env,
+    scope: str | None = '__main__',
 ):
     """Parse and execute bash code using the ShipBashInterpreter.
 
@@ -2528,6 +2831,9 @@ def run_bash_code(
         args: Optional list of positional parameters ($1, $2, etc.)
         script_name: Name of the script ($0), defaults to "bash"
         env: Shell environment to use (defaults to global environment)
+        scope: Python namespace to wire functions into. Defaults to __main__.
+               Use None to skip wiring. Use a module name like 'f' to wire
+               functions as f.foo(), f.bar(), etc.
     """
     # Create the bash language and parser
     bash_language = Language(tsbash.language())
@@ -2537,9 +2843,17 @@ def run_bash_code(
     tree = parser.parse(bytes(bash_code, 'utf-8'))
 
     # Create interpreter and execute
-    with ShipBashInterpreter(bash_code, args, script_name, env) as interpreter:
-        try:
-            interpreter.visit(tree.root_node)
-        except BashScriptError as e:
-            print(f'bash: {e}', file=sys.stderr)
-            env.last_exit = e.exit_code
+    interpreter = ShipBashInterpreter(bash_code, args, script_name, env)
+    try:
+        interpreter.visit(tree.root_node)
+    except BashScriptError as e:
+        print(f'bash: {e}', file=sys.stderr)
+        env.last_exit = e.exit_code
+
+    # Wire defined functions into Python namespace
+    if scope is not None and interpreter._functions:
+        # Wired functions hold reference to interpreter; cleanup via __del__
+        _wire_functions(interpreter, scope)
+    else:
+        # No wiring, cleanup immediately
+        interpreter.cleanup()

@@ -33,7 +33,7 @@ def test_bash_compat(test: BashTest):
     bash = run_bash_reference(test.code, test.setup_env)
 
     if test.check_stdout:
-        assert ours.stdout == bash.stdout, f'stdout mismatch'
+        assert ours.stdout == bash.stdout, 'stdout mismatch'
 
     assert ours.exit_code == bash.exit_code, (
         f'exit_code mismatch: ours={ours.exit_code}, bash={bash.exit_code}'
