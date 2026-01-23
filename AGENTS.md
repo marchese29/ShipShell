@@ -1,5 +1,7 @@
 # Agent Instructions
 
+ShipShell is a Python REPL with a custom bash compatibility layer. The name comes from **shell-python** → sh-p → "ship" → ShipShell. It uses tree-sitter-bash for parsing and provides shell-like functionality within Python.
+
 This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
 
 ## Quick Reference
@@ -23,12 +25,24 @@ uv remove <package>        # Remove dependency
 uv sync                    # Sync lockfile with pyproject.toml
 ```
 
-## Testing
+## Commands
 
-Run all tests with:
 ```bash
-uv run pytest tests/ -v
+# Run the shell
+uv run python main.py
+
+# Testing
+uv run pytest tests/ -v                    # All tests
+uv run pytest tests/test_bash_compat.py -v # Integration tests vs real bash
+uv run pytest tests/test_bash_pure.py -v   # Unit tests for pure functions
+uv run pytest tests/test_bash_compat.py::test_bash_compat[category/name] -v  # Single test
+
+# Quality gates (run before committing)
+uv run ruff check shell/
+uv run pyright shell/
 ```
+
+## Testing
 
 Test organization:
 - `tests/test_bash_compat.py` - Integration tests comparing against real bash
@@ -42,6 +56,38 @@ See `tests/AGENTS.md` for detailed testing patterns and the test harness API.
 Component-specific patterns and debugging utilities:
 - `tests/AGENTS.md` - Test harness API and testing patterns
 - `shell/compat/AGENTS.md` - Bash interpreter debugging and visitor patterns
+
+## Architecture
+
+### Core Components
+
+- **`shell/model.py`** - Command execution abstraction (`ShellResult`, `IOConfig`, `InProcessCallable`)
+- **`shell/builtins.py`** - Shell builtins (cd, pwd, echo, test, source, etc.)
+- **`shell/environment.py`** - Shell environment state (`ShellEnvironment` singleton)
+- **`shell/compat/bash.py`** - Bash interpreter using tree-sitter (2500+ lines)
+- **`shell/repl/`** - Interactive REPL using prompt_toolkit
+
+### Bash Interpreter Pattern
+
+The interpreter in `shell/compat/bash.py` uses a visitor pattern:
+- `visit_*` methods execute nodes with side effects (commands, assignments)
+- `evaluate_*` methods return values without side effects (expansions, expressions)
+
+Pure functions (tested in `test_bash_pure.py`): `_bash_to_str()`, `_expand_braces()`, `_split_commas()`, etc.
+
+### User Initialization Phases
+
+1. `env.initialize()` - Base shell environment
+2. `user.initialize_config()` - `~/.config/pysh/config.py` (Phase 1, before venv)
+3. `py_env.initialize_shell_venv()` - Bootstrap venv at `~/.config/pysh/.venv`
+4. `user.initialize_user()` - `~/.config/pysh/user.py` (Phase 2, full functionality)
+
+## Code Style
+
+- Python 3.12+, line length 100
+- Single quotes for strings
+- Ruff for linting (E, F, I, Q, UP, B, C4 rules)
+- Pyright for type checking
 
 ## Landing the Plane (Session Completion)
 
