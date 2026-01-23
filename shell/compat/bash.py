@@ -1079,7 +1079,32 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         value: BashValue | None = None
         if prefix_operator == '!':
-            if operator is None:
+            if value_node.type == 'subscript':
+                # ${!arr[@]} or ${!arr[*]} - array index listing
+                var_name_node = value_node.child_by_field_name('name')
+                index_node = value_node.child_by_field_name('index')
+                if var_name_node is None:
+                    # Fallback: find variable_name child
+                    for child in value_node.children:
+                        if child.type == 'variable_name':
+                            var_name_node = child
+                        elif child.type == 'word':
+                            index_node = child
+
+                var_name = self._get_text(var_name_node) if var_name_node else ''
+                index_text = self._get_text(index_node) if index_node else ''
+                var_value = self._get_variable(var_name, check_unset=False)
+
+                # For non-array variables or unset, return empty
+                if var_value is None or not isinstance(var_value, list):
+                    return [] if index_text == '@' else ''
+
+                indices = [str(i) for i in range(len(var_value))]
+                if index_text == '@':
+                    return indices
+                else:
+                    return ' '.join(indices)
+            elif operator is None:
                 # ${!varname} - indirect variable reference
                 var_text = self._get_text(value_node)
                 indirect = _bash_to_str(self._get_variable(var_text, check_unset=False))
@@ -1094,19 +1119,11 @@ class ShipBashInterpreter(BashCSTVisitor):
                 else:
                     return ' '.join(variables)
             else:
-                # ${!name[@]} and ${!name[*]}
-                var_name = self._get_text(value_node)
-                var_value = self._get_variable(var_name, check_unset=False)
-
-                # TODO: Support for more complex types like sparse/associative arrays
-                if var_value is None or not isinstance(var_value, list):
-                    return [] if arg1 and self._get_text(arg1) == '@' else ''
-
-                indices = [str(i) for i in range(len(var_value))]
-                if arg1 and self._get_text(arg1) == '@':
-                    return indices
-                else:
-                    return ' '.join(indices)
+                # Shouldn't reach here, but fallback to indirect reference
+                var_text = self._get_text(value_node)
+                indirect = _bash_to_str(self._get_variable(var_text, check_unset=False))
+                indirect_value = self._get_variable(indirect, check_unset=False)
+                return _bash_to_str(indirect_value)
         elif value_node.type in ('variable_name', 'special_variable_name'):
             var_name = self._get_text(value_node)
             if var_name == '0':

@@ -257,9 +257,9 @@
   {"name": "varname_no_match", "category": "variable_names", "code": "X=1; echo \"${!NONEXISTENT_PREFIX_@}\""},
   {"name": "varname_single_match", "category": "variable_names", "code": "UNIQUE_VAR_XYZ=42; echo ${!UNIQUE_VAR_@}"},
 
-  {"name": "array_indices_at", "category": "array_indices", "code": "arr=(a b c); echo ${!arr[@]}", "skip": "ShipShell-oq3"},
-  {"name": "array_indices_star", "category": "array_indices", "code": "arr=(a b c); echo ${!arr[*]}", "skip": "ShipShell-oq3"},
-  {"name": "array_indices_sparse", "category": "array_indices", "code": "arr=(); arr[0]=a; arr[5]=b; arr[10]=c; echo ${!arr[@]}", "skip": "ShipShell-oq3"},
+  {"name": "array_indices_at", "category": "array_indices", "code": "arr=(a b c); echo ${!arr[@]}", "skip": "ShipShell-oq3 + bash 4.0+ feature"},
+  {"name": "array_indices_star", "category": "array_indices", "code": "arr=(a b c); echo ${!arr[*]}", "skip": "ShipShell-oq3 + bash 4.0+ feature"},
+  {"name": "array_indices_sparse", "category": "array_indices", "code": "arr=(); arr[0]=a; arr[5]=b; arr[10]=c; echo ${!arr[@]}", "skip": "ShipShell-oq3 + bash 4.0+ feature"},
   {"name": "array_indices_empty", "category": "array_indices", "code": "arr=(); echo \"${!arr[@]}\""},
 
   {"name": "pattern_prefix_short", "category": "pattern_removal", "code": "x=hello_world_hello; echo ${x#*_}"},
