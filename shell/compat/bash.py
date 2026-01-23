@@ -575,6 +575,9 @@ class ShipBashInterpreter(BashCSTVisitor):
                 return
         # Global scope
         self._env[name] = value if isinstance(value, list) else _bash_to_str(value)
+        # Auto-export if allexport (-a) is enabled
+        if self._shell_options['allexport']:
+            self._env.export(name)
 
     def _build_shellopts(self) -> str:
         """Build SHELLOPTS string for subshell inheritance."""
@@ -978,6 +981,9 @@ class ShipBashInterpreter(BashCSTVisitor):
                 return ''.join([_bash_to_str(p) for p in parts])
 
     def evaluate_brace_expression(self, node: ts.Node) -> BashValue:
+        # Skip brace expansion if braceexpand is disabled
+        if not self._shell_options['braceexpand']:
+            return self._get_text(node)
         result = _expand_range(self._get_text(node)[1:-1])
         return result if result else []
 
@@ -1017,9 +1023,11 @@ class ShipBashInterpreter(BashCSTVisitor):
                 value = self.evaluate(child)
             parts.append(_bash_to_str(value))
         result = ''.join(parts)
-        # Apply brace expansion to the final result
-        expanded = _expand_braces(result)
-        return expanded if len(expanded) > 1 else expanded[0] if expanded else ''
+        # Apply brace expansion to the final result (skip if braceexpand is disabled)
+        if self._shell_options['braceexpand']:
+            expanded = _expand_braces(result)
+            return expanded if len(expanded) > 1 else expanded[0] if expanded else ''
+        return result
 
     def evaluate_expansion(self, node: ts.Node) -> BashValue:
         """Handle ${var} and other complex expansions including ${10}, ${11}, etc."""
@@ -1402,7 +1410,8 @@ class ShipBashInterpreter(BashCSTVisitor):
             text = os.path.expanduser(text)
 
         # Glob expansion (pathname expansion) for patterns
-        if glob.has_magic(text):
+        # Skip if noglob (-f) is enabled
+        if not self._shell_options['noglob'] and glob.has_magic(text):
             matches = sorted(glob.glob(text))
             # Default bash behavior: return literal pattern if no matches
             return matches if matches else text

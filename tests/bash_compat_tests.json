@@ -318,5 +318,23 @@
   {"name": "empty_body", "category": "function", "code": "foo() { :; }; foo; echo $?"},
   {"name": "local_unset_vs_empty", "category": "function", "code": "foo() { local x; echo \"${x-unset}\"; x=; echo \"${x-unset}\"; }; foo"},
   {"name": "local_colon_default", "category": "function", "code": "foo() { local x=; echo \"${x:-default}\"; }; foo"},
-  {"name": "shadow_builtin", "category": "function", "code": "echo() { printf 'CUSTOM: %s\\n' \"$1\"; }; echo hello"}
+  {"name": "shadow_builtin", "category": "function", "code": "echo() { printf 'CUSTOM: %s\\n' \"$1\"; }; echo hello"},
+
+  {"name": "noexec_stops_execution", "category": "noexec", "code": "echo before; set -n; echo should_not_run"},
+  {"name": "noexec_long_form", "category": "noexec", "code": "echo before; set -o noexec; echo should_not_run"},
+
+  {"name": "noglob_prevents_expansion", "category": "noglob", "code": "set -f; echo /etc/*"},
+  {"name": "noglob_long_form", "category": "noglob", "code": "set -o noglob; echo /etc/*"},
+  {"name": "noglob_off_restores", "category": "noglob", "code": "set -f; set +f; echo /etc/passwd"},
+  {"name": "noglob_literal_star", "category": "noglob", "code": "set -f; echo '*.txt'"},
+  {"name": "noglob_question_mark", "category": "noglob", "code": "set -f; echo /bin/??"},
+
+  {"name": "braceexpand_off_prevents", "category": "braceexpand", "code": "set +B; echo {a,b,c}"},
+  {"name": "braceexpand_off_long_form", "category": "braceexpand", "code": "set -o nobraceexpand; echo {a,b,c}"},
+  {"name": "braceexpand_on_restores", "category": "braceexpand", "code": "set +B; set -B; echo {a,b}"},
+  {"name": "braceexpand_range_disabled", "category": "braceexpand", "code": "set +B; echo {1..3}"},
+
+  {"name": "allexport_basic", "category": "allexport", "code": "set -a; FOO=bar; bash -c 'echo $FOO'"},
+  {"name": "allexport_long_form", "category": "allexport", "code": "set -o allexport; X=test; bash -c 'echo $X'"},
+  {"name": "allexport_off_stops", "category": "allexport", "code": "set -a; A=one; set +a; B=two; bash -c 'echo $A $B'"}
 ]
