@@ -395,6 +395,22 @@ class ShellRunnable(ABC):
         return Negated(self)
 
 
+class NoopRunnable(ShellRunnable):
+    """A runnable that does nothing and returns a fixed exit code.
+
+    Useful for cases like noclobber where the command should not run
+    but execution should continue with a non-zero exit code.
+    """
+
+    def __init__(self, exit_code: int = 0):
+        super().__init__()
+        self._exit_code = exit_code
+
+    @override
+    def _exec(self, io: IOConfig | None = None) -> ShellResult:
+        return ShellResult(self._exit_code)
+
+
 class Command(ShellRunnable):
     def __init__(self, program: str, *args: Any):
         super().__init__()

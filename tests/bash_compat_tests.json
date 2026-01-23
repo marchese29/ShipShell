@@ -336,5 +336,13 @@
 
   {"name": "allexport_basic", "category": "allexport", "code": "set -a; FOO=bar; bash -c 'echo $FOO'"},
   {"name": "allexport_long_form", "category": "allexport", "code": "set -o allexport; X=test; bash -c 'echo $X'"},
-  {"name": "allexport_off_stops", "category": "allexport", "code": "set -a; A=one; set +a; B=two; bash -c 'echo $A $B'"}
+  {"name": "allexport_off_stops", "category": "allexport", "code": "set -a; A=one; set +a; B=two; bash -c 'echo $A $B'"},
+
+  {"name": "noclobber_blocks_overwrite", "category": "noclobber", "code": "echo first > /tmp/ss_noclobber; set -C; echo second > /tmp/ss_noclobber 2>&1; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"},
+  {"name": "noclobber_long_form", "category": "noclobber", "code": "echo first > /tmp/ss_noclobber; set -o noclobber; echo second > /tmp/ss_noclobber 2>&1; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"},
+  {"name": "noclobber_allows_new_file", "category": "noclobber", "code": "rm -f /tmp/ss_noclobber; set -C; echo created > /tmp/ss_noclobber; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"},
+  {"name": "noclobber_allows_append", "category": "noclobber", "code": "echo first > /tmp/ss_noclobber; set -C; echo second >> /tmp/ss_noclobber; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"},
+  {"name": "noclobber_force_overwrite", "category": "noclobber", "code": "echo first > /tmp/ss_noclobber; set -C; echo second >| /tmp/ss_noclobber; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"},
+  {"name": "noclobber_off_restores", "category": "noclobber", "code": "echo first > /tmp/ss_noclobber; set -C; set +C; echo second > /tmp/ss_noclobber; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"},
+  {"name": "noclobber_script_continues", "category": "noclobber", "code": "echo first > /tmp/ss_noclobber; set -C; echo blocked > /tmp/ss_noclobber 2>/dev/null; echo continued; rm -f /tmp/ss_noclobber"}
 ]

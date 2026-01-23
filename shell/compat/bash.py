@@ -18,7 +18,15 @@ import tree_sitter_bash as tsbash
 from tree_sitter import Language, Parser
 
 from shell.environment import ShellEnvironment, env as global_env
-from shell.model import InProcessCallable, NotPipeline, Pipeline, ShellRunnable, capture, prog
+from shell.model import (
+    InProcessCallable,
+    NoopRunnable,
+    NotPipeline,
+    Pipeline,
+    ShellRunnable,
+    capture,
+    prog,
+)
 
 
 def _expect[T](thing: T | None) -> T:
@@ -1888,14 +1896,29 @@ class ShipBashInterpreter(BashCSTVisitor):
                 )
                 dest_file = _bash_to_file(self.evaluate(dest_nodes[0]))
 
-                # Check for >> vs >
+                # Check redirect operator type: >> (append), >| (force), or > (normal)
                 is_append = any(
                     self._get_text(child) == '>>' for child in redirect_node.children
+                )
+                is_force = any(
+                    self._get_text(child) == '>|' for child in redirect_node.children
                 )
 
                 if is_append:
                     runnable >>= dest_file
+                elif is_force:
+                    # >| always overwrites, even with noclobber
+                    runnable = runnable > dest_file
                 else:
+                    # Regular > - check noclobber
+                    if self._shell_options['noclobber'] and os.path.exists(dest_file):
+                        print(
+                            f'bash: {dest_file}: cannot overwrite existing file',
+                            file=sys.stderr,
+                        )
+                        # Return a no-op that produces no output and returns exit code 1
+                        # The command doesn't run, but the script/pipeline continues
+                        return NoopRunnable(exit_code=1)
                     runnable = runnable > dest_file
             elif redirect_node.type == 'heredoc_redirect':
                 # Check for tab-stripping mode (<<-)
