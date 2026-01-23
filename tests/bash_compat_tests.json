@@ -176,6 +176,9 @@
   {"name": "pipefail_first_fails", "category": "pipefail", "code": "set -o pipefail; false | true | true; echo $?"},
   {"name": "pipefail_short_flag", "category": "pipefail", "code": "set -o pipefail; false | echo ok; echo $?"},
 
+  {"name": "noexec_stops_execution", "category": "noexec", "code": "echo before; set -n; echo should_not_run"},
+  {"name": "noexec_long_form", "category": "noexec", "code": "echo before; set -o noexec; echo should_not_run"},
+
   {"name": "positional_at_unquoted", "category": "positional_params", "code": "set -- a b c; echo $@"},
   {"name": "positional_at_quoted", "category": "positional_params", "code": "set -- a b c; echo \"$@\""},
   {"name": "positional_star_unquoted", "category": "positional_params", "code": "set -- a b c; echo $*"},

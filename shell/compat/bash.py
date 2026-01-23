@@ -581,7 +581,25 @@ class ShipBashInterpreter(BashCSTVisitor):
         return ':'.join(name for name, enabled in self._shell_options.items() if enabled)
 
     def visit(self, node: ts.Node):
-        """Override to check errexit after each statement."""
+        """Override to handle verbose, noexec, and errexit."""
+        # Verbose (-v): Print input lines as they are read (before expansion)
+        # Only print for "statement-level" nodes, not sub-expressions
+        if self._shell_options['verbose'] and node.type in (
+            'command', 'pipeline', 'list', 'compound_statement',
+            'if_statement', 'while_statement', 'for_statement',
+            'case_statement', 'function_definition',
+        ):
+            print(self._get_text(node), file=sys.stderr)
+
+        # Noexec (-n): Read commands but don't execute (syntax check mode)
+        if self._shell_options['noexec']:
+            # Still visit children to parse/validate, but skip actual execution
+            # by not calling super().visit() which triggers visit_* methods
+            for child in node.children:
+                if child.is_named:
+                    self.visit(child)
+            return
+
         super().visit(node)
         # Don't check errexit for 'list' nodes - they contain && or || chains
         # which shouldn't trigger errexit. Individual commands inside are
@@ -825,6 +843,10 @@ class ShipBashInterpreter(BashCSTVisitor):
                     return result
                 else:
                     return value_str.lower()
+
+            # Note: Case toggle operators (~ and ~~) are not supported because
+            # tree-sitter-bash doesn't recognize the syntax, and macOS system
+            # bash doesn't support them either.
 
             case '@':
                 # Transformation operators
