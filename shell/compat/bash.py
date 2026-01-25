@@ -7,6 +7,7 @@ import re
 import stat
 import sys
 import tempfile
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -23,6 +24,7 @@ from shell.model import (
     NoopRunnable,
     NotPipeline,
     Pipeline,
+    ShellEscapingException,
     ShellRunnable,
     capture,
     prog,
@@ -46,7 +48,7 @@ class CallFrame:
     local_vars: dict[str, BashValue] = field(default_factory=dict)
 
 
-class BashReturnException(Exception):
+class BashReturnException(ShellEscapingException):
     """Raised when a return statement is executed inside a function."""
 
     def __init__(self, exit_code: int = 0):
@@ -255,7 +257,7 @@ def _expand_braces(string: str) -> list[str]:
     return result if len(result) > 1 or result[0] != '' else []
 
 
-class BashScriptError(Exception):
+class BashScriptError(ShellEscapingException):
     """Raised when bash script execution should terminate with an error."""
 
     def __init__(self, message: str, exit_code: int = 1):
@@ -309,23 +311,23 @@ class SyntheticNode:
         return self._children
 
 
-class BashCSTVisitor:
-    # Statements
-    def visit(self, node: ts.Node):
+class BashCSTVisitor(ABC):
+    @abstractmethod
+    def execute(self, node: ts.Node):
+        ...
+
+    @abstractmethod
+    def visit_children(self, node: ts.Node) -> ShellRunnable:
+        ...
+
+    def visit(self, node: ts.Node) -> ShellRunnable:
         method_name = f'visit_{node.type}'
-        method: Callable[[ts.Node], None] | None = getattr(self, method_name, None)
+        method: Callable[[ts.Node], ShellRunnable] | None = getattr(self, method_name, None)
 
         if method is not None:
-            method(node)
+            return method(node)
         else:
             return self.visit_children(node)
-
-    def visit_children(self, node: ts.Node):
-        children_to_visit = (
-            [n for n in node.children if n.is_named] if node.child_count > 0 else []
-        )
-        for child in children_to_visit:
-            self.visit(child)
 
     # Expressions
     def evaluate(self, node: ts.Node | SyntheticNode) -> BashValue:
@@ -370,7 +372,7 @@ FLAG_TO_OPTION = {
 }
 
 
-class ShipBashInterpreter(BashCSTVisitor):
+class BashInterpreter(BashCSTVisitor):
     def __init__(
         self,
         source: str,
@@ -471,7 +473,7 @@ class ShipBashInterpreter(BashCSTVisitor):
         frame = CallFrame(func_name=func_name, positional_params=args)
         self._call_stack.append(frame)
         try:
-            self.visit_children(body_node)
+            self.execute(body_node)
         except BashReturnException as e:
             self._env.last_exit = e.exit_code
         finally:
@@ -591,10 +593,9 @@ class ShipBashInterpreter(BashCSTVisitor):
         """Build SHELLOPTS string for subshell inheritance."""
         return ':'.join(name for name, enabled in self._shell_options.items() if enabled)
 
-    def visit(self, node: ts.Node):
-        """Override to handle verbose, noexec, and errexit."""
+    def execute(self, node: ts.Node):
+        """Dispatch to visit_* method and execute the returned runnable."""
         # Verbose (-v): Print input lines as they are read (before expansion)
-        # Only print for "statement-level" nodes, not sub-expressions
         if self._shell_options['verbose'] and node.type in (
             'command', 'pipeline', 'list', 'compound_statement',
             'if_statement', 'while_statement', 'for_statement',
@@ -602,21 +603,26 @@ class ShipBashInterpreter(BashCSTVisitor):
         ):
             print(self._get_text(node), file=sys.stderr)
 
-        # Noexec (-n): Read commands but don't execute (syntax check mode)
-        if self._shell_options['noexec']:
-            # Still visit children to parse/validate, but skip actual execution
-            # by not calling super().visit() which triggers visit_* methods
-            for child in node.children:
-                if child.is_named:
-                    self.visit(child)
-            return
+        runnable = self.visit(node)
 
-        super().visit(node)
-        # Don't check errexit for 'list' nodes - they contain && or || chains
-        # which shouldn't trigger errexit. Individual commands inside are
-        # handled separately with suppression.
-        if node.type != 'list':
-            self._check_errexit()
+        # Noexec (-n): Parse but don't execute (syntax check mode)
+        if not self._shell_options['noexec']:
+            runnable()
+
+            # Don't check errexit for 'list' nodes - they contain && or || chains
+            # which shouldn't trigger errexit.
+            if node.type != 'list':
+                self._check_errexit()
+
+    def visit_children(self, node: ts.Node) -> ShellRunnable:
+        children = [n for n in node.children if n.is_named]
+
+        def run_children():
+            for child in children:
+                self.execute(child)
+            return self._env.last_exit
+
+        return InProcessCallable(run_children, name='compound')
 
     def _get_text(self, node: ts.Node) -> str:
         return self._source[node.start_byte : node.end_byte]
@@ -1016,8 +1022,7 @@ class ShipBashInterpreter(BashCSTVisitor):
             # Empty command substitution
             return ''
 
-        # Build a runnable from the command
-        return capture(self._node_to_runnable(command_node)).read_stdout()
+        return capture(self.visit(command_node)).read_stdout()
 
     def evaluate_concatenation(self, node: ts.Node) -> BashValue:
         """Concatenate child nodes, expanding variables and other constructs."""
@@ -1254,8 +1259,7 @@ class ShipBashInterpreter(BashCSTVisitor):
         return result
 
     def evaluate_subshell(self, node: ts.Node) -> BashValue:
-        runnable = self._node_to_runnable(node)
-        return capture(runnable).read_stdout()
+        return capture(self.visit(node)).read_stdout()
 
     def evaluate_regex(self, node: ts.Node) -> BashValue:
         """Return the regex pattern as-is."""
@@ -2018,132 +2022,35 @@ class ShipBashInterpreter(BashCSTVisitor):
             name=func_name,
         )
 
-    def _build_command_runnable(self, cmd_node: ts.Node) -> ShellRunnable:
-        name_node = _expect(cmd_node.child_by_field_name('name'))
+    def visit_case_statement(self, node: ts.Node) -> ShellRunnable:
+        """Build case statement runnable with proper glob pattern matching."""
+        def do_case():
+            value_node = _expect(node.child_by_field_name('value'))
+            value = _bash_to_str(self.evaluate(value_node))
 
-        cmd_name = self._get_text(name_node)
-        cmd_args = []
-        for arg_node in cmd_node.children_by_field_name('argument'):
-            arg_value = self.evaluate(arg_node)
+            for case_item in [n for n in node.children if n.type == 'case_item']:
+                pattern_nodes = case_item.children_by_field_name('value')
 
-            # Flatten lists from glob expansion
-            if isinstance(arg_value, list):
-                cmd_args.extend([_bash_to_str(v) for v in arg_value])
-            else:
-                cmd_args.append(_bash_to_str(arg_value))
+                matched = False
+                for pattern_node in pattern_nodes:
+                    pattern = _bash_to_str(self.evaluate(pattern_node))
+                    if fnmatch.fnmatch(value, pattern):
+                        matched = True
+                        break
 
-        # Check if it's a user-defined function
-        if cmd_name in self._functions:
-            return self._build_function_runnable(cmd_name, cmd_args)
+                if matched:
+                    for child in case_item.named_children:
+                        if child not in pattern_nodes:
+                            self.execute(child)
 
-        return prog(cmd_name)(*cmd_args)
+                    if case_item.child_by_field_name('fallthrough'):
+                        continue
+                    else:
+                        return self._env.last_exit
 
-    def _build_pipeline_runnable(self, pipeline_node: ts.Node) -> ShellRunnable:
-        """Build a runnable from a pipeline node by chaining commands."""
-        commands = [
-            self._node_to_runnable(child)
-            for child in pipeline_node.children
-            if child.is_named
-        ]
-        if not commands:
-            raise ValueError('Empty pipeline')
-        if len(commands) == 1:
-            return commands[0]
-        # Create Pipeline with pipefail option from shell state
-        # Cast is safe: pipeline children are commands, not nested pipelines
-        predecessors = cast(list[NotPipeline], commands[:-1])
-        final_cmd = cast(NotPipeline, commands[-1])
-        return Pipeline(predecessors, final_cmd, pipefail=self._shell_options['pipefail'])
+            return 0  # No pattern matched
 
-    def _node_to_runnable(self, node: ts.Node) -> ShellRunnable:
-        """Convert any executable node to a ShipRunnable.
-
-        This is a general method that handles converting various bash node types
-        into ShipShell runnables, centralizing the conversion logic.
-        """
-        match node.type:
-            case 'command':
-                return self._build_command_runnable(node)
-            case 'pipeline':
-                return self._build_pipeline_runnable(node)
-            case 'subshell':
-                # Extract subshell command text and wrap in bash -c with all vars
-                full_text = self._get_text(node)
-                commands_text = full_text[1:-1].strip()  # Remove ( and )
-
-                if not commands_text:
-                    # Empty subshell - return a no-op
-                    return prog('true')()
-
-                # Get ALL current variables (not just exported)
-                all_vars = dict(self._env.items())
-
-                # Pass shell options via SHELLOPTS for inheritance
-                shellopts = self._build_shellopts()
-                if shellopts:
-                    all_vars['SHELLOPTS'] = shellopts
-
-                # Return a runnable that executes bash with all variables
-                return prog('bash')('-c', commands_text).env(**all_vars)
-            case 'negated_command':
-                # Get the child node and build a negated runnable
-                child_nodes = [c for c in node.children if c.is_named]
-                if not child_nodes:
-                    raise ValueError('Negated command has no child')
-                inner_runnable = self._node_to_runnable(child_nodes[0])
-                return inner_runnable.neg()
-            case 'redirected_statement':
-                # Get the body and build the runnable with redirects applied
-                body_node = node.child_by_field_name('body')
-                if body_node is None:
-                    raise ValueError('Redirected statement has no body')
-                runnable = self._node_to_runnable(body_node)
-                return self._apply_redirects(runnable, node)
-            case 'test_command':
-                # Build a test runnable by evaluating the expression
-                child = next((c for c in node.children if c.is_named), None)
-                if child is None:
-                    return prog('false')()
-                # Evaluate the expression and return true/false runnable
-                result = _bash_to_int(self.evaluate(child))
-                return prog('true')() if result else prog('false')()
-            case _:
-                raise ValueError(f"Cannot convert node type '{node.type}' to runnable")
-
-    def visit_case_statement(self, node: ts.Node):
-        """Handle case statements with proper glob pattern matching."""
-        # Get the value to match against
-        value_node = _expect(node.child_by_field_name('value'))
-        value = _bash_to_str(self.evaluate(value_node))
-
-        # Iterate through case items
-        for case_item in [n for n in node.children if n.type == 'case_item']:
-            # Get all pattern nodes (we need to skip these when visiting body)
-            pattern_nodes = case_item.children_by_field_name('value')
-
-            # Check if ANY pattern matches (OR logic)
-            matched = False
-            for pattern_node in pattern_nodes:
-                pattern = _bash_to_str(self.evaluate(pattern_node))
-                # Use fnmatch for glob pattern matching (*, ?, [abc], etc.)
-                if fnmatch.fnmatch(value, pattern):
-                    matched = True
-                    break  # Found a match, no need to check other patterns
-
-            # If matched, visit all children EXCEPT the patterns
-            if matched:
-                for child in case_item.named_children:
-                    # Skip pattern nodes (already evaluated)
-                    if child not in pattern_nodes:
-                        self.visit(child)
-
-                # Handle termination
-                if case_item.child_by_field_name('fallthrough'):
-                    # ;& or ;;& - continue to next case_item
-                    continue
-                else:
-                    # ;; - default termination, stop processing
-                    return
+        return InProcessCallable(do_case, name='case')
 
     def _handle_set_command(self, node: ts.Node):
         """Handle the set builtin for shell options and positional params.
@@ -2191,26 +2098,47 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         self._env.last_exit = 0
 
-    def visit_command(self, node: ts.Node):
-        # Intercept special builtins that modify interpreter state
+    def visit_command(self, node: ts.Node) -> ShellRunnable:
         name_node = node.child_by_field_name('name')
-        if name_node:
-            cmd_name = self._get_text(name_node)
-            if cmd_name == 'set':
-                self._handle_set_command(node)
-                return
-            if cmd_name == 'return':
-                self._handle_return_command(node)
-                return
-            if cmd_name == ':':
-                # Colon is a noop builtin that returns 0
-                self._env.last_exit = 0
-                return
+        if not name_node:
+            return InProcessCallable(lambda: 0, name='empty')
 
-        runnable = self._build_command_runnable(node)
+        cmd_name = self._get_text(name_node)
+
+        # Special builtins that modify interpreter state
+        if cmd_name == 'set':
+            def do_set():
+                self._handle_set_command(node)
+                return 0
+            return InProcessCallable(do_set, name='set')
+
+        if cmd_name == 'return':
+            def do_return():
+                self._handle_return_command(node)
+                return 0
+            return InProcessCallable(do_return, name='return')
+
+        if cmd_name == ':':
+            return InProcessCallable(lambda: 0, name=':')
+
+        # Build arguments
+        cmd_args = []
+        for arg_node in node.children_by_field_name('argument'):
+            arg_value = self.evaluate(arg_node)
+            if isinstance(arg_value, list):
+                cmd_args.extend([_bash_to_str(v) for v in arg_value])
+            else:
+                cmd_args.append(_bash_to_str(arg_value))
+
+        # Build runnable (user function or external command)
+        if cmd_name in self._functions:
+            runnable = self._build_function_runnable(cmd_name, cmd_args)
+        else:
+            runnable = prog(cmd_name)(*cmd_args)
+
         # Apply any inline redirects (e.g., here strings: cat <<< "hello")
         runnable = self._apply_redirects(runnable, node)
-        runnable()
+        return runnable
 
     def _handle_return_command(self, node: ts.Node):
         """Handle the return builtin - exits from a function with an exit code."""
@@ -2231,66 +2159,59 @@ class ShipBashInterpreter(BashCSTVisitor):
 
         raise BashReturnException(exit_code)
 
-    def visit_declaration_command(self, node: ts.Node):
-        """Handle export, declare, typeset, readonly, local"""
-        # Get the command keyword (first child)
+    def visit_declaration_command(self, node: ts.Node) -> ShellRunnable:
+        """Build declaration command runnable: export, declare, typeset, readonly, local"""
         keyword_node = node.children[0] if node.children else None
         if keyword_node is None:
-            return
+            return InProcessCallable(lambda: 0, name='declare')
 
         keyword = self._get_text(keyword_node)
 
-        # Handle 'local' - only valid inside functions
-        if keyword == 'local':
-            if not self._call_stack:
-                print('bash: local: can only be used in a function', file=sys.stderr)
-                self._env.last_exit = 1
-                return
+        def do_declare():
+            # Handle 'local' - only valid inside functions
+            if keyword == 'local':
+                if not self._call_stack:
+                    print('bash: local: can only be used in a function', file=sys.stderr)
+                    return 1
 
-            current_frame = self._call_stack[-1]
+                current_frame = self._call_stack[-1]
+                for child in node.children:
+                    if child.type == 'variable_assignment':
+                        name_node = child.child_by_field_name('name')
+                        value_node = child.child_by_field_name('value')
+                        if name_node:
+                            name = _bash_to_str(self.evaluate(name_node))
+                            value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
+                            current_frame.local_vars[name] = value
+                    elif child.type in ('word', 'variable_name') and child != keyword_node:
+                        var_name = self._get_text(child)
+                        if var_name not in current_frame.local_vars:
+                            current_frame.local_vars[var_name] = ''
+                return 0
+
+            # Handle variable assignments in the command
             for child in node.children:
                 if child.type == 'variable_assignment':
                     name_node = child.child_by_field_name('name')
                     value_node = child.child_by_field_name('value')
-                    if name_node:
-                        name = _bash_to_str(self.evaluate(name_node))
-                        value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
-                        current_frame.local_vars[name] = value
-                elif child.type in ('word', 'variable_name') and child != keyword_node:
-                    # local VAR (declare local without value)
-                    var_name = self._get_text(child)
-                    if var_name not in current_frame.local_vars:
-                        current_frame.local_vars[var_name] = ''
 
-            self._env.last_exit = 0
-            return
+                    if name_node is None:
+                        continue
 
-        # Handle variable assignments in the command
-        for child in node.children:
-            if child.type == 'variable_assignment':
-                name_node = child.child_by_field_name('name')
-                value_node = child.child_by_field_name('value')
+                    name = _bash_to_str(self.evaluate(name_node))
+                    value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
+                    self._env[name] = value
 
-                if name_node is None:
-                    continue
+                    if keyword == 'export':
+                        self._env.export(name)
+                elif child.type in ('word', 'string', 'raw_string', 'variable_name'):
+                    if keyword == 'export':
+                        var_name = _bash_to_str(self._get_text(child))
+                        if var_name in self._env:
+                            self._env.export(var_name)
+            return 0
 
-                name = _bash_to_str(self.evaluate(name_node))
-                value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
-
-                # Set the variable
-                self._env[name] = value
-
-                # Mark as exported if it's an export command
-                if keyword == 'export':
-                    self._env.export(name)
-                # TODO: Handle declare -x, typeset -x when needed
-            elif child.type in ('word', 'string', 'raw_string', 'variable_name'):
-                # export VAR (without assignment - export existing var)
-                if keyword == 'export':
-                    var_name = _bash_to_str(self._get_text(child))
-                    # Only mark as exported if it exists
-                    if var_name in self._env:
-                        self._env.export(var_name)
+        return InProcessCallable(do_declare, name=keyword)
 
     def _execute_c_style_expr(self, node: ts.Node) -> int:
         """Execute a c-style for loop expression/statement and return its integer value.
@@ -2301,7 +2222,7 @@ class ShipBashInterpreter(BashCSTVisitor):
         with self._arithmetic_context():
             if node.type == 'variable_assignment':
                 # Execute the assignment and return the assigned value
-                self.visit(node)
+                self.execute(node)
                 name_node = _expect(node.child_by_field_name('name'))
                 var_name = self._get_text(name_node)
                 return _bash_to_int(self._env.get(var_name, 0))
@@ -2309,111 +2230,97 @@ class ShipBashInterpreter(BashCSTVisitor):
                 # Regular expression - evaluate and return
                 return _bash_to_int(self.evaluate(node))
 
-    def visit_c_style_for_statement(self, node: ts.Node):
-        """Handle c-style for loops: `for ((i=0; i<10; i++)); do ...; done`"""
+    def visit_c_style_for_statement(self, node: ts.Node) -> ShellRunnable:
+        """Build c-style for loop runnable: `for ((i=0; i<10; i++)); do ...; done`"""
         initializers = node.children_by_field_name('initializer')
         conditions = node.children_by_field_name('condition')
         updates = node.children_by_field_name('update')
         body = _expect(node.child_by_field_name('body'))
 
-        def eval_conditions() -> bool:
-            """Evaluate condition expressions - empty means infinite loop (true)"""
-            if not conditions:
-                return True
+        def do_c_style_for():
+            def eval_conditions() -> bool:
+                if not conditions:
+                    return True
+                result = 1
+                for condition in [c for c in conditions if c.is_named]:
+                    result = self._execute_c_style_expr(condition)
+                return result != 0
 
-            # Comma-separated conditions are ALL evaluated (comma operator behavior)
-            # Only the last result determines loop continuation
-            # Note: && and || within expressions DO short-circuit via evaluate_binary_expression
-            # Default to 1 (truthy) in case there are no named condition nodes
-            result = 1
-            for condition in [c for c in conditions if c.is_named]:
-                result = self._execute_c_style_expr(condition)
+            def run_updates():
+                if not updates:
+                    return
+                for update in [u for u in updates if u.is_named]:
+                    self._execute_c_style_expr(update)
 
-            return result != 0
+            if initializers:
+                for initializer in [i for i in initializers if i.is_named]:
+                    self._execute_c_style_expr(initializer)
 
-        def run_updates():
-            """Execute update expressions"""
-            if not updates:
-                return
-            for update in [u for u in updates if u.is_named]:
-                self._execute_c_style_expr(update)
+            while eval_conditions():
+                self.execute(body)
+                run_updates()
 
-        # Run the initializers if there are any
-        if initializers:
-            for initializer in [i for i in initializers if i.is_named]:
-                self._execute_c_style_expr(initializer)
+            return self._env.last_exit
 
-        # While the condition evaluates to True
-        while eval_conditions():
-            self.visit_children(body)  # Run the body
-            run_updates()  # Execute updates
+        return InProcessCallable(do_c_style_for, name='for(())')
 
-    def visit_for_statement(self, node: ts.Node):
-        """Handle for loops: for var in values; do ...; done"""
-        # Get loop variable name
+    def visit_for_statement(self, node: ts.Node) -> ShellRunnable:
+        """Build for loop runnable: for var in values; do ...; done"""
         var_node = _expect(node.child_by_field_name('variable'))
         var_name = self._get_text(var_node)
 
-        # Get values to iterate over
-        value_nodes = node.children_by_field_name('value')
+        def do_for():
+            value_nodes = node.children_by_field_name('value')
 
-        if not value_nodes:
-            # No "in" clause - defaults to $@ (positional parameters)
-            values = self._positional_params
-        else:
-            # Expand all value expressions
-            values: list[str] = []
-            for v_node in value_nodes:
-                result = self.evaluate(v_node)
+            if not value_nodes:
+                values = self._positional_params
+            else:
+                values: list[str] = []
+                for v_node in value_nodes:
+                    result = self.evaluate(v_node)
 
-                if isinstance(result, list):
-                    # Array expansion (e.g., "${arr[@]}") - each element is separate
-                    values.extend(result)
-                elif v_node.type == 'command_substitution':
-                    # Command substitution output is split on whitespace (IFS)
-                    output = _bash_to_str(result)
-                    if output:
-                        values.extend(output.split())
-                else:
-                    # Scalar value - single iteration value
-                    values.append(_bash_to_str(result))
+                    if isinstance(result, list):
+                        values.extend(result)
+                    elif v_node.type == 'command_substitution':
+                        output = _bash_to_str(result)
+                        if output:
+                            values.extend(output.split())
+                    else:
+                        values.append(_bash_to_str(result))
 
-        # Execute loop body for each value
-        body_node = node.child_by_field_name('body')
-        if body_node:
-            for value in values:
-                self._env[var_name] = value
-                self.visit_children(body_node)
+            body_node = node.child_by_field_name('body')
+            if body_node:
+                for value in values:
+                    self._env[var_name] = value
+                    self.execute(body_node)
 
-    def visit_function_definition(self, node: ts.Node):
-        """Register a function definition.
+            return self._env.last_exit
+
+        return InProcessCallable(do_for, name='for')
+
+    def visit_function_definition(self, node: ts.Node) -> ShellRunnable:
+        """Build function definition runnable.
 
         Handles all three syntaxes:
         - function foo { ... }
         - foo() { ... }
         - function foo() { ... }
-
-        All produce a function_definition node with:
-        - name: word node containing function name
-        - body: compound_statement node containing the function body
         """
-        # Extract function name - first word child is the name
         name_node = next((c for c in node.children if c.type == 'word'), None)
         if name_node is None:
             raise BashScriptError('function definition without name')
 
         func_name = self._get_text(name_node)
 
-        # Extract function body (compound_statement)
         body_node = next((c for c in node.children if c.type == 'compound_statement'), None)
         if body_node is None:
             raise BashScriptError(f'function {func_name} has no body')
 
-        # Store the function (allows redefinition)
-        self._functions[func_name] = body_node
+        def do_define():
+            self._functions[func_name] = body_node
+            return 0
 
-        # Function definition returns 0
-        self._env.last_exit = 0
+        return InProcessCallable(do_define, name=f'function {func_name}')
 
     def _visit_elif_clause(self, node: ts.Node) -> bool:
         it = iter(node.children)
@@ -2423,7 +2330,7 @@ class ShipBashInterpreter(BashCSTVisitor):
         with self._suppress_errexit():
             while child and child.type != 'then':
                 if child.is_named:
-                    self.visit(child)
+                    self.execute(child)
                 child = next(it, None)
 
         # Return here if the condition doesn't pass
@@ -2433,104 +2340,116 @@ class ShipBashInterpreter(BashCSTVisitor):
         # Otherwise run the body and report back that it ran
         while child := next(it, None):
             if child.is_named:
-                self.visit(child)
+                self.execute(child)
         return True
 
-    def visit_if_statement(self, node: ts.Node):
-        it = iter(node.children)
+    def visit_if_statement(self, node: ts.Node) -> ShellRunnable:
+        def do_if():
+            it = iter(node.children)
 
-        # Run through everything before the "then" node (condition - suppress errexit)
-        child = next(it, None)
-        with self._suppress_errexit():
-            while child and child.type != 'then':
-                if child.is_named:
-                    self.visit(child)
+            # Run through everything before the "then" node (condition - suppress errexit)
+            child = next(it, None)
+            with self._suppress_errexit():
+                while child and child.type != 'then':
+                    if child.is_named:
+                        self.execute(child)
+                    child = next(it, None)
+            child = next(it, None)  # Consume the "then" node
+
+            # Work through the body, running statements if condition was successful
+            run_body = self._env.get('?', 0) == 0
+            while child and child.type not in ('elif_clause', 'else_clause', 'fi'):
+                if run_body:
+                    self.execute(child)
                 child = next(it, None)
-        child = next(it, None)  # Consume the "then" node
-
-        # Work through the body, running statements if condition was successful
-        run_body = self._env.get('?', 0) == 0
-        while child and child.type not in ('elif_clause', 'else_clause', 'fi'):
             if run_body:
-                self.visit(child)
-            child = next(it, None)
-        if run_body:
-            return
+                return self._env.last_exit
 
-        # Try the elif clauses if the initial condition didn't pass
-        while child and child.type == 'elif_clause':
-            if self._visit_elif_clause(child):
-                return
-            child = next(it, None)
+            # Try the elif clauses if the initial condition didn't pass
+            while child and child.type == 'elif_clause':
+                if self._visit_elif_clause(child):
+                    return self._env.last_exit
+                child = next(it, None)
 
-        if child and child.type == 'else_clause':
-            self.visit_children(child)
-        else:
-            # No branch executed - bash returns 0 in this case
-            self._env.last_exit = 0
+            if child and child.type == 'else_clause':
+                self.execute(child)
+                return self._env.last_exit
+            else:
+                # No branch executed - bash returns 0 in this case
+                return 0
 
-    def visit_list(self, node: ts.Node):
-        # Check if this list contains && or || (errexit suppressed for those)
-        has_and_or = any(c.type in ('&&', '||') for c in node.children)
+        return InProcessCallable(do_if, name='if')
 
-        for child in node.children:
-            if child.is_named:
-                if has_and_or:
-                    with self._suppress_errexit():
-                        self.visit(child)
-                else:
-                    self.visit(child)
-            elif child.type == '&&':
-                if self._env.get('?', 0) != 0:
-                    return
-            elif child.type == '||':
-                if self._env.get('?', 0) == 0:
-                    return
+    def visit_list(self, node: ts.Node) -> ShellRunnable:
+        def do_list():
+            has_and_or = any(c.type in ('&&', '||') for c in node.children)
 
-    def visit_negated_command(self, node: ts.Node):
+            for child in node.children:
+                if child.is_named:
+                    if has_and_or:
+                        with self._suppress_errexit():
+                            self.execute(child)
+                    else:
+                        self.execute(child)
+                elif child.type == '&&':
+                    if self._env.get('?', 0) != 0:
+                        return self._env.last_exit
+                elif child.type == '||':
+                    if self._env.get('?', 0) == 0:
+                        return self._env.last_exit
+
+            return self._env.last_exit
+
+        return InProcessCallable(do_list, name='list')
+
+    def visit_negated_command(self, node: ts.Node) -> ShellRunnable:
         child_nodes = [c for c in node.children if c.is_named]
         if not child_nodes:
             raise ValueError('Negated command has no child')
 
-        # Build a runnable from the child and negate it (suppress errexit - negation inverts result)
-        with self._suppress_errexit():
-            runnable = self._node_to_runnable(child_nodes[0])
-            runnable.neg()()
+        negated = self.visit(child_nodes[0]).neg()
 
-    def visit_pipeline(self, node: ts.Node):
-        # Build and execute the pipeline using the helper method
-        runnable = self._build_pipeline_runnable(node)
-        runnable()
+        def do_negated():
+            with self._suppress_errexit():
+                result = negated()
+            return result.exit_code
 
-    def visit_redirected_statement(self, node: ts.Node):
-        # Get the body (the command being redirected)
+        return InProcessCallable(do_negated, name='!')
+
+    def visit_pipeline(self, node: ts.Node) -> ShellRunnable:
+        commands = [
+            self.visit(child)
+            for child in node.children
+            if child.is_named
+        ]
+        if not commands:
+            raise ValueError('Empty pipeline')
+        if len(commands) == 1:
+            return commands[0]
+        # Create Pipeline with pipefail option from shell state
+        predecessors = cast(list[NotPipeline], commands[:-1])
+        final_cmd = cast(NotPipeline, commands[-1])
+        return Pipeline(predecessors, final_cmd, pipefail=self._shell_options['pipefail'])
+
+    def visit_redirected_statement(self, node: ts.Node) -> ShellRunnable:
         body_node = node.child_by_field_name('body')
         if body_node is None:
             raise ValueError('Redirected statement has no body')
 
-        # Build the base runnable from the body
-        runnable = self._node_to_runnable(body_node)
+        runnable = self.visit(body_node)
+        return self._apply_redirects(runnable, node)
 
-        # Apply redirects using the helper
-        runnable = self._apply_redirects(runnable, node)
-
-        # Execute the redirected runnable
-        runnable()
-
-    def visit_subshell(self, node: ts.Node):
+    def visit_subshell(self, node: ts.Node) -> ShellRunnable:
         """Handle bash subshells: (commands)
 
         Subshells inherit ALL variables (not just exported ones) and execute
         in an isolated environment where changes don't affect the parent.
         """
-        # Extract the source text of the subshell (between the parentheses)
         full_text = self._get_text(node)
         commands_text = full_text[1:-1].strip()  # Remove outer ( and )
 
         if not commands_text:
-            # Empty subshell: ()
-            self._env.last_exit = 0
-            return
+            return InProcessCallable(lambda: 0, name='subshell')
 
         # Get ALL current variables (not just exported ones)
         all_vars = dict(self._env.items())
@@ -2540,9 +2459,7 @@ class ShipBashInterpreter(BashCSTVisitor):
         if shellopts:
             all_vars['SHELLOPTS'] = shellopts
 
-        # Execute bash with all variables passed via with_env
-        sub_bash = prog('bash')('-c', commands_text).env(**all_vars)
-        sub_bash()
+        return prog('bash')('-c', commands_text).env(**all_vars)
 
     # --- Test expression precedence fix (ShipShell-53a) ---
     #
@@ -2679,88 +2596,105 @@ class ShipBashInterpreter(BashCSTVisitor):
         # Single value (true if non-empty, like -n)
         return left, pos
 
-    def visit_test_command(self, node: ts.Node):
-        """Execute a test command: [[ expression ]] or [ expression ]
+    def visit_test_command(self, node: ts.Node) -> ShellRunnable:
+        """Build a test command runnable: [[ expression ]] or [ expression ]
 
         Restructures the AST to fix tree-sitter-bash's incorrect precedence
         for -a, -o, and ! operators before evaluation.
         """
         child = next((c for c in node.children if c.is_named), None)
         if child is None:
-            self._env.last_exit = 1
-            return
+            return InProcessCallable(lambda: 1, name='test')
 
-        # Restructure tree if it contains logical operators with precedence issues
-        if self._test_needs_restructuring(child):
-            leaves = self._collect_test_leaves(child)
-            fixed_tree = self._build_test_tree(leaves)
-            result = _bash_to_int(self.evaluate(fixed_tree))
+        def do_test():
+            if self._test_needs_restructuring(child):
+                leaves = self._collect_test_leaves(child)
+                fixed_tree = self._build_test_tree(leaves)
+                result = _bash_to_int(self.evaluate(fixed_tree))
+            else:
+                result = _bash_to_int(self.evaluate(child))
+            return 0 if result else 1
+
+        return InProcessCallable(do_test, name='test')
+
+    def visit_compound_statement(self, node: ts.Node) -> ShellRunnable:
+        """Build compound statement runnable.
+
+        Handles two forms:
+        - { commands; } - brace group, executes commands sequentially
+        - (( expression )) - arithmetic, evaluates to exit code 0/1
+        """
+        first_child = node.children[0] if node.children else None
+
+        if first_child and first_child.type == '((':
+            # Arithmetic: (( expression ))
+            def do_arithmetic():
+                with self._arithmetic_context():
+                    for child in node.children:
+                        if child.is_named:
+                            result = _bash_to_int(self.evaluate(child))
+                            return 0 if result else 1
+                    return 0
+
+            return InProcessCallable(do_arithmetic, name='(( ))')
         else:
-            result = _bash_to_int(self.evaluate(child))
+            # Brace group: { commands; }
+            def do_brace_group():
+                for child in node.children:
+                    if child.is_named:
+                        self.execute(child)
+                return self._env.last_exit
 
-        self._env.last_exit = 0 if result else 1
+            return InProcessCallable(do_brace_group, name='{ }')
 
-    def visit_compound_statement(self, node: ts.Node):
-        """Execute arithmetic compound statement: (( expression ))"""
-        with self._arithmetic_context():
-            # Find the expression inside (( ... ))
+    def visit_unset_command(self, node: ts.Node) -> ShellRunnable:
+        """Build unset command runnable to remove variables"""
+        def do_unset():
             for child in node.children:
-                if child.is_named:
-                    # Evaluate the expression (handles assignments, arithmetic, etc.)
-                    result = _bash_to_int(self.evaluate(child))
-                    # Exit code: 0 if non-zero result, 1 if zero
-                    self._env.last_exit = 0 if result else 1
-                    return
-            self._env.last_exit = 0
+                if child.type in ('word', 'variable_name'):
+                    var_name = self._get_text(child)
+                    if var_name in self._env:
+                        del self._env[var_name]
+            return 0
 
-    def visit_unset_command(self, node: ts.Node):
-        """Handle unset command to remove variables"""
-        # unset command removes variables from the environment
-        # Usage: unset VAR1 VAR2 VAR3
-        for child in node.children:
-            if child.type in ('word', 'variable_name'):
-                var_name = self._get_text(child)
-                # Use del to remove from environment (calls __delitem__)
-                if var_name in self._env:
-                    del self._env[var_name]
+        return InProcessCallable(do_unset, name='unset')
 
-    def visit_variable_assignment(self, node: ts.Node):
-        """Handle variable assignment: var=value"""
+    def visit_variable_assignment(self, node: ts.Node) -> ShellRunnable:
+        """Build variable assignment runnable: var=value"""
         name_node = _expect(node.child_by_field_name('name'))
         value_node = node.child_by_field_name('value')
-
         name = self._get_text(name_node)
-        if value_node:
-            value = self.evaluate(value_node)
-            # Preserve arrays as-is, convert other types to strings
-            if not isinstance(value, list):
-                value = _bash_to_str(value)
-        else:
-            value = ''
 
-        # Set variable (respects local scope if in a function)
-        self._set_variable(name, value)
+        def do_assign():
+            if value_node:
+                value = self.evaluate(value_node)
+                if not isinstance(value, list):
+                    value = _bash_to_str(value)
+            else:
+                value = ''
+            self._set_variable(name, value)
+            return 0
 
-    def visit_while_statement(self, node: ts.Node):
-        # Loop while condition is true (exit code 0)
-        while True:
-            # Execute condition (suppress errexit - condition failure is expected)
-            condition_node = node.child_by_field_name('condition')
-            if condition_node:
-                with self._suppress_errexit():
-                    self.visit(condition_node)
+        return InProcessCallable(do_assign, name=f'{name}=...')
 
-            # If condition failed (non-zero exit), exit loop
-            if self._env.last_exit != 0:
-                break
+    def visit_while_statement(self, node: ts.Node) -> ShellRunnable:
+        def do_while():
+            while True:
+                condition_node = node.child_by_field_name('condition')
+                if condition_node:
+                    with self._suppress_errexit():
+                        self.execute(condition_node)
 
-            # Execute body (do_group)
-            body_node = node.child_by_field_name('body')
-            if body_node:
-                self.visit_children(body_node)
+                if self._env.last_exit != 0:
+                    break
 
-        # While loop that never executes body returns 0
-        self._env.last_exit = 0
+                body_node = node.child_by_field_name('body')
+                if body_node:
+                    self.execute(body_node)
+
+            return 0  # While loop returns 0
+
+        return InProcessCallable(do_while, name='while')
 
 
 def print_bash_tree(bash_code: str, show_unnamed: bool = False):
@@ -2807,7 +2741,7 @@ def print_bash_tree(bash_code: str, show_unnamed: bool = False):
 
 
 def _wire_functions(
-    interpreter: ShipBashInterpreter,
+    interpreter: BashInterpreter,
     scope: str | None,
 ) -> None:
     """Wire bash functions from interpreter into Python namespace.
@@ -2876,7 +2810,7 @@ def _wire_functions(
             # Still wire it - user may intentionally want to override
 
         # Create a closure that captures the interpreter and body node
-        def make_wrapper(interp: ShipBashInterpreter, name: str, body: ts.Node):
+        def make_wrapper(interp: BashInterpreter, name: str, body: ts.Node):
             def wrapper(*args: str) -> int:
                 """Call bash function with arguments. Returns exit code."""
                 return interp._execute_function_body(name, [str(a) for a in args], body)
@@ -2895,7 +2829,7 @@ def run_bash_code(
     env: ShellEnvironment = global_env,
     scope: str | None = '__main__',
 ):
-    """Parse and execute bash code using the ShipBashInterpreter.
+    """Parse and execute bash code using the BashInterpreter.
 
     Args:
         bash_code: A string containing bash code to parse and execute
@@ -2914,9 +2848,9 @@ def run_bash_code(
     tree = parser.parse(bytes(bash_code, 'utf-8'))
 
     # Create interpreter and execute
-    interpreter = ShipBashInterpreter(bash_code, args, script_name, env)
+    interpreter = BashInterpreter(bash_code, args, script_name, env)
     try:
-        interpreter.visit(tree.root_node)
+        interpreter.execute(tree.root_node)
     except BashScriptError as e:
         print(f'bash: {e}', file=sys.stderr)
         env.last_exit = e.exit_code

@@ -15,6 +15,12 @@ from .environment import env, env_to_str
 FileLike = int | str | Path
 
 
+class ShellEscapingException(Exception):
+    """Base for exceptions that escape InProcessCallable instead of becoming exit codes."""
+
+    pass
+
+
 class IOConfig:
     """Encapsulates stdin/stdout/stderr configuration with mutable builder pattern.
 
@@ -537,8 +543,11 @@ class InProcessCallable(ShellRunnable):
                 else:
                     # Non-int return value treated as success
                     exit_code = 0
+            except ShellEscapingException:
+                # Let control flow exceptions propagate (return, errexit, etc.)
+                raise
             except Exception:
-                # Exception during execution = failure
+                # Other exceptions during execution = failure
                 exit_code = 1
 
             sys.stdout.flush()

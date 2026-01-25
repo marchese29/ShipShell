@@ -6,20 +6,25 @@ The bash interpreter uses tree-sitter-bash to parse bash code into a CST, then w
 
 ### Key Components
 
-- `ShipBashInterpreter` - Main interpreter class with visitor pattern
+- `BashInterpreter` - Main interpreter class with visitor pattern
 - `run_bash_code(code, env=global_env)` - Entry point to execute bash code
 - `print_bash_tree(code)` - Debug utility to visualize the parse tree
 
 ### Visitor Pattern
 
 Methods follow naming conventions:
-- `visit_*` - Execute node with side effects (commands, assignments)
+- `visit_*` - Build a ShellRunnable for the node (deferred execution)
 - `evaluate_*` - Return a BashValue (expansions, expressions)
+- `execute()` - Dispatch to visit_* and run the returned runnable
 
 ```python
-def visit_command(self, node):
-    """Execute a command - has side effects."""
-    runnable = self._build_command_runnable(node)
+def visit_command(self, node) -> ShellRunnable:
+    """Build a runnable for command execution."""
+    return prog(cmd_name)(*args)
+
+def execute(self, node):
+    """Build and run the runnable for a node."""
+    runnable = self.visit(node)
     runnable()
 
 def evaluate_expansion(self, node):
