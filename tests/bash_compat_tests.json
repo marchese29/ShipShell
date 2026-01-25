@@ -1,346 +1,1635 @@
 [
-  {"name": "simple_echo", "category": "echo", "code": "echo hello"},
-  {"name": "echo_multiple_args", "category": "echo", "code": "echo hello world"},
-  {"name": "echo_quoted", "category": "echo", "code": "echo \"hello world\""},
-  {"name": "echo_single_quoted", "category": "echo", "code": "echo 'hello world'"},
-
-  {"name": "var_expansion", "category": "variable", "code": "echo $FOO", "setup_env": {"FOO": "bar"}},
-  {"name": "var_braces", "category": "variable", "code": "echo ${FOO}", "setup_env": {"FOO": "bar"}},
-  {"name": "var_default", "category": "variable", "code": "echo ${UNSET:-default}"},
-  {"name": "var_default_set", "category": "variable", "code": "echo ${FOO:-default}", "setup_env": {"FOO": "bar"}},
-
-  {"name": "and_operator", "category": "control_flow", "code": "echo one && echo two"},
-  {"name": "or_operator_first_succeeds", "category": "control_flow", "code": "echo one || echo two"},
-  {"name": "semicolon", "category": "control_flow", "code": "echo one; echo two"},
-
-  {"name": "ansi_newline", "category": "ansi_c_string", "code": "echo $'hello\\nworld'"},
-  {"name": "ansi_tab", "category": "ansi_c_string", "code": "echo $'col1\\tcol2'"},
-  {"name": "ansi_quote", "category": "ansi_c_string", "code": "echo $'it\\'s working'"},
-  {"name": "ansi_backslash", "category": "ansi_c_string", "code": "echo $'back\\\\slash'"},
-  {"name": "ansi_hex", "category": "ansi_c_string", "code": "echo $'\\x48\\x49'"},
-  {"name": "ansi_octal", "category": "ansi_c_string", "code": "echo $'\\110\\111'"},
-  {"name": "ansi_escape", "category": "ansi_c_string", "code": "echo $'\\e[31mred\\e[0m'"},
-
-  {"name": "simple_brace", "category": "brace_expansion", "code": "echo {a,b,c}"},
-  {"name": "brace_with_prefix", "category": "brace_expansion", "code": "echo file{1,2}.txt"},
-  {"name": "brace_range", "category": "brace_expansion", "code": "echo {1..5}"},
-  {"name": "brace_cartesian", "category": "brace_expansion", "code": "echo {a,b}{1,2}"},
-
-  {"name": "true_command", "category": "exit_code", "code": "true", "check_stdout": false},
-  {"name": "false_command", "category": "exit_code", "code": "false", "check_stdout": false},
-  {"name": "exit_zero", "category": "exit_code", "code": "exit 0", "check_stdout": false},
-  {"name": "exit_one", "category": "exit_code", "code": "exit 1", "check_stdout": false},
-  {"name": "exit_42", "category": "exit_code", "code": "exit 42", "check_stdout": false},
-
-  {"name": "simple_heredoc", "category": "heredoc", "code": "cat <<EOF\nhello world\nEOF"},
-  {"name": "heredoc_with_var", "category": "heredoc", "code": "NAME=Alice; cat <<EOF\nhello $NAME\nEOF"},
-  {"name": "heredoc_leading_text", "category": "heredoc", "code": "NAME=Bob; cat <<EOF\nDear $NAME, welcome!\nEOF"},
-  {"name": "heredoc_multiple_vars", "category": "heredoc", "code": "A=1; B=2; cat <<EOF\n$A + $B = 3\nEOF"},
-  {"name": "heredoc_multiline", "category": "heredoc", "code": "cat <<EOF\nline one\nline two\nline three\nEOF"},
-  {"name": "heredoc_tab_strip", "category": "heredoc", "code": "cat <<-EOF\n\thello\n\tworld\nEOF"},
-  {"name": "heredoc_with_leading_tab", "category": "heredoc", "code": "cat <<EOF\n\thello\n\tworld\nEOF"},
-
-  {"name": "simple_herestring", "category": "herestring", "code": "cat <<< \"hello\""},
-  {"name": "herestring_with_var", "category": "herestring", "code": "NAME=world; cat <<< \"hello $NAME\""},
-  {"name": "herestring_unquoted", "category": "herestring", "code": "cat <<< hello"},
-
-  {"name": "if_true", "category": "if_statement", "code": "if true; then echo yes; fi"},
-  {"name": "if_false", "category": "if_statement", "code": "if false; then echo yes; fi"},
-  {"name": "if_else", "category": "if_statement", "code": "if false; then echo yes; else echo no; fi"},
-  {"name": "if_elif", "category": "if_statement", "code": "if false; then echo one; elif true; then echo two; fi"},
-  {"name": "if_test_eq", "category": "if_statement", "code": "X=5; if [ \"$X\" = \"5\" ]; then echo match; fi"},
-  {"name": "if_test_ne", "category": "if_statement", "code": "X=5; if [ \"$X\" != \"6\" ]; then echo diff; fi"},
-
-  {"name": "arithmetic_assign", "category": "arithmetic", "code": "(( x = 5 )); echo $x"},
-  {"name": "arithmetic_expr", "category": "arithmetic", "code": "(( y = 2 + 3 )); echo $y"},
-  {"name": "arithmetic_increment", "category": "arithmetic", "code": "i=0; i=$((i+1)); i=$((i+1)); echo $i"},
-  {"name": "arithmetic_subtract", "category": "arithmetic", "code": "(( x = 10 - 4 )); echo $x"},
-  {"name": "arithmetic_multiply", "category": "arithmetic", "code": "(( x = 3 * 4 )); echo $x"},
-  {"name": "arithmetic_divide", "category": "arithmetic", "code": "(( x = 15 / 3 )); echo $x"},
-  {"name": "arithmetic_modulo", "category": "arithmetic", "code": "(( x = 17 % 5 )); echo $x"},
-  {"name": "arithmetic_power", "category": "arithmetic", "code": "(( x = 2 ** 8 )); echo $x"},
-  {"name": "arithmetic_compare_gt", "category": "arithmetic", "code": "(( 5 > 3 )); echo $?"},
-  {"name": "arithmetic_compare_lt", "category": "arithmetic", "code": "(( 3 > 5 )); echo $?"},
-  {"name": "arithmetic_compare_eq", "category": "arithmetic", "code": "(( 5 == 5 )); echo $?"},
-  {"name": "arithmetic_compare_ne", "category": "arithmetic", "code": "(( 5 != 3 )); echo $?"},
-  {"name": "arithmetic_postinc", "category": "arithmetic", "code": "x=5; (( x++ )); echo $x"},
-  {"name": "arithmetic_preinc", "category": "arithmetic", "code": "x=5; (( ++x )); echo $x"},
-  {"name": "arithmetic_postdec", "category": "arithmetic", "code": "x=5; (( x-- )); echo $x"},
-  {"name": "arithmetic_bitand", "category": "arithmetic", "code": "(( x = 5 & 3 )); echo $x"},
-  {"name": "arithmetic_bitor", "category": "arithmetic", "code": "(( x = 5 | 3 )); echo $x"},
-  {"name": "arithmetic_bitxor", "category": "arithmetic", "code": "(( x = 5 ^ 3 )); echo $x"},
-  {"name": "arithmetic_lshift", "category": "arithmetic", "code": "(( x = 1 << 4 )); echo $x"},
-  {"name": "arithmetic_rshift", "category": "arithmetic", "code": "(( x = 16 >> 2 )); echo $x"},
-  {"name": "arithmetic_ternary_true", "category": "arithmetic", "code": "(( x = 5 > 3 ? 10 : 20 )); echo $x"},
-  {"name": "arithmetic_ternary_false", "category": "arithmetic", "code": "(( x = 3 > 5 ? 10 : 20 )); echo $x"},
-  {"name": "arithmetic_logical_and", "category": "arithmetic", "code": "(( 1 && 1 )); echo $?"},
-  {"name": "arithmetic_logical_and_false", "category": "arithmetic", "code": "(( 1 && 0 )); echo $?"},
-  {"name": "arithmetic_logical_or", "category": "arithmetic", "code": "(( 0 || 1 )); echo $?"},
-  {"name": "arithmetic_parens", "category": "arithmetic", "code": "(( x = (2 + 3) * 4 )); echo $x"},
-  {"name": "arithmetic_expansion_basic", "category": "arithmetic", "code": "echo $((5 + 3))"},
-  {"name": "arithmetic_expansion_var", "category": "arithmetic", "code": "x=5; echo $((x * 2))"},
-  {"name": "arithmetic_expansion_multi", "category": "arithmetic", "code": "x=10; y=3; echo $((x + y))"},
-  {"name": "arithmetic_unary_minus", "category": "arithmetic", "code": "(( x = -5 )); echo $x"},
-  {"name": "arithmetic_unary_plus", "category": "arithmetic", "code": "(( x = +5 )); echo $x"},
-  {"name": "arithmetic_compound_add", "category": "arithmetic", "code": "x=10; (( x += 5 )); echo $x"},
-  {"name": "arithmetic_compound_sub", "category": "arithmetic", "code": "x=10; (( x -= 3 )); echo $x"},
-  {"name": "arithmetic_compound_mul", "category": "arithmetic", "code": "x=10; (( x *= 2 )); echo $x"},
-  {"name": "arithmetic_compound_div", "category": "arithmetic", "code": "x=20; (( x /= 4 )); echo $x"},
-
-  {"name": "while_basic", "category": "while_loop", "code": "i=0; while [ $i -lt 3 ]; do echo $i; i=$((i+1)); done"},
-  {"name": "while_no_iterations", "category": "while_loop", "code": "i=5; while [ $i -lt 3 ]; do echo $i; i=$((i+1)); done"},
-  {"name": "while_single_iteration", "category": "while_loop", "code": "i=0; while [ $i -lt 1 ]; do echo loop; i=1; done"},
-
-  {"name": "for_basic", "category": "for_loop", "code": "for i in 1 2 3; do echo $i; done"},
-  {"name": "for_strings", "category": "for_loop", "code": "for x in a b c; do echo item:$x; done"},
-  {"name": "for_single", "category": "for_loop", "code": "for x in one; do echo $x; done"},
-  {"name": "for_empty", "category": "for_loop", "code": "for i in; do echo $i; done"},
-
-  {"name": "case_simple", "category": "case_statement", "code": "x=foo; case $x in foo) echo matched;; esac"},
-  {"name": "case_multiple", "category": "case_statement", "code": "x=bar; case $x in foo) echo foo;; bar) echo bar;; esac"},
-  {"name": "case_default", "category": "case_statement", "code": "x=baz; case $x in foo) echo foo;; *) echo default;; esac"},
-  {"name": "case_glob", "category": "case_statement", "code": "x=hello; case $x in h*) echo starts with h;; esac"},
-
-  {"name": "pipe_simple", "category": "pipeline", "code": "echo hello | cat"},
-  {"name": "pipe_transform", "category": "pipeline", "code": "echo hello | tr a-z A-Z"},
-  {"name": "pipe_multi_stage", "category": "pipeline", "code": "echo hello | cat | cat"},
-  {"name": "pipe_word_count", "category": "pipeline", "code": "echo hello world | wc -w"},
-  {"name": "pipe_true_true", "category": "pipeline", "code": "true | true", "check_stdout": false},
-  {"name": "pipe_false_true", "category": "pipeline", "code": "false | true", "check_stdout": false},
-  {"name": "pipe_true_false", "category": "pipeline", "code": "true | false", "check_stdout": false},
-
-  {"name": "subshell_simple", "category": "subshell", "code": "(echo hello)"},
-  {"name": "subshell_multiple", "category": "subshell", "code": "(echo one; echo two)"},
-  {"name": "subshell_true", "category": "subshell", "code": "(true)", "check_stdout": false},
-  {"name": "subshell_false", "category": "subshell", "code": "(false)", "check_stdout": false},
-  {"name": "subshell_var_isolation", "category": "subshell", "code": "x=outer; (x=inner; echo $x); echo $x"},
-  {"name": "subshell_exit_code", "category": "subshell", "code": "(exit 42); echo $?"},
-  {"name": "subshell_in_pipeline", "category": "subshell", "code": "(echo hello) | cat"},
-
-  {"name": "test_string_z_empty", "category": "test_command", "code": "[ -z \"\" ]; echo $?"},
-  {"name": "test_string_z_nonempty", "category": "test_command", "code": "[ -z \"hello\" ]; echo $?"},
-  {"name": "test_string_n_nonempty", "category": "test_command", "code": "[ -n \"hello\" ]; echo $?"},
-  {"name": "test_string_n_empty", "category": "test_command", "code": "[ -n \"\" ]; echo $?"},
-  {"name": "test_string_ne", "category": "test_command", "code": "[ \"hello\" != \"world\" ]; echo $?"},
-  {"name": "test_string_eq_literal", "category": "test_command", "code": "[ \"hello\" = \"hello\" ]; echo $?"},
-  {"name": "test_string_eq_literal_fail", "category": "test_command", "code": "[ \"hello\" = \"world\" ]; echo $?"},
-  {"name": "test_int_eq", "category": "test_command", "code": "[ 5 -eq 5 ]; echo $?"},
-  {"name": "test_int_eq_fail", "category": "test_command", "code": "[ 5 -eq 6 ]; echo $?"},
-  {"name": "test_int_ne", "category": "test_command", "code": "[ 5 -ne 6 ]; echo $?"},
-  {"name": "test_int_lt", "category": "test_command", "code": "[ 5 -lt 10 ]; echo $?"},
-  {"name": "test_int_lt_fail", "category": "test_command", "code": "[ 10 -lt 5 ]; echo $?"},
-  {"name": "test_int_le", "category": "test_command", "code": "[ 5 -le 5 ]; echo $?"},
-  {"name": "test_int_gt", "category": "test_command", "code": "[ 5 -gt 3 ]; echo $?"},
-  {"name": "test_int_ge", "category": "test_command", "code": "[ 5 -ge 5 ]; echo $?"},
-
-  {"name": "test_bracket_z_empty", "category": "test_bracket", "code": "[[ -z \"\" ]]; echo $?"},
-  {"name": "test_bracket_n_nonempty", "category": "test_bracket", "code": "[[ -n \"hello\" ]]; echo $?"},
-  {"name": "test_bracket_string_ne", "category": "test_bracket", "code": "[[ \"hello\" != \"world\" ]]; echo $?"},
-  {"name": "test_bracket_string_eq", "category": "test_bracket", "code": "[[ \"hello\" == \"hello\" ]]; echo $?"},
-  {"name": "test_bracket_string_eq_fail", "category": "test_bracket", "code": "[[ \"hello\" == \"world\" ]]; echo $?"},
-  {"name": "test_bracket_regex_match", "category": "test_bracket", "code": "[[ \"hello123\" =~ [0-9]+ ]]; echo $?"},
-  {"name": "test_bracket_regex_no_match", "category": "test_bracket", "code": "[[ \"hello\" =~ [0-9]+ ]]; echo $?"},
-  {"name": "test_bracket_regex_anchor", "category": "test_bracket", "code": "[[ \"abc\" =~ ^a ]]; echo $?"},
-  {"name": "test_bracket_int_eq", "category": "test_bracket", "code": "[[ 5 -eq 5 ]]; echo $?"},
-  {"name": "test_bracket_int_ne", "category": "test_bracket", "code": "[[ 5 -ne 6 ]]; echo $?"},
-  {"name": "test_bracket_logical_and", "category": "test_bracket", "code": "[[ 1 -eq 1 && 2 -eq 2 ]]; echo $?"},
-  {"name": "test_bracket_logical_or", "category": "test_bracket", "code": "[[ 1 -eq 1 || 2 -eq 3 ]]; echo $?"},
-
-  {"name": "set_errexit_stops", "category": "set_command", "code": "set -e; false; echo should_not_print", "check_stdout": false},
-  {"name": "set_errexit_success", "category": "set_command", "code": "set -e; true; echo ok"},
-  {"name": "set_errexit_disable", "category": "set_command", "code": "set -e; set +e; false; echo still_running"},
-  {"name": "set_errexit_if_condition", "category": "set_command", "code": "set -e; if false; then echo no; fi; echo yes"},
-  {"name": "set_errexit_and_chain", "category": "set_command", "code": "set -e; false && echo no; echo yes"},
-  {"name": "set_errexit_or_chain", "category": "set_command", "code": "set -e; false || echo recovered; echo yes"},
-  {"name": "set_errexit_negated", "category": "set_command", "code": "set -e; ! false; echo yes"},
-  {"name": "set_errexit_while_condition", "category": "set_command", "code": "set -e; while false; do echo no; done; echo yes"},
-  {"name": "set_errexit_combined_flags", "category": "set_command", "code": "set -ex; true; echo ok", "check_stdout": false},
-  {"name": "set_errexit_long_form", "category": "set_command", "code": "set -o errexit; false; echo nope", "check_stdout": false},
-  {"name": "set_euo_pipefail", "category": "set_command", "code": "set -euo pipefail; true; echo ok"},
-
-  {"name": "nounset_undefined", "category": "nounset", "code": "set -u; echo $UNDEFINED_VAR_XYZ", "check_stdout": false},
-  {"name": "nounset_defined", "category": "nounset", "code": "set -u; X=hello; echo $X"},
-  {"name": "nounset_with_default", "category": "nounset", "code": "set -u; echo ${UNDEFINED_VAR:-default}"},
-  {"name": "nounset_with_assign", "category": "nounset", "code": "set -u; echo ${NEWVAR:=assigned}; echo $NEWVAR"},
-  {"name": "nounset_disabled", "category": "nounset", "code": "set -u; set +u; echo ${UNDEFINED}done"},
-  {"name": "nounset_special_vars", "category": "nounset", "code": "set -u; echo $?$#"},
-  {"name": "nounset_with_plus", "category": "nounset", "code": "set -u; X=val; echo ${X:+replacement}"},
-  {"name": "nounset_empty_with_plus", "category": "nounset", "code": "set -u; X=; echo ${X:+replacement}done"},
-
-  {"name": "pipefail_false_true", "category": "pipefail", "code": "set -o pipefail; false | true; echo $?"},
-  {"name": "pipefail_true_false", "category": "pipefail", "code": "set -o pipefail; true | false; echo $?"},
-  {"name": "pipefail_all_true", "category": "pipefail", "code": "set -o pipefail; true | true; echo $?"},
-  {"name": "pipefail_all_false", "category": "pipefail", "code": "set -o pipefail; false | false; echo $?"},
-  {"name": "pipefail_disabled", "category": "pipefail", "code": "false | true; echo $?"},
-  {"name": "pipefail_three_stage", "category": "pipefail", "code": "set -o pipefail; true | false | true; echo $?"},
-  {"name": "pipefail_first_fails", "category": "pipefail", "code": "set -o pipefail; false | true | true; echo $?"},
-  {"name": "pipefail_short_flag", "category": "pipefail", "code": "set -o pipefail; false | echo ok; echo $?"},
-
-  {"name": "noexec_stops_execution", "category": "noexec", "code": "echo before; set -n; echo should_not_run"},
-  {"name": "noexec_long_form", "category": "noexec", "code": "echo before; set -o noexec; echo should_not_run"},
-
-  {"name": "positional_at_unquoted", "category": "positional_params", "code": "set -- a b c; echo $@"},
-  {"name": "positional_at_quoted", "category": "positional_params", "code": "set -- a b c; echo \"$@\""},
-  {"name": "positional_star_unquoted", "category": "positional_params", "code": "set -- a b c; echo $*"},
-  {"name": "positional_star_quoted", "category": "positional_params", "code": "set -- a b c; echo \"$*\""},
-  {"name": "positional_in_string", "category": "positional_params", "code": "set -- x y z; echo \"args: $@\""},
-  {"name": "positional_count", "category": "positional_params", "code": "set -- one two three; echo $#"},
-  {"name": "positional_individual", "category": "positional_params", "code": "set -- first second third; echo $1 $2 $3"},
-  {"name": "positional_clear", "category": "positional_params", "code": "set -- a b c; set --; echo \"count:$#\""},
-
-  {"name": "unset_simple", "category": "unset", "code": "X=hello; unset X; echo ${X:-gone}"},
-  {"name": "unset_multiple", "category": "unset", "code": "A=1; B=2; C=3; unset A C; echo ${A:-a} ${B} ${C:-c}"},
-  {"name": "unset_nonexistent", "category": "unset", "code": "unset DOES_NOT_EXIST_XYZ; echo ok"},
-  {"name": "unset_preserves_others", "category": "unset", "code": "X=x; Y=y; Z=z; unset Y; echo $X $Z"},
-
-  {"name": "file_exists", "category": "file_test", "code": "[ -e /dev/null ]; echo $?"},
-  {"name": "file_not_exists", "category": "file_test", "code": "[ -e /nonexistent_path_xyz ]; echo $?"},
-  {"name": "file_is_file", "category": "file_test", "code": "[ -f /etc/passwd ]; echo $?"},
-  {"name": "file_is_dir", "category": "file_test", "code": "[ -d /tmp ]; echo $?"},
-  {"name": "file_not_dir", "category": "file_test", "code": "[ -d /dev/null ]; echo $?"},
-  {"name": "file_readable", "category": "file_test", "code": "[ -r /dev/null ]; echo $?"},
-  {"name": "file_writable", "category": "file_test", "code": "[ -w /dev/null ]; echo $?"},
-  {"name": "file_size_nonzero", "category": "file_test", "code": "[ -s /etc/passwd ]; echo $?"},
-  {"name": "file_size_zero", "category": "file_test", "code": "[ -s /dev/null ]; echo $?"},
-  {"name": "file_chardev", "category": "file_test", "code": "[ -c /dev/null ]; echo $?"},
-  {"name": "file_not_chardev", "category": "file_test", "code": "[ -c /tmp ]; echo $?"},
-  {"name": "file_test_bracket", "category": "file_test", "code": "[[ -e /dev/null ]]; echo $?"},
-  {"name": "file_combined_and", "category": "file_test", "code": "[ -e /dev/null ] && [ -d /tmp ]; echo $?"},
-
-  {"name": "array_assign", "category": "array", "code": "arr=(a b c); echo ${arr[0]}"},
-  {"name": "array_subscript_all", "category": "array", "code": "arr=(one two three); echo ${arr[@]}"},
-  {"name": "array_subscript_star", "category": "array", "code": "arr=(one two three); echo ${arr[*]}"},
-  {"name": "array_subscript_indices", "category": "array", "code": "arr=(a b c); echo ${arr[0]} ${arr[1]} ${arr[2]}"},
-  {"name": "array_length", "category": "array", "code": "arr=(a b c d e); echo ${#arr[@]}"},
-  {"name": "array_quoted_at", "category": "array", "code": "arr=(one two three); echo \"${arr[@]}\""},
-  {"name": "array_in_string", "category": "array", "code": "arr=(x y z); echo \"items: ${arr[@]}\""},
-  {"name": "array_empty", "category": "array", "code": "arr=(); echo \"len:${#arr[@]}\""},
-  {"name": "array_single_element", "category": "array", "code": "arr=(only); echo ${arr[0]} ${#arr[@]}"},
-
-  {"name": "cstyle_for_basic", "category": "cstyle_for", "code": "for ((i=0; i<3; i++)); do echo $i; done"},
-  {"name": "cstyle_for_decrement", "category": "cstyle_for", "code": "for ((i=3; i>0; i--)); do echo $i; done"},
-  {"name": "cstyle_for_step", "category": "cstyle_for", "code": "for ((i=0; i<10; i+=2)); do echo $i; done"},
-  {"name": "cstyle_for_multiply", "category": "cstyle_for", "code": "for ((i=1; i<=16; i*=2)); do echo $i; done"},
-  {"name": "cstyle_for_nested_expr", "category": "cstyle_for", "code": "for ((i=0; i<2+1; i++)); do echo $i; done"},
-  {"name": "cstyle_for_no_body", "category": "cstyle_for", "code": "for ((i=0; i<3; i++)); do :; done; echo done"},
-  {"name": "cstyle_for_var_compare", "category": "cstyle_for", "code": "n=3; for ((i=0; i<n; i++)); do echo $i; done"},
-
-  {"name": "test_and_int_eq", "category": "test_logical", "code": "[ 1 -eq 1 -a 2 -eq 2 ]; echo $?"},
-  {"name": "test_and_int_eq_fail", "category": "test_logical", "code": "[ 1 -eq 1 -a 2 -eq 3 ]; echo $?"},
-  {"name": "test_or_int_eq", "category": "test_logical", "code": "[ 1 -eq 1 -o 2 -eq 3 ]; echo $?"},
-  {"name": "test_or_both_fail", "category": "test_logical", "code": "[ 1 -eq 2 -o 3 -eq 4 ]; echo $?"},
-  {"name": "test_not_comparison", "category": "test_logical", "code": "[ ! 1 -eq 2 ]; echo $?"},
-  {"name": "test_not_comparison_fail", "category": "test_logical", "code": "[ ! 1 -eq 1 ]; echo $?"},
-  {"name": "test_not_file", "category": "test_logical", "code": "[ ! -f /nonexistent_xyz ]; echo $?"},
-  {"name": "test_and_file_tests", "category": "test_logical", "code": "[ -f /etc/passwd -a -d /tmp ]; echo $?"},
-  {"name": "test_or_string_tests", "category": "test_logical", "code": "[ -z \"\" -o -n \"hello\" ]; echo $?"},
-  {"name": "test_and_string_eq", "category": "test_logical", "code": "[ \"a\" = \"a\" -a \"b\" = \"b\" ]; echo $?"},
-  {"name": "test_and_string_eq_fail", "category": "test_logical", "code": "[ \"a\" = \"a\" -a \"b\" = \"c\" ]; echo $?"},
-  {"name": "test_complex_and_or", "category": "test_logical", "code": "[ 1 -eq 1 -o 0 -eq 1 -a 0 -eq 1 ]; echo $?"},
-  {"name": "test_not_not", "category": "test_logical", "code": "[ ! ! 1 -eq 1 ]; echo $?"},
-  {"name": "test_and_unquoted_vars", "category": "test_logical", "code": "X=a; Y=b; [ $X = a -a $Y = b ]; echo $?"},
-  {"name": "test_or_unquoted_vars", "category": "test_logical", "code": "X=a; Y=b; [ $X = z -o $Y = b ]; echo $?"},
-  {"name": "test_and_quoted_vars", "category": "test_logical", "code": "X=foo; Y=bar; [ \"$X\" = \"foo\" -a \"$Y\" = \"bar\" ]; echo $?"},
-  {"name": "test_arith_expansion", "category": "test_logical", "code": "[ $((1+1)) -eq 2 -a $((2*3)) -eq 6 ]; echo $?"},
-
-  {"name": "case_upper_first", "category": "case_conversion", "code": "x=hello; echo ${x^}", "skip": "bash 4.0+ feature, macOS has bash 3.2"},
-  {"name": "case_upper_all", "category": "case_conversion", "code": "x=hello; echo ${x^^}", "skip": "bash 4.0+ feature, macOS has bash 3.2"},
-  {"name": "case_lower_first", "category": "case_conversion", "code": "x=HELLO; echo ${x,}", "skip": "bash 4.0+ feature, macOS has bash 3.2"},
-  {"name": "case_lower_all", "category": "case_conversion", "code": "x=HELLO; echo ${x,,}", "skip": "bash 4.0+ feature, macOS has bash 3.2"},
-  {"name": "case_upper_already_upper", "category": "case_conversion", "code": "x=HELLO; echo ${x^^}", "skip": "bash 4.0+ feature, macOS has bash 3.2"},
-  {"name": "case_lower_already_lower", "category": "case_conversion", "code": "x=hello; echo ${x,,}", "skip": "bash 4.0+ feature, macOS has bash 3.2"},
-  {"name": "case_mixed_to_upper", "category": "case_conversion", "code": "x=HeLLo; echo ${x^^}", "skip": "bash 4.0+ feature, macOS has bash 3.2"},
-  {"name": "case_with_numbers", "category": "case_conversion", "code": "x=abc123def; echo ${x^^}", "skip": "bash 4.0+ feature, macOS has bash 3.2"},
-
-  {"name": "varname_prefix_at", "category": "variable_names", "code": "ABC_ONE=1; ABC_TWO=2; XYZ=3; echo ${!ABC_@}"},
-  {"name": "varname_prefix_star", "category": "variable_names", "code": "ABC_ONE=1; ABC_TWO=2; XYZ=3; echo ${!ABC_*}"},
-  {"name": "varname_no_match", "category": "variable_names", "code": "X=1; echo \"${!NONEXISTENT_PREFIX_@}\""},
-  {"name": "varname_single_match", "category": "variable_names", "code": "UNIQUE_VAR_XYZ=42; echo ${!UNIQUE_VAR_@}"},
-
-  {"name": "array_indices_at", "category": "array_indices", "code": "arr=(a b c); echo ${!arr[@]}", "skip": "ShipShell-oq3 + bash 4.0+ feature"},
-  {"name": "array_indices_star", "category": "array_indices", "code": "arr=(a b c); echo ${!arr[*]}", "skip": "ShipShell-oq3 + bash 4.0+ feature"},
-  {"name": "array_indices_sparse", "category": "array_indices", "code": "arr=(); arr[0]=a; arr[5]=b; arr[10]=c; echo ${!arr[@]}", "skip": "ShipShell-oq3 + bash 4.0+ feature"},
-  {"name": "array_indices_empty", "category": "array_indices", "code": "arr=(); echo \"${!arr[@]}\""},
-
-  {"name": "pattern_prefix_short", "category": "pattern_removal", "code": "x=hello_world_hello; echo ${x#*_}"},
-  {"name": "pattern_prefix_long", "category": "pattern_removal", "code": "x=hello_world_hello; echo ${x##*_}"},
-  {"name": "pattern_suffix_short", "category": "pattern_removal", "code": "x=hello_world_hello; echo ${x%_*}"},
-  {"name": "pattern_suffix_long", "category": "pattern_removal", "code": "x=hello_world_hello; echo ${x%%_*}"},
-  {"name": "pattern_prefix_no_match", "category": "pattern_removal", "code": "x=hello; echo ${x#xyz}"},
-  {"name": "pattern_suffix_no_match", "category": "pattern_removal", "code": "x=hello; echo ${x%xyz}"},
-  {"name": "pattern_prefix_literal", "category": "pattern_removal", "code": "x=hello; echo ${x#he}"},
-  {"name": "pattern_suffix_literal", "category": "pattern_removal", "code": "x=hello; echo ${x%lo}"},
-  {"name": "pattern_file_extension", "category": "pattern_removal", "code": "f=document.tar.gz; echo ${f%.*}"},
-  {"name": "pattern_file_basename", "category": "pattern_removal", "code": "f=/path/to/file.txt; echo ${f##*/}"},
-  {"name": "pattern_file_dirname", "category": "pattern_removal", "code": "f=/path/to/file.txt; echo ${f%/*}"},
-
-  {"name": "replace_first", "category": "pattern_replace", "code": "x=hello_hello; echo ${x/hello/world}"},
-  {"name": "replace_all", "category": "pattern_replace", "code": "x=hello_hello; echo ${x//hello/world}"},
-  {"name": "replace_prefix", "category": "pattern_replace", "code": "x=hello_world; echo ${x/#hello/goodbye}"},
-  {"name": "replace_suffix", "category": "pattern_replace", "code": "x=hello_world; echo ${x/%world/earth}"},
-  {"name": "replace_no_match", "category": "pattern_replace", "code": "x=hello; echo ${x/xyz/abc}"},
-  {"name": "replace_delete", "category": "pattern_replace", "code": "x=hello; echo ${x/l/}"},
-  {"name": "replace_delete_all", "category": "pattern_replace", "code": "x=hello; echo ${x//l/}"},
-  {"name": "replace_glob_star", "category": "pattern_replace", "code": "x=abcdef; echo ${x/b*e/X}"},
-  {"name": "replace_prefix_no_match", "category": "pattern_replace", "code": "x=hello; echo ${x/#world/X}"},
-  {"name": "replace_suffix_no_match", "category": "pattern_replace", "code": "x=hello; echo ${x/%world/X}"},
-
-  {"name": "arithmetic_bitnot", "category": "arithmetic", "code": "(( x = ~0 )); echo $x"},
-  {"name": "arithmetic_bitnot_positive", "category": "arithmetic", "code": "(( x = ~5 )); echo $x"},
-
-  {"name": "file_newer_than", "category": "file_comparison", "code": "touch /tmp/shipshell_old; sleep 1; touch /tmp/shipshell_new; [ /tmp/shipshell_new -nt /tmp/shipshell_old ]; r=$?; rm -f /tmp/shipshell_old /tmp/shipshell_new; echo $r"},
-  {"name": "file_older_than", "category": "file_comparison", "code": "touch /tmp/shipshell_old; sleep 1; touch /tmp/shipshell_new; [ /tmp/shipshell_old -ot /tmp/shipshell_new ]; r=$?; rm -f /tmp/shipshell_old /tmp/shipshell_new; echo $r"},
-  {"name": "file_not_newer", "category": "file_comparison", "code": "touch /tmp/shipshell_old; sleep 1; touch /tmp/shipshell_new; [ /tmp/shipshell_old -nt /tmp/shipshell_new ]; r=$?; rm -f /tmp/shipshell_old /tmp/shipshell_new; echo $r"},
-  {"name": "file_same_file", "category": "file_comparison", "code": "touch /tmp/shipshell_f1; ln /tmp/shipshell_f1 /tmp/shipshell_f2; [ /tmp/shipshell_f1 -ef /tmp/shipshell_f2 ]; r=$?; rm -f /tmp/shipshell_f1 /tmp/shipshell_f2; echo $r"},
-  {"name": "file_not_same_file", "category": "file_comparison", "code": "touch /tmp/shipshell_f1; touch /tmp/shipshell_f2; [ /tmp/shipshell_f1 -ef /tmp/shipshell_f2 ]; r=$?; rm -f /tmp/shipshell_f1 /tmp/shipshell_f2; echo $r"},
-  {"name": "file_same_as_self", "category": "file_comparison", "code": "touch /tmp/shipshell_f1; [ /tmp/shipshell_f1 -ef /tmp/shipshell_f1 ]; r=$?; rm -f /tmp/shipshell_f1; echo $r"},
-
-  {"name": "basic", "category": "function", "code": "foo() { echo hello; }; foo"},
-  {"name": "keyword_syntax", "category": "function", "code": "function bar { echo world; }; bar"},
-  {"name": "with_args", "category": "function", "code": "greet() { echo \"Hello, $1!\"; }; greet Alice"},
-  {"name": "multiple_args", "category": "function", "code": "add() { echo $(($1 + $2)); }; add 3 5"},
-  {"name": "all_args_at", "category": "function", "code": "show() { echo \"$@\"; }; show a b c"},
-  {"name": "all_args_star", "category": "function", "code": "show() { echo \"$*\"; }; show a b c"},
-  {"name": "arg_count", "category": "function", "code": "count() { echo $#; }; count a b c d"},
-  {"name": "return_zero", "category": "function", "code": "foo() { return 0; }; foo; echo $?"},
-  {"name": "return_42", "category": "function", "code": "foo() { return 42; }; foo; echo $?"},
-  {"name": "return_implicit", "category": "function", "code": "foo() { false; }; foo; echo $?"},
-  {"name": "local_var", "category": "function", "code": "x=global; foo() { local x=local; echo $x; }; foo; echo $x"},
-  {"name": "local_shadows", "category": "function", "code": "x=1; foo() { local x; x=2; echo $x; }; foo; echo $x"},
-  {"name": "nested_call", "category": "function", "code": "inner() { echo inner; }; outer() { inner; echo outer; }; outer"},
-  {"name": "recursive", "category": "function", "code": "countdown() { if [ $1 -gt 0 ]; then echo $1; countdown $(($1 - 1)); fi; }; countdown 3"},
-  {"name": "redefine", "category": "function", "code": "foo() { echo first; }; foo; foo() { echo second; }; foo"},
-  {"name": "dynamic_scope", "category": "function", "code": "x=outer; foo() { echo $x; }; bar() { local x=inner; foo; }; bar"},
-  {"name": "in_pipeline", "category": "function", "code": "upper() { tr a-z A-Z; }; echo hello | upper"},
-  {"name": "in_cmd_subst", "category": "function", "code": "greet() { echo hello; }; result=$(greet); echo $result"},
-  {"name": "empty_body", "category": "function", "code": "foo() { :; }; foo; echo $?"},
-  {"name": "local_unset_vs_empty", "category": "function", "code": "foo() { local x; echo \"${x-unset}\"; x=; echo \"${x-unset}\"; }; foo"},
-  {"name": "local_colon_default", "category": "function", "code": "foo() { local x=; echo \"${x:-default}\"; }; foo"},
-  {"name": "shadow_builtin", "category": "function", "code": "echo() { printf 'CUSTOM: %s\\n' \"$1\"; }; echo hello"},
-
-  {"name": "noexec_stops_execution", "category": "noexec", "code": "echo before; set -n; echo should_not_run"},
-  {"name": "noexec_long_form", "category": "noexec", "code": "echo before; set -o noexec; echo should_not_run"},
-
-  {"name": "noglob_prevents_expansion", "category": "noglob", "code": "set -f; echo /etc/*"},
-  {"name": "noglob_long_form", "category": "noglob", "code": "set -o noglob; echo /etc/*"},
-  {"name": "noglob_off_restores", "category": "noglob", "code": "set -f; set +f; echo /etc/passwd"},
-  {"name": "noglob_literal_star", "category": "noglob", "code": "set -f; echo '*.txt'"},
-  {"name": "noglob_question_mark", "category": "noglob", "code": "set -f; echo /bin/??"},
-
-  {"name": "braceexpand_off_prevents", "category": "braceexpand", "code": "set +B; echo {a,b,c}"},
-  {"name": "braceexpand_off_long_form", "category": "braceexpand", "code": "set -o nobraceexpand; echo {a,b,c}"},
-  {"name": "braceexpand_on_restores", "category": "braceexpand", "code": "set +B; set -B; echo {a,b}"},
-  {"name": "braceexpand_range_disabled", "category": "braceexpand", "code": "set +B; echo {1..3}"},
-
-  {"name": "allexport_basic", "category": "allexport", "code": "set -a; FOO=bar; bash -c 'echo $FOO'"},
-  {"name": "allexport_long_form", "category": "allexport", "code": "set -o allexport; X=test; bash -c 'echo $X'"},
-  {"name": "allexport_off_stops", "category": "allexport", "code": "set -a; A=one; set +a; B=two; bash -c 'echo $A $B'"},
-
-  {"name": "noclobber_blocks_overwrite", "category": "noclobber", "code": "echo first > /tmp/ss_noclobber; set -C; echo second > /tmp/ss_noclobber 2>&1; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"},
-  {"name": "noclobber_long_form", "category": "noclobber", "code": "echo first > /tmp/ss_noclobber; set -o noclobber; echo second > /tmp/ss_noclobber 2>&1; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"},
-  {"name": "noclobber_allows_new_file", "category": "noclobber", "code": "rm -f /tmp/ss_noclobber; set -C; echo created > /tmp/ss_noclobber; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"},
-  {"name": "noclobber_allows_append", "category": "noclobber", "code": "echo first > /tmp/ss_noclobber; set -C; echo second >> /tmp/ss_noclobber; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"},
-  {"name": "noclobber_force_overwrite", "category": "noclobber", "code": "echo first > /tmp/ss_noclobber; set -C; echo second >| /tmp/ss_noclobber; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"},
-  {"name": "noclobber_off_restores", "category": "noclobber", "code": "echo first > /tmp/ss_noclobber; set -C; set +C; echo second > /tmp/ss_noclobber; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"},
-  {"name": "noclobber_script_continues", "category": "noclobber", "code": "echo first > /tmp/ss_noclobber; set -C; echo blocked > /tmp/ss_noclobber 2>/dev/null; echo continued; rm -f /tmp/ss_noclobber"}
+  {
+    "name": "simple_echo",
+    "category": "echo",
+    "code": "echo hello"
+  },
+  {
+    "name": "echo_multiple_args",
+    "category": "echo",
+    "code": "echo hello world"
+  },
+  {
+    "name": "echo_quoted",
+    "category": "echo",
+    "code": "echo \"hello world\""
+  },
+  {
+    "name": "echo_single_quoted",
+    "category": "echo",
+    "code": "echo 'hello world'"
+  },
+  {
+    "name": "var_expansion",
+    "category": "variable",
+    "code": "echo $FOO",
+    "setup_env": {
+      "FOO": "bar"
+    }
+  },
+  {
+    "name": "var_braces",
+    "category": "variable",
+    "code": "echo ${FOO}",
+    "setup_env": {
+      "FOO": "bar"
+    }
+  },
+  {
+    "name": "var_default",
+    "category": "variable",
+    "code": "echo ${UNSET:-default}"
+  },
+  {
+    "name": "var_default_set",
+    "category": "variable",
+    "code": "echo ${FOO:-default}",
+    "setup_env": {
+      "FOO": "bar"
+    }
+  },
+  {
+    "name": "and_operator",
+    "category": "control_flow",
+    "code": "echo one && echo two"
+  },
+  {
+    "name": "or_operator_first_succeeds",
+    "category": "control_flow",
+    "code": "echo one || echo two"
+  },
+  {
+    "name": "semicolon",
+    "category": "control_flow",
+    "code": "echo one; echo two"
+  },
+  {
+    "name": "ansi_newline",
+    "category": "ansi_c_string",
+    "code": "echo $'hello\\nworld'"
+  },
+  {
+    "name": "ansi_tab",
+    "category": "ansi_c_string",
+    "code": "echo $'col1\\tcol2'"
+  },
+  {
+    "name": "ansi_quote",
+    "category": "ansi_c_string",
+    "code": "echo $'it\\'s working'"
+  },
+  {
+    "name": "ansi_backslash",
+    "category": "ansi_c_string",
+    "code": "echo $'back\\\\slash'"
+  },
+  {
+    "name": "ansi_hex",
+    "category": "ansi_c_string",
+    "code": "echo $'\\x48\\x49'"
+  },
+  {
+    "name": "ansi_octal",
+    "category": "ansi_c_string",
+    "code": "echo $'\\110\\111'"
+  },
+  {
+    "name": "ansi_escape",
+    "category": "ansi_c_string",
+    "code": "echo $'\\e[31mred\\e[0m'"
+  },
+  {
+    "name": "simple_brace",
+    "category": "brace_expansion",
+    "code": "echo {a,b,c}"
+  },
+  {
+    "name": "brace_with_prefix",
+    "category": "brace_expansion",
+    "code": "echo file{1,2}.txt"
+  },
+  {
+    "name": "brace_range",
+    "category": "brace_expansion",
+    "code": "echo {1..5}"
+  },
+  {
+    "name": "brace_cartesian",
+    "category": "brace_expansion",
+    "code": "echo {a,b}{1,2}"
+  },
+  {
+    "name": "true_command",
+    "category": "exit_code",
+    "code": "true",
+    "check_stdout": false
+  },
+  {
+    "name": "false_command",
+    "category": "exit_code",
+    "code": "false",
+    "check_stdout": false
+  },
+  {
+    "name": "exit_zero",
+    "category": "exit_code",
+    "code": "exit 0",
+    "check_stdout": false
+  },
+  {
+    "name": "exit_one",
+    "category": "exit_code",
+    "code": "exit 1",
+    "check_stdout": false
+  },
+  {
+    "name": "exit_42",
+    "category": "exit_code",
+    "code": "exit 42",
+    "check_stdout": false
+  },
+  {
+    "name": "simple_heredoc",
+    "category": "heredoc",
+    "code": "cat <<EOF\nhello world\nEOF"
+  },
+  {
+    "name": "heredoc_with_var",
+    "category": "heredoc",
+    "code": "NAME=Alice; cat <<EOF\nhello $NAME\nEOF"
+  },
+  {
+    "name": "heredoc_leading_text",
+    "category": "heredoc",
+    "code": "NAME=Bob; cat <<EOF\nDear $NAME, welcome!\nEOF"
+  },
+  {
+    "name": "heredoc_multiple_vars",
+    "category": "heredoc",
+    "code": "A=1; B=2; cat <<EOF\n$A + $B = 3\nEOF"
+  },
+  {
+    "name": "heredoc_multiline",
+    "category": "heredoc",
+    "code": "cat <<EOF\nline one\nline two\nline three\nEOF"
+  },
+  {
+    "name": "heredoc_tab_strip",
+    "category": "heredoc",
+    "code": "cat <<-EOF\n\thello\n\tworld\nEOF"
+  },
+  {
+    "name": "heredoc_with_leading_tab",
+    "category": "heredoc",
+    "code": "cat <<EOF\n\thello\n\tworld\nEOF"
+  },
+  {
+    "name": "simple_herestring",
+    "category": "herestring",
+    "code": "cat <<< \"hello\""
+  },
+  {
+    "name": "herestring_with_var",
+    "category": "herestring",
+    "code": "NAME=world; cat <<< \"hello $NAME\""
+  },
+  {
+    "name": "herestring_unquoted",
+    "category": "herestring",
+    "code": "cat <<< hello"
+  },
+  {
+    "name": "if_true",
+    "category": "if_statement",
+    "code": "if true; then echo yes; fi"
+  },
+  {
+    "name": "if_false",
+    "category": "if_statement",
+    "code": "if false; then echo yes; fi"
+  },
+  {
+    "name": "if_else",
+    "category": "if_statement",
+    "code": "if false; then echo yes; else echo no; fi"
+  },
+  {
+    "name": "if_elif",
+    "category": "if_statement",
+    "code": "if false; then echo one; elif true; then echo two; fi"
+  },
+  {
+    "name": "if_test_eq",
+    "category": "if_statement",
+    "code": "X=5; if [ \"$X\" = \"5\" ]; then echo match; fi"
+  },
+  {
+    "name": "if_test_ne",
+    "category": "if_statement",
+    "code": "X=5; if [ \"$X\" != \"6\" ]; then echo diff; fi"
+  },
+  {
+    "name": "arithmetic_assign",
+    "category": "arithmetic",
+    "code": "(( x = 5 )); echo $x"
+  },
+  {
+    "name": "arithmetic_expr",
+    "category": "arithmetic",
+    "code": "(( y = 2 + 3 )); echo $y"
+  },
+  {
+    "name": "arithmetic_increment",
+    "category": "arithmetic",
+    "code": "i=0; i=$((i+1)); i=$((i+1)); echo $i"
+  },
+  {
+    "name": "arithmetic_subtract",
+    "category": "arithmetic",
+    "code": "(( x = 10 - 4 )); echo $x"
+  },
+  {
+    "name": "arithmetic_multiply",
+    "category": "arithmetic",
+    "code": "(( x = 3 * 4 )); echo $x"
+  },
+  {
+    "name": "arithmetic_divide",
+    "category": "arithmetic",
+    "code": "(( x = 15 / 3 )); echo $x"
+  },
+  {
+    "name": "arithmetic_modulo",
+    "category": "arithmetic",
+    "code": "(( x = 17 % 5 )); echo $x"
+  },
+  {
+    "name": "arithmetic_power",
+    "category": "arithmetic",
+    "code": "(( x = 2 ** 8 )); echo $x"
+  },
+  {
+    "name": "arithmetic_compare_gt",
+    "category": "arithmetic",
+    "code": "(( 5 > 3 )); echo $?"
+  },
+  {
+    "name": "arithmetic_compare_lt",
+    "category": "arithmetic",
+    "code": "(( 3 > 5 )); echo $?"
+  },
+  {
+    "name": "arithmetic_compare_eq",
+    "category": "arithmetic",
+    "code": "(( 5 == 5 )); echo $?"
+  },
+  {
+    "name": "arithmetic_compare_ne",
+    "category": "arithmetic",
+    "code": "(( 5 != 3 )); echo $?"
+  },
+  {
+    "name": "arithmetic_postinc",
+    "category": "arithmetic",
+    "code": "x=5; (( x++ )); echo $x"
+  },
+  {
+    "name": "arithmetic_preinc",
+    "category": "arithmetic",
+    "code": "x=5; (( ++x )); echo $x"
+  },
+  {
+    "name": "arithmetic_postdec",
+    "category": "arithmetic",
+    "code": "x=5; (( x-- )); echo $x"
+  },
+  {
+    "name": "arithmetic_bitand",
+    "category": "arithmetic",
+    "code": "(( x = 5 & 3 )); echo $x"
+  },
+  {
+    "name": "arithmetic_bitor",
+    "category": "arithmetic",
+    "code": "(( x = 5 | 3 )); echo $x"
+  },
+  {
+    "name": "arithmetic_bitxor",
+    "category": "arithmetic",
+    "code": "(( x = 5 ^ 3 )); echo $x"
+  },
+  {
+    "name": "arithmetic_lshift",
+    "category": "arithmetic",
+    "code": "(( x = 1 << 4 )); echo $x"
+  },
+  {
+    "name": "arithmetic_rshift",
+    "category": "arithmetic",
+    "code": "(( x = 16 >> 2 )); echo $x"
+  },
+  {
+    "name": "arithmetic_ternary_true",
+    "category": "arithmetic",
+    "code": "(( x = 5 > 3 ? 10 : 20 )); echo $x"
+  },
+  {
+    "name": "arithmetic_ternary_false",
+    "category": "arithmetic",
+    "code": "(( x = 3 > 5 ? 10 : 20 )); echo $x"
+  },
+  {
+    "name": "arithmetic_logical_and",
+    "category": "arithmetic",
+    "code": "(( 1 && 1 )); echo $?"
+  },
+  {
+    "name": "arithmetic_logical_and_false",
+    "category": "arithmetic",
+    "code": "(( 1 && 0 )); echo $?"
+  },
+  {
+    "name": "arithmetic_logical_or",
+    "category": "arithmetic",
+    "code": "(( 0 || 1 )); echo $?"
+  },
+  {
+    "name": "arithmetic_parens",
+    "category": "arithmetic",
+    "code": "(( x = (2 + 3) * 4 )); echo $x"
+  },
+  {
+    "name": "arithmetic_expansion_basic",
+    "category": "arithmetic",
+    "code": "echo $((5 + 3))"
+  },
+  {
+    "name": "arithmetic_expansion_var",
+    "category": "arithmetic",
+    "code": "x=5; echo $((x * 2))"
+  },
+  {
+    "name": "arithmetic_expansion_multi",
+    "category": "arithmetic",
+    "code": "x=10; y=3; echo $((x + y))"
+  },
+  {
+    "name": "arithmetic_unary_minus",
+    "category": "arithmetic",
+    "code": "(( x = -5 )); echo $x"
+  },
+  {
+    "name": "arithmetic_unary_plus",
+    "category": "arithmetic",
+    "code": "(( x = +5 )); echo $x"
+  },
+  {
+    "name": "arithmetic_compound_add",
+    "category": "arithmetic",
+    "code": "x=10; (( x += 5 )); echo $x"
+  },
+  {
+    "name": "arithmetic_compound_sub",
+    "category": "arithmetic",
+    "code": "x=10; (( x -= 3 )); echo $x"
+  },
+  {
+    "name": "arithmetic_compound_mul",
+    "category": "arithmetic",
+    "code": "x=10; (( x *= 2 )); echo $x"
+  },
+  {
+    "name": "arithmetic_compound_div",
+    "category": "arithmetic",
+    "code": "x=20; (( x /= 4 )); echo $x"
+  },
+  {
+    "name": "while_basic",
+    "category": "while_loop",
+    "code": "i=0; while [ $i -lt 3 ]; do echo $i; i=$((i+1)); done"
+  },
+  {
+    "name": "while_no_iterations",
+    "category": "while_loop",
+    "code": "i=5; while [ $i -lt 3 ]; do echo $i; i=$((i+1)); done"
+  },
+  {
+    "name": "while_single_iteration",
+    "category": "while_loop",
+    "code": "i=0; while [ $i -lt 1 ]; do echo loop; i=1; done"
+  },
+  {
+    "name": "for_basic",
+    "category": "for_loop",
+    "code": "for i in 1 2 3; do echo $i; done"
+  },
+  {
+    "name": "for_strings",
+    "category": "for_loop",
+    "code": "for x in a b c; do echo item:$x; done"
+  },
+  {
+    "name": "for_single",
+    "category": "for_loop",
+    "code": "for x in one; do echo $x; done"
+  },
+  {
+    "name": "for_empty",
+    "category": "for_loop",
+    "code": "for i in; do echo $i; done"
+  },
+  {
+    "name": "case_simple",
+    "category": "case_statement",
+    "code": "x=foo; case $x in foo) echo matched;; esac"
+  },
+  {
+    "name": "case_multiple",
+    "category": "case_statement",
+    "code": "x=bar; case $x in foo) echo foo;; bar) echo bar;; esac"
+  },
+  {
+    "name": "case_default",
+    "category": "case_statement",
+    "code": "x=baz; case $x in foo) echo foo;; *) echo default;; esac"
+  },
+  {
+    "name": "case_glob",
+    "category": "case_statement",
+    "code": "x=hello; case $x in h*) echo starts with h;; esac"
+  },
+  {
+    "name": "pipe_simple",
+    "category": "pipeline",
+    "code": "echo hello | cat"
+  },
+  {
+    "name": "pipe_transform",
+    "category": "pipeline",
+    "code": "echo hello | tr a-z A-Z"
+  },
+  {
+    "name": "pipe_multi_stage",
+    "category": "pipeline",
+    "code": "echo hello | cat | cat"
+  },
+  {
+    "name": "pipe_word_count",
+    "category": "pipeline",
+    "code": "echo hello world | wc -w"
+  },
+  {
+    "name": "pipe_true_true",
+    "category": "pipeline",
+    "code": "true | true",
+    "check_stdout": false
+  },
+  {
+    "name": "pipe_false_true",
+    "category": "pipeline",
+    "code": "false | true",
+    "check_stdout": false
+  },
+  {
+    "name": "pipe_true_false",
+    "category": "pipeline",
+    "code": "true | false",
+    "check_stdout": false
+  },
+  {
+    "name": "subshell_simple",
+    "category": "subshell",
+    "code": "(echo hello)"
+  },
+  {
+    "name": "subshell_multiple",
+    "category": "subshell",
+    "code": "(echo one; echo two)"
+  },
+  {
+    "name": "subshell_true",
+    "category": "subshell",
+    "code": "(true)",
+    "check_stdout": false
+  },
+  {
+    "name": "subshell_false",
+    "category": "subshell",
+    "code": "(false)",
+    "check_stdout": false
+  },
+  {
+    "name": "subshell_var_isolation",
+    "category": "subshell",
+    "code": "x=outer; (x=inner; echo $x); echo $x"
+  },
+  {
+    "name": "subshell_exit_code",
+    "category": "subshell",
+    "code": "(exit 42); echo $?"
+  },
+  {
+    "name": "subshell_in_pipeline",
+    "category": "subshell",
+    "code": "(echo hello) | cat"
+  },
+  {
+    "name": "test_string_z_empty",
+    "category": "test_command",
+    "code": "[ -z \"\" ]; echo $?"
+  },
+  {
+    "name": "test_string_z_nonempty",
+    "category": "test_command",
+    "code": "[ -z \"hello\" ]; echo $?"
+  },
+  {
+    "name": "test_string_n_nonempty",
+    "category": "test_command",
+    "code": "[ -n \"hello\" ]; echo $?"
+  },
+  {
+    "name": "test_string_n_empty",
+    "category": "test_command",
+    "code": "[ -n \"\" ]; echo $?"
+  },
+  {
+    "name": "test_string_ne",
+    "category": "test_command",
+    "code": "[ \"hello\" != \"world\" ]; echo $?"
+  },
+  {
+    "name": "test_string_eq_literal",
+    "category": "test_command",
+    "code": "[ \"hello\" = \"hello\" ]; echo $?"
+  },
+  {
+    "name": "test_string_eq_literal_fail",
+    "category": "test_command",
+    "code": "[ \"hello\" = \"world\" ]; echo $?"
+  },
+  {
+    "name": "test_int_eq",
+    "category": "test_command",
+    "code": "[ 5 -eq 5 ]; echo $?"
+  },
+  {
+    "name": "test_int_eq_fail",
+    "category": "test_command",
+    "code": "[ 5 -eq 6 ]; echo $?"
+  },
+  {
+    "name": "test_int_ne",
+    "category": "test_command",
+    "code": "[ 5 -ne 6 ]; echo $?"
+  },
+  {
+    "name": "test_int_lt",
+    "category": "test_command",
+    "code": "[ 5 -lt 10 ]; echo $?"
+  },
+  {
+    "name": "test_int_lt_fail",
+    "category": "test_command",
+    "code": "[ 10 -lt 5 ]; echo $?"
+  },
+  {
+    "name": "test_int_le",
+    "category": "test_command",
+    "code": "[ 5 -le 5 ]; echo $?"
+  },
+  {
+    "name": "test_int_gt",
+    "category": "test_command",
+    "code": "[ 5 -gt 3 ]; echo $?"
+  },
+  {
+    "name": "test_int_ge",
+    "category": "test_command",
+    "code": "[ 5 -ge 5 ]; echo $?"
+  },
+  {
+    "name": "test_bracket_z_empty",
+    "category": "test_bracket",
+    "code": "[[ -z \"\" ]]; echo $?"
+  },
+  {
+    "name": "test_bracket_n_nonempty",
+    "category": "test_bracket",
+    "code": "[[ -n \"hello\" ]]; echo $?"
+  },
+  {
+    "name": "test_bracket_string_ne",
+    "category": "test_bracket",
+    "code": "[[ \"hello\" != \"world\" ]]; echo $?"
+  },
+  {
+    "name": "test_bracket_string_eq",
+    "category": "test_bracket",
+    "code": "[[ \"hello\" == \"hello\" ]]; echo $?"
+  },
+  {
+    "name": "test_bracket_string_eq_fail",
+    "category": "test_bracket",
+    "code": "[[ \"hello\" == \"world\" ]]; echo $?"
+  },
+  {
+    "name": "test_bracket_regex_match",
+    "category": "test_bracket",
+    "code": "[[ \"hello123\" =~ [0-9]+ ]]; echo $?"
+  },
+  {
+    "name": "test_bracket_regex_no_match",
+    "category": "test_bracket",
+    "code": "[[ \"hello\" =~ [0-9]+ ]]; echo $?"
+  },
+  {
+    "name": "test_bracket_regex_anchor",
+    "category": "test_bracket",
+    "code": "[[ \"abc\" =~ ^a ]]; echo $?"
+  },
+  {
+    "name": "test_bracket_int_eq",
+    "category": "test_bracket",
+    "code": "[[ 5 -eq 5 ]]; echo $?"
+  },
+  {
+    "name": "test_bracket_int_ne",
+    "category": "test_bracket",
+    "code": "[[ 5 -ne 6 ]]; echo $?"
+  },
+  {
+    "name": "test_bracket_logical_and",
+    "category": "test_bracket",
+    "code": "[[ 1 -eq 1 && 2 -eq 2 ]]; echo $?"
+  },
+  {
+    "name": "test_bracket_logical_or",
+    "category": "test_bracket",
+    "code": "[[ 1 -eq 1 || 2 -eq 3 ]]; echo $?"
+  },
+  {
+    "name": "set_errexit_stops",
+    "category": "set_command",
+    "code": "set -e; false; echo should_not_print",
+    "check_stdout": false
+  },
+  {
+    "name": "set_errexit_success",
+    "category": "set_command",
+    "code": "set -e; true; echo ok"
+  },
+  {
+    "name": "set_errexit_disable",
+    "category": "set_command",
+    "code": "set -e; set +e; false; echo still_running"
+  },
+  {
+    "name": "set_errexit_if_condition",
+    "category": "set_command",
+    "code": "set -e; if false; then echo no; fi; echo yes"
+  },
+  {
+    "name": "set_errexit_and_chain",
+    "category": "set_command",
+    "code": "set -e; false && echo no; echo yes"
+  },
+  {
+    "name": "set_errexit_or_chain",
+    "category": "set_command",
+    "code": "set -e; false || echo recovered; echo yes"
+  },
+  {
+    "name": "set_errexit_negated",
+    "category": "set_command",
+    "code": "set -e; ! false; echo yes"
+  },
+  {
+    "name": "set_errexit_while_condition",
+    "category": "set_command",
+    "code": "set -e; while false; do echo no; done; echo yes"
+  },
+  {
+    "name": "set_errexit_combined_flags",
+    "category": "set_command",
+    "code": "set -ex; true; echo ok",
+    "check_stdout": false
+  },
+  {
+    "name": "set_errexit_long_form",
+    "category": "set_command",
+    "code": "set -o errexit; false; echo nope",
+    "check_stdout": false
+  },
+  {
+    "name": "set_euo_pipefail",
+    "category": "set_command",
+    "code": "set -euo pipefail; true; echo ok"
+  },
+  {
+    "name": "nounset_undefined",
+    "category": "nounset",
+    "code": "set -u; echo $UNDEFINED_VAR_XYZ",
+    "check_stdout": false
+  },
+  {
+    "name": "nounset_defined",
+    "category": "nounset",
+    "code": "set -u; X=hello; echo $X"
+  },
+  {
+    "name": "nounset_with_default",
+    "category": "nounset",
+    "code": "set -u; echo ${UNDEFINED_VAR:-default}"
+  },
+  {
+    "name": "nounset_with_assign",
+    "category": "nounset",
+    "code": "set -u; echo ${NEWVAR:=assigned}; echo $NEWVAR"
+  },
+  {
+    "name": "nounset_disabled",
+    "category": "nounset",
+    "code": "set -u; set +u; echo ${UNDEFINED}done"
+  },
+  {
+    "name": "nounset_special_vars",
+    "category": "nounset",
+    "code": "set -u; echo $?$#"
+  },
+  {
+    "name": "nounset_with_plus",
+    "category": "nounset",
+    "code": "set -u; X=val; echo ${X:+replacement}"
+  },
+  {
+    "name": "nounset_empty_with_plus",
+    "category": "nounset",
+    "code": "set -u; X=; echo ${X:+replacement}done"
+  },
+  {
+    "name": "pipefail_false_true",
+    "category": "pipefail",
+    "code": "set -o pipefail; false | true; echo $?"
+  },
+  {
+    "name": "pipefail_true_false",
+    "category": "pipefail",
+    "code": "set -o pipefail; true | false; echo $?"
+  },
+  {
+    "name": "pipefail_all_true",
+    "category": "pipefail",
+    "code": "set -o pipefail; true | true; echo $?"
+  },
+  {
+    "name": "pipefail_all_false",
+    "category": "pipefail",
+    "code": "set -o pipefail; false | false; echo $?"
+  },
+  {
+    "name": "pipefail_disabled",
+    "category": "pipefail",
+    "code": "false | true; echo $?"
+  },
+  {
+    "name": "pipefail_three_stage",
+    "category": "pipefail",
+    "code": "set -o pipefail; true | false | true; echo $?"
+  },
+  {
+    "name": "pipefail_first_fails",
+    "category": "pipefail",
+    "code": "set -o pipefail; false | true | true; echo $?"
+  },
+  {
+    "name": "pipefail_short_flag",
+    "category": "pipefail",
+    "code": "set -o pipefail; false | echo ok; echo $?"
+  },
+  {
+    "name": "noexec_stops_execution",
+    "category": "noexec",
+    "code": "echo before; set -n; echo should_not_run"
+  },
+  {
+    "name": "noexec_long_form",
+    "category": "noexec",
+    "code": "echo before; set -o noexec; echo should_not_run"
+  },
+  {
+    "name": "positional_at_unquoted",
+    "category": "positional_params",
+    "code": "set -- a b c; echo $@"
+  },
+  {
+    "name": "positional_at_quoted",
+    "category": "positional_params",
+    "code": "set -- a b c; echo \"$@\""
+  },
+  {
+    "name": "positional_star_unquoted",
+    "category": "positional_params",
+    "code": "set -- a b c; echo $*"
+  },
+  {
+    "name": "positional_star_quoted",
+    "category": "positional_params",
+    "code": "set -- a b c; echo \"$*\""
+  },
+  {
+    "name": "positional_in_string",
+    "category": "positional_params",
+    "code": "set -- x y z; echo \"args: $@\""
+  },
+  {
+    "name": "positional_count",
+    "category": "positional_params",
+    "code": "set -- one two three; echo $#"
+  },
+  {
+    "name": "positional_individual",
+    "category": "positional_params",
+    "code": "set -- first second third; echo $1 $2 $3"
+  },
+  {
+    "name": "positional_clear",
+    "category": "positional_params",
+    "code": "set -- a b c; set --; echo \"count:$#\""
+  },
+  {
+    "name": "unset_simple",
+    "category": "unset",
+    "code": "X=hello; unset X; echo ${X:-gone}"
+  },
+  {
+    "name": "unset_multiple",
+    "category": "unset",
+    "code": "A=1; B=2; C=3; unset A C; echo ${A:-a} ${B} ${C:-c}"
+  },
+  {
+    "name": "unset_nonexistent",
+    "category": "unset",
+    "code": "unset DOES_NOT_EXIST_XYZ; echo ok"
+  },
+  {
+    "name": "unset_preserves_others",
+    "category": "unset",
+    "code": "X=x; Y=y; Z=z; unset Y; echo $X $Z"
+  },
+  {
+    "name": "file_exists",
+    "category": "file_test",
+    "code": "[ -e /dev/null ]; echo $?"
+  },
+  {
+    "name": "file_not_exists",
+    "category": "file_test",
+    "code": "[ -e /nonexistent_path_xyz ]; echo $?"
+  },
+  {
+    "name": "file_is_file",
+    "category": "file_test",
+    "code": "[ -f /etc/passwd ]; echo $?"
+  },
+  {
+    "name": "file_is_dir",
+    "category": "file_test",
+    "code": "[ -d /tmp ]; echo $?"
+  },
+  {
+    "name": "file_not_dir",
+    "category": "file_test",
+    "code": "[ -d /dev/null ]; echo $?"
+  },
+  {
+    "name": "file_readable",
+    "category": "file_test",
+    "code": "[ -r /dev/null ]; echo $?"
+  },
+  {
+    "name": "file_writable",
+    "category": "file_test",
+    "code": "[ -w /dev/null ]; echo $?"
+  },
+  {
+    "name": "file_size_nonzero",
+    "category": "file_test",
+    "code": "[ -s /etc/passwd ]; echo $?"
+  },
+  {
+    "name": "file_size_zero",
+    "category": "file_test",
+    "code": "[ -s /dev/null ]; echo $?"
+  },
+  {
+    "name": "file_chardev",
+    "category": "file_test",
+    "code": "[ -c /dev/null ]; echo $?"
+  },
+  {
+    "name": "file_not_chardev",
+    "category": "file_test",
+    "code": "[ -c /tmp ]; echo $?"
+  },
+  {
+    "name": "file_test_bracket",
+    "category": "file_test",
+    "code": "[[ -e /dev/null ]]; echo $?"
+  },
+  {
+    "name": "file_combined_and",
+    "category": "file_test",
+    "code": "[ -e /dev/null ] && [ -d /tmp ]; echo $?"
+  },
+  {
+    "name": "array_assign",
+    "category": "array",
+    "code": "arr=(a b c); echo ${arr[0]}"
+  },
+  {
+    "name": "array_subscript_all",
+    "category": "array",
+    "code": "arr=(one two three); echo ${arr[@]}"
+  },
+  {
+    "name": "array_subscript_star",
+    "category": "array",
+    "code": "arr=(one two three); echo ${arr[*]}"
+  },
+  {
+    "name": "array_subscript_indices",
+    "category": "array",
+    "code": "arr=(a b c); echo ${arr[0]} ${arr[1]} ${arr[2]}"
+  },
+  {
+    "name": "array_length",
+    "category": "array",
+    "code": "arr=(a b c d e); echo ${#arr[@]}"
+  },
+  {
+    "name": "array_quoted_at",
+    "category": "array",
+    "code": "arr=(one two three); echo \"${arr[@]}\""
+  },
+  {
+    "name": "array_in_string",
+    "category": "array",
+    "code": "arr=(x y z); echo \"items: ${arr[@]}\""
+  },
+  {
+    "name": "array_empty",
+    "category": "array",
+    "code": "arr=(); echo \"len:${#arr[@]}\""
+  },
+  {
+    "name": "array_single_element",
+    "category": "array",
+    "code": "arr=(only); echo ${arr[0]} ${#arr[@]}"
+  },
+  {
+    "name": "cstyle_for_basic",
+    "category": "cstyle_for",
+    "code": "for ((i=0; i<3; i++)); do echo $i; done"
+  },
+  {
+    "name": "cstyle_for_decrement",
+    "category": "cstyle_for",
+    "code": "for ((i=3; i>0; i--)); do echo $i; done"
+  },
+  {
+    "name": "cstyle_for_step",
+    "category": "cstyle_for",
+    "code": "for ((i=0; i<10; i+=2)); do echo $i; done"
+  },
+  {
+    "name": "cstyle_for_multiply",
+    "category": "cstyle_for",
+    "code": "for ((i=1; i<=16; i*=2)); do echo $i; done"
+  },
+  {
+    "name": "cstyle_for_nested_expr",
+    "category": "cstyle_for",
+    "code": "for ((i=0; i<2+1; i++)); do echo $i; done"
+  },
+  {
+    "name": "cstyle_for_no_body",
+    "category": "cstyle_for",
+    "code": "for ((i=0; i<3; i++)); do :; done; echo done"
+  },
+  {
+    "name": "cstyle_for_var_compare",
+    "category": "cstyle_for",
+    "code": "n=3; for ((i=0; i<n; i++)); do echo $i; done"
+  },
+  {
+    "name": "test_and_int_eq",
+    "category": "test_logical",
+    "code": "[ 1 -eq 1 -a 2 -eq 2 ]; echo $?"
+  },
+  {
+    "name": "test_and_int_eq_fail",
+    "category": "test_logical",
+    "code": "[ 1 -eq 1 -a 2 -eq 3 ]; echo $?"
+  },
+  {
+    "name": "test_or_int_eq",
+    "category": "test_logical",
+    "code": "[ 1 -eq 1 -o 2 -eq 3 ]; echo $?"
+  },
+  {
+    "name": "test_or_both_fail",
+    "category": "test_logical",
+    "code": "[ 1 -eq 2 -o 3 -eq 4 ]; echo $?"
+  },
+  {
+    "name": "test_not_comparison",
+    "category": "test_logical",
+    "code": "[ ! 1 -eq 2 ]; echo $?"
+  },
+  {
+    "name": "test_not_comparison_fail",
+    "category": "test_logical",
+    "code": "[ ! 1 -eq 1 ]; echo $?"
+  },
+  {
+    "name": "test_not_file",
+    "category": "test_logical",
+    "code": "[ ! -f /nonexistent_xyz ]; echo $?"
+  },
+  {
+    "name": "test_and_file_tests",
+    "category": "test_logical",
+    "code": "[ -f /etc/passwd -a -d /tmp ]; echo $?"
+  },
+  {
+    "name": "test_or_string_tests",
+    "category": "test_logical",
+    "code": "[ -z \"\" -o -n \"hello\" ]; echo $?"
+  },
+  {
+    "name": "test_and_string_eq",
+    "category": "test_logical",
+    "code": "[ \"a\" = \"a\" -a \"b\" = \"b\" ]; echo $?"
+  },
+  {
+    "name": "test_and_string_eq_fail",
+    "category": "test_logical",
+    "code": "[ \"a\" = \"a\" -a \"b\" = \"c\" ]; echo $?"
+  },
+  {
+    "name": "test_complex_and_or",
+    "category": "test_logical",
+    "code": "[ 1 -eq 1 -o 0 -eq 1 -a 0 -eq 1 ]; echo $?"
+  },
+  {
+    "name": "test_not_not",
+    "category": "test_logical",
+    "code": "[ ! ! 1 -eq 1 ]; echo $?"
+  },
+  {
+    "name": "test_and_unquoted_vars",
+    "category": "test_logical",
+    "code": "X=a; Y=b; [ $X = a -a $Y = b ]; echo $?"
+  },
+  {
+    "name": "test_or_unquoted_vars",
+    "category": "test_logical",
+    "code": "X=a; Y=b; [ $X = z -o $Y = b ]; echo $?"
+  },
+  {
+    "name": "test_and_quoted_vars",
+    "category": "test_logical",
+    "code": "X=foo; Y=bar; [ \"$X\" = \"foo\" -a \"$Y\" = \"bar\" ]; echo $?"
+  },
+  {
+    "name": "test_arith_expansion",
+    "category": "test_logical",
+    "code": "[ $((1+1)) -eq 2 -a $((2*3)) -eq 6 ]; echo $?"
+  },
+  {
+    "name": "case_upper_first",
+    "category": "case_conversion",
+    "code": "x=hello; echo ${x^}",
+    "skip": "bash 4.0+ feature, macOS has bash 3.2"
+  },
+  {
+    "name": "case_upper_all",
+    "category": "case_conversion",
+    "code": "x=hello; echo ${x^^}",
+    "skip": "bash 4.0+ feature, macOS has bash 3.2"
+  },
+  {
+    "name": "case_lower_first",
+    "category": "case_conversion",
+    "code": "x=HELLO; echo ${x,}",
+    "skip": "bash 4.0+ feature, macOS has bash 3.2"
+  },
+  {
+    "name": "case_lower_all",
+    "category": "case_conversion",
+    "code": "x=HELLO; echo ${x,,}",
+    "skip": "bash 4.0+ feature, macOS has bash 3.2"
+  },
+  {
+    "name": "case_upper_already_upper",
+    "category": "case_conversion",
+    "code": "x=HELLO; echo ${x^^}",
+    "skip": "bash 4.0+ feature, macOS has bash 3.2"
+  },
+  {
+    "name": "case_lower_already_lower",
+    "category": "case_conversion",
+    "code": "x=hello; echo ${x,,}",
+    "skip": "bash 4.0+ feature, macOS has bash 3.2"
+  },
+  {
+    "name": "case_mixed_to_upper",
+    "category": "case_conversion",
+    "code": "x=HeLLo; echo ${x^^}",
+    "skip": "bash 4.0+ feature, macOS has bash 3.2"
+  },
+  {
+    "name": "case_with_numbers",
+    "category": "case_conversion",
+    "code": "x=abc123def; echo ${x^^}",
+    "skip": "bash 4.0+ feature, macOS has bash 3.2"
+  },
+  {
+    "name": "varname_prefix_at",
+    "category": "variable_names",
+    "code": "ABC_ONE=1; ABC_TWO=2; XYZ=3; echo ${!ABC_@}"
+  },
+  {
+    "name": "varname_prefix_star",
+    "category": "variable_names",
+    "code": "ABC_ONE=1; ABC_TWO=2; XYZ=3; echo ${!ABC_*}"
+  },
+  {
+    "name": "varname_no_match",
+    "category": "variable_names",
+    "code": "X=1; echo \"${!NONEXISTENT_PREFIX_@}\""
+  },
+  {
+    "name": "varname_single_match",
+    "category": "variable_names",
+    "code": "UNIQUE_VAR_XYZ=42; echo ${!UNIQUE_VAR_@}"
+  },
+  {
+    "name": "array_indices_at",
+    "category": "array_indices",
+    "code": "arr=(a b c); echo ${!arr[@]}",
+    "skip": "ShipShell-oq3 + bash 4.0+ feature"
+  },
+  {
+    "name": "array_indices_star",
+    "category": "array_indices",
+    "code": "arr=(a b c); echo ${!arr[*]}",
+    "skip": "ShipShell-oq3 + bash 4.0+ feature"
+  },
+  {
+    "name": "array_indices_sparse",
+    "category": "array_indices",
+    "code": "arr=(); arr[0]=a; arr[5]=b; arr[10]=c; echo ${!arr[@]}",
+    "skip": "ShipShell-oq3 + bash 4.0+ feature"
+  },
+  {
+    "name": "array_indices_empty",
+    "category": "array_indices",
+    "code": "arr=(); echo \"${!arr[@]}\""
+  },
+  {
+    "name": "pattern_prefix_short",
+    "category": "pattern_removal",
+    "code": "x=hello_world_hello; echo ${x#*_}"
+  },
+  {
+    "name": "pattern_prefix_long",
+    "category": "pattern_removal",
+    "code": "x=hello_world_hello; echo ${x##*_}"
+  },
+  {
+    "name": "pattern_suffix_short",
+    "category": "pattern_removal",
+    "code": "x=hello_world_hello; echo ${x%_*}"
+  },
+  {
+    "name": "pattern_suffix_long",
+    "category": "pattern_removal",
+    "code": "x=hello_world_hello; echo ${x%%_*}"
+  },
+  {
+    "name": "pattern_prefix_no_match",
+    "category": "pattern_removal",
+    "code": "x=hello; echo ${x#xyz}"
+  },
+  {
+    "name": "pattern_suffix_no_match",
+    "category": "pattern_removal",
+    "code": "x=hello; echo ${x%xyz}"
+  },
+  {
+    "name": "pattern_prefix_literal",
+    "category": "pattern_removal",
+    "code": "x=hello; echo ${x#he}"
+  },
+  {
+    "name": "pattern_suffix_literal",
+    "category": "pattern_removal",
+    "code": "x=hello; echo ${x%lo}"
+  },
+  {
+    "name": "pattern_file_extension",
+    "category": "pattern_removal",
+    "code": "f=document.tar.gz; echo ${f%.*}"
+  },
+  {
+    "name": "pattern_file_basename",
+    "category": "pattern_removal",
+    "code": "f=/path/to/file.txt; echo ${f##*/}"
+  },
+  {
+    "name": "pattern_file_dirname",
+    "category": "pattern_removal",
+    "code": "f=/path/to/file.txt; echo ${f%/*}"
+  },
+  {
+    "name": "replace_first",
+    "category": "pattern_replace",
+    "code": "x=hello_hello; echo ${x/hello/world}"
+  },
+  {
+    "name": "replace_all",
+    "category": "pattern_replace",
+    "code": "x=hello_hello; echo ${x//hello/world}"
+  },
+  {
+    "name": "replace_prefix",
+    "category": "pattern_replace",
+    "code": "x=hello_world; echo ${x/#hello/goodbye}"
+  },
+  {
+    "name": "replace_suffix",
+    "category": "pattern_replace",
+    "code": "x=hello_world; echo ${x/%world/earth}"
+  },
+  {
+    "name": "replace_no_match",
+    "category": "pattern_replace",
+    "code": "x=hello; echo ${x/xyz/abc}"
+  },
+  {
+    "name": "replace_delete",
+    "category": "pattern_replace",
+    "code": "x=hello; echo ${x/l/}"
+  },
+  {
+    "name": "replace_delete_all",
+    "category": "pattern_replace",
+    "code": "x=hello; echo ${x//l/}"
+  },
+  {
+    "name": "replace_glob_star",
+    "category": "pattern_replace",
+    "code": "x=abcdef; echo ${x/b*e/X}"
+  },
+  {
+    "name": "replace_prefix_no_match",
+    "category": "pattern_replace",
+    "code": "x=hello; echo ${x/#world/X}"
+  },
+  {
+    "name": "replace_suffix_no_match",
+    "category": "pattern_replace",
+    "code": "x=hello; echo ${x/%world/X}"
+  },
+  {
+    "name": "arithmetic_bitnot",
+    "category": "arithmetic",
+    "code": "(( x = ~0 )); echo $x"
+  },
+  {
+    "name": "arithmetic_bitnot_positive",
+    "category": "arithmetic",
+    "code": "(( x = ~5 )); echo $x"
+  },
+  {
+    "name": "file_newer_than",
+    "category": "file_comparison",
+    "code": "touch /tmp/shipshell_old; sleep 1; touch /tmp/shipshell_new; [ /tmp/shipshell_new -nt /tmp/shipshell_old ]; r=$?; rm -f /tmp/shipshell_old /tmp/shipshell_new; echo $r"
+  },
+  {
+    "name": "file_older_than",
+    "category": "file_comparison",
+    "code": "touch /tmp/shipshell_old; sleep 1; touch /tmp/shipshell_new; [ /tmp/shipshell_old -ot /tmp/shipshell_new ]; r=$?; rm -f /tmp/shipshell_old /tmp/shipshell_new; echo $r"
+  },
+  {
+    "name": "file_not_newer",
+    "category": "file_comparison",
+    "code": "touch /tmp/shipshell_old; sleep 1; touch /tmp/shipshell_new; [ /tmp/shipshell_old -nt /tmp/shipshell_new ]; r=$?; rm -f /tmp/shipshell_old /tmp/shipshell_new; echo $r"
+  },
+  {
+    "name": "file_same_file",
+    "category": "file_comparison",
+    "code": "touch /tmp/shipshell_f1; ln /tmp/shipshell_f1 /tmp/shipshell_f2; [ /tmp/shipshell_f1 -ef /tmp/shipshell_f2 ]; r=$?; rm -f /tmp/shipshell_f1 /tmp/shipshell_f2; echo $r"
+  },
+  {
+    "name": "file_not_same_file",
+    "category": "file_comparison",
+    "code": "touch /tmp/shipshell_f1; touch /tmp/shipshell_f2; [ /tmp/shipshell_f1 -ef /tmp/shipshell_f2 ]; r=$?; rm -f /tmp/shipshell_f1 /tmp/shipshell_f2; echo $r"
+  },
+  {
+    "name": "file_same_as_self",
+    "category": "file_comparison",
+    "code": "touch /tmp/shipshell_f1; [ /tmp/shipshell_f1 -ef /tmp/shipshell_f1 ]; r=$?; rm -f /tmp/shipshell_f1; echo $r"
+  },
+  {
+    "name": "basic",
+    "category": "function",
+    "code": "foo() { echo hello; }; foo"
+  },
+  {
+    "name": "keyword_syntax",
+    "category": "function",
+    "code": "function bar { echo world; }; bar"
+  },
+  {
+    "name": "with_args",
+    "category": "function",
+    "code": "greet() { echo \"Hello, $1!\"; }; greet Alice"
+  },
+  {
+    "name": "multiple_args",
+    "category": "function",
+    "code": "add() { echo $(($1 + $2)); }; add 3 5"
+  },
+  {
+    "name": "all_args_at",
+    "category": "function",
+    "code": "show() { echo \"$@\"; }; show a b c"
+  },
+  {
+    "name": "all_args_star",
+    "category": "function",
+    "code": "show() { echo \"$*\"; }; show a b c"
+  },
+  {
+    "name": "arg_count",
+    "category": "function",
+    "code": "count() { echo $#; }; count a b c d"
+  },
+  {
+    "name": "return_zero",
+    "category": "function",
+    "code": "foo() { return 0; }; foo; echo $?"
+  },
+  {
+    "name": "return_42",
+    "category": "function",
+    "code": "foo() { return 42; }; foo; echo $?"
+  },
+  {
+    "name": "return_implicit",
+    "category": "function",
+    "code": "foo() { false; }; foo; echo $?"
+  },
+  {
+    "name": "local_var",
+    "category": "function",
+    "code": "x=global; foo() { local x=local; echo $x; }; foo; echo $x"
+  },
+  {
+    "name": "local_shadows",
+    "category": "function",
+    "code": "x=1; foo() { local x; x=2; echo $x; }; foo; echo $x"
+  },
+  {
+    "name": "nested_call",
+    "category": "function",
+    "code": "inner() { echo inner; }; outer() { inner; echo outer; }; outer"
+  },
+  {
+    "name": "recursive",
+    "category": "function",
+    "code": "countdown() { if [ $1 -gt 0 ]; then echo $1; countdown $(($1 - 1)); fi; }; countdown 3"
+  },
+  {
+    "name": "redefine",
+    "category": "function",
+    "code": "foo() { echo first; }; foo; foo() { echo second; }; foo"
+  },
+  {
+    "name": "dynamic_scope",
+    "category": "function",
+    "code": "x=outer; foo() { echo $x; }; bar() { local x=inner; foo; }; bar"
+  },
+  {
+    "name": "in_pipeline",
+    "category": "function",
+    "code": "upper() { tr a-z A-Z; }; echo hello | upper"
+  },
+  {
+    "name": "in_cmd_subst",
+    "category": "function",
+    "code": "greet() { echo hello; }; result=$(greet); echo $result"
+  },
+  {
+    "name": "empty_body",
+    "category": "function",
+    "code": "foo() { :; }; foo; echo $?"
+  },
+  {
+    "name": "local_unset_vs_empty",
+    "category": "function",
+    "code": "foo() { local x; echo \"${x-unset}\"; x=; echo \"${x-unset}\"; }; foo"
+  },
+  {
+    "name": "local_colon_default",
+    "category": "function",
+    "code": "foo() { local x=; echo \"${x:-default}\"; }; foo"
+  },
+  {
+    "name": "shadow_builtin",
+    "category": "function",
+    "code": "echo() { printf 'CUSTOM: %s\\n' \"$1\"; }; echo hello"
+  },
+  {
+    "name": "noexec_stops_execution",
+    "category": "noexec",
+    "code": "echo before; set -n; echo should_not_run"
+  },
+  {
+    "name": "noexec_long_form",
+    "category": "noexec",
+    "code": "echo before; set -o noexec; echo should_not_run"
+  },
+  {
+    "name": "noglob_prevents_expansion",
+    "category": "noglob",
+    "code": "set -f; echo /etc/*"
+  },
+  {
+    "name": "noglob_long_form",
+    "category": "noglob",
+    "code": "set -o noglob; echo /etc/*"
+  },
+  {
+    "name": "noglob_off_restores",
+    "category": "noglob",
+    "code": "set -f; set +f; echo /etc/passwd"
+  },
+  {
+    "name": "noglob_literal_star",
+    "category": "noglob",
+    "code": "set -f; echo '*.txt'"
+  },
+  {
+    "name": "noglob_question_mark",
+    "category": "noglob",
+    "code": "set -f; echo /bin/??"
+  },
+  {
+    "name": "braceexpand_off_prevents",
+    "category": "braceexpand",
+    "code": "set +B; echo {a,b,c}"
+  },
+  {
+    "name": "braceexpand_off_long_form",
+    "category": "braceexpand",
+    "code": "set +o braceexpand; echo {a,b,c}"
+  },
+  {
+    "name": "braceexpand_on_restores",
+    "category": "braceexpand",
+    "code": "set +B; set -B; echo {a,b}"
+  },
+  {
+    "name": "braceexpand_range_disabled",
+    "category": "braceexpand",
+    "code": "set +B; echo {1..3}"
+  },
+  {
+    "name": "allexport_basic",
+    "category": "allexport",
+    "code": "set -a; FOO=bar; bash -c 'echo $FOO'"
+  },
+  {
+    "name": "allexport_long_form",
+    "category": "allexport",
+    "code": "set -o allexport; X=test; bash -c 'echo $X'"
+  },
+  {
+    "name": "allexport_off_stops",
+    "category": "allexport",
+    "code": "set -a; A=one; set +a; B=two; bash -c 'echo $A $B'"
+  },
+  {
+    "name": "noclobber_blocks_overwrite",
+    "category": "noclobber",
+    "code": "echo first > /tmp/ss_noclobber; set -C; echo second > /tmp/ss_noclobber 2>&1; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"
+  },
+  {
+    "name": "noclobber_long_form",
+    "category": "noclobber",
+    "code": "echo first > /tmp/ss_noclobber; set -o noclobber; echo second > /tmp/ss_noclobber 2>&1; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"
+  },
+  {
+    "name": "noclobber_allows_new_file",
+    "category": "noclobber",
+    "code": "rm -f /tmp/ss_noclobber; set -C; echo created > /tmp/ss_noclobber; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"
+  },
+  {
+    "name": "noclobber_allows_append",
+    "category": "noclobber",
+    "code": "echo first > /tmp/ss_noclobber; set -C; echo second >> /tmp/ss_noclobber; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"
+  },
+  {
+    "name": "noclobber_force_overwrite",
+    "category": "noclobber",
+    "code": "echo first > /tmp/ss_noclobber; set -C; echo second >| /tmp/ss_noclobber; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"
+  },
+  {
+    "name": "noclobber_off_restores",
+    "category": "noclobber",
+    "code": "echo first > /tmp/ss_noclobber; set -C; set +C; echo second > /tmp/ss_noclobber; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"
+  },
+  {
+    "name": "noclobber_script_continues",
+    "category": "noclobber",
+    "code": "echo first > /tmp/ss_noclobber; set -C; echo blocked > /tmp/ss_noclobber 2>/dev/null; echo continued; rm -f /tmp/ss_noclobber"
+  },
+  {
+    "name": "simple_echo",
+    "category": "xtrace",
+    "code": "set -x; echo hello"
+  },
+  {
+    "name": "assignment",
+    "category": "xtrace",
+    "code": "set -x; X=hello; echo $X"
+  },
+  {
+    "name": "set_disable",
+    "category": "xtrace",
+    "code": "set -x; echo before; set +x; echo after"
+  },
+  {
+    "name": "ps4_custom",
+    "category": "xtrace",
+    "code": "PS4=\"=> \"; set -x; echo test"
+  },
+  {
+    "name": "depth",
+    "category": "xtrace",
+    "code": "set -x; echo \"$(echo inner)\""
+  },
+  {
+    "name": "for_loop",
+    "category": "xtrace",
+    "code": "set -x; for i in a b; do echo $i; done"
+  },
+  {
+    "name": "case_statement",
+    "category": "xtrace",
+    "code": "set -x; x=hello; case $x in hello) echo yes;; esac"
+  },
+  {
+    "name": "if_statement",
+    "category": "xtrace",
+    "code": "set -x; if true; then echo yes; fi"
+  },
+  {
+    "name": "pipeline",
+    "category": "xtrace",
+    "code": "set -x; echo hello | cat"
+  },
+  {
+    "name": "export",
+    "category": "xtrace",
+    "code": "set -x; export FOO=bar"
+  },
+  {
+    "name": "stderr_to_stdout",
+    "category": "redirect",
+    "code": "echo out; echo err >&2 2>&1"
+  },
+  {
+    "name": "stdout_to_stderr",
+    "category": "redirect",
+    "code": "echo hello 1>&2",
+    "check_stdout": false,
+    "check_stderr": true
+  },
+  {
+    "name": "both_to_stdout",
+    "category": "redirect",
+    "code": "{ echo out; echo err >&2; } 2>&1"
+  },
+  {
+    "name": "fd_dup_shorthand",
+    "category": "redirect",
+    "code": "echo hello >&2",
+    "check_stdout": false,
+    "check_stderr": true
+  }
 ]

@@ -260,9 +260,10 @@ def _expand_braces(string: str) -> list[str]:
 class BashScriptError(ShellEscapingException):
     """Raised when bash script execution should terminate with an error."""
 
-    def __init__(self, message: str, exit_code: int = 1):
+    def __init__(self, message: str | None = None, exit_code: int = 1):
+        self.message = message
         self.exit_code = exit_code
-        super().__init__(message)
+        super().__init__(message or '')
 
 
 class SyntheticNode:
@@ -430,6 +431,9 @@ class BashInterpreter(BashCSTVisitor):
         # Track cleanup state for __del__
         self._cleaned_up = False
 
+        # Subshell depth for xtrace (increases in command substitution)
+        self._subshell_depth = 0
+
     def cleanup(self):
         """Clean up temporary resources created during execution."""
         for path in self._temp_files:
@@ -453,6 +457,38 @@ class BashInterpreter(BashCSTVisitor):
         """Context manager exit - ensures cleanup is called."""
         self.cleanup()
         return False  # Don't suppress exceptions
+
+    def _get_ps4(self) -> str:
+        """Get the trace prompt (PS4) with proper depth handling."""
+        ps4_raw = self._env.get('PS4', '+ ')
+        ps4 = self._evaluate_string(ps4_raw)
+
+        # Repeat first char based on subshell depth
+        if self._subshell_depth > 0 and ps4:
+            return ps4[0] * self._subshell_depth + ps4
+        return ps4
+
+    def _evaluate_string(self, s: str) -> str:
+        """Evaluate a string with variable expansion (like double-quoted)."""
+        if not s or ('$' not in s and '`' not in s):
+            return s  # Fast path: nothing to expand
+
+        escaped = s.replace('"', '\\"')
+        code = f'echo "{escaped}"'
+        bash_language = Language(tsbash.language())
+        tree = Parser(bash_language).parse(bytes(code, 'utf-8'))
+
+        # Navigate to string node and evaluate
+        cmd_node = tree.root_node.children[0]
+        for child in cmd_node.children_by_field_name('argument'):
+            if child.type == 'string':
+                old_source = self._source
+                self._source = code
+                try:
+                    return _bash_to_str(self.evaluate_string(child))
+                finally:
+                    self._source = old_source
+        return s
 
     def _execute_function_body(
         self, func_name: str, args: list[str], body_node: ts.Node
@@ -509,10 +545,7 @@ class BashInterpreter(BashCSTVisitor):
             and not self._errexit_suppressed
             and self._env.last_exit != 0
         ):
-            raise BashScriptError(
-                f'set -e: command exited with status {self._env.last_exit}',
-                self._env.last_exit,
-            )
+            raise BashScriptError(exit_code=self._env.last_exit)
 
     def _check_nounset(self, var_name: str) -> None:
         """Raise BashScriptError if nounset enabled and variable is unset.
@@ -1022,7 +1055,12 @@ class BashInterpreter(BashCSTVisitor):
             # Empty command substitution
             return ''
 
-        return capture(self.visit(command_node)).read_stdout()
+        # Track subshell depth for xtrace output (++ for nested substitutions)
+        self._subshell_depth += 1
+        try:
+            return capture(self.visit(command_node)).read_stdout()
+        finally:
+            self._subshell_depth -= 1
 
     def evaluate_concatenation(self, node: ts.Node) -> BashValue:
         """Concatenate child nodes, expanding variables and other constructs."""
@@ -1912,35 +1950,61 @@ class BashInterpreter(BashCSTVisitor):
         """
         for redirect_node in node.children_by_field_name('redirect'):
             if redirect_node.type == 'file_redirect':
-                dest_nodes = _expect(
-                    redirect_node.children_by_field_name('destination')
-                )
+                dest_nodes = list(redirect_node.children_by_field_name('destination'))
+                if not dest_nodes:
+                    continue  # Skip malformed redirects
                 dest_file = _bash_to_file(self.evaluate(dest_nodes[0]))
 
-                # Check redirect operator type: >> (append), >| (force), or > (normal)
-                is_append = any(
-                    self._get_text(child) == '>>' for child in redirect_node.children
+                # Get source fd from file_descriptor node (e.g., "2" in "2>&1")
+                fd_node = next(
+                    (c for c in redirect_node.children if c.type == 'file_descriptor'),
+                    None,
                 )
-                is_force = any(
-                    self._get_text(child) == '>|' for child in redirect_node.children
-                )
+                source_fd = int(self._get_text(fd_node)) if fd_node else None
 
-                if is_append:
-                    runnable >>= dest_file
+                # Detect operator types
+                operators = [self._get_text(c) for c in redirect_node.children]
+                is_fd_dup = '>&' in operators or '<&' in operators
+                is_append = '>>' in operators
+                is_force = '>|' in operators
+                is_input = '<' in operators and not is_fd_dup
+
+                if is_fd_dup:
+                    # Fd duplication: 2>&1 redirects stderr to same place as stdout
+                    if source_fd == 2:
+                        runnable = runnable.with_stderr(dest_file)
+                    elif source_fd == 0:
+                        runnable = runnable.with_stdin(dest_file)
+                    else:
+                        # 1>&2 or >&2 (default source is stdout)
+                        runnable = runnable.with_stdout(dest_file)
+                elif is_input:
+                    runnable = runnable < dest_file
+                elif is_append:
+                    if source_fd == 2:
+                        runnable = runnable.with_stderr(dest_file, append=True)
+                    else:
+                        runnable >>= dest_file
                 elif is_force:
                     # >| always overwrites, even with noclobber
-                    runnable = runnable > dest_file
+                    if source_fd == 2:
+                        runnable = runnable.with_stderr(dest_file)
+                    else:
+                        runnable = runnable > dest_file
                 else:
-                    # Regular > - check noclobber
-                    if self._shell_options['noclobber'] and os.path.exists(dest_file):
-                        print(
-                            f'bash: {dest_file}: cannot overwrite existing file',
-                            file=sys.stderr,
-                        )
-                        # Return a no-op that produces no output and returns exit code 1
-                        # The command doesn't run, but the script/pipeline continues
-                        return NoopRunnable(exit_code=1)
-                    runnable = runnable > dest_file
+                    # Regular > redirect
+                    if source_fd == 2:
+                        runnable = runnable.with_stderr(dest_file)
+                    else:
+                        # Check noclobber for stdout redirects
+                        noclobber = self._shell_options['noclobber']
+                        if noclobber and isinstance(dest_file, str) and os.path.exists(dest_file):
+                            print(
+                                f'bash: {dest_file}: cannot overwrite existing file',
+                                file=sys.stderr,
+                            )
+                            return NoopRunnable(exit_code=1)
+                        runnable = runnable > dest_file
             elif redirect_node.type == 'heredoc_redirect':
                 # Check for tab-stripping mode (<<-)
                 strip_tabs = any(c.type == '<<-' for c in redirect_node.children)
@@ -2026,6 +2090,13 @@ class BashInterpreter(BashCSTVisitor):
         """Build case statement runnable with proper glob pattern matching."""
         def do_case():
             value_node = _expect(node.child_by_field_name('value'))
+
+            # Trace before case matching (show original text like bash)
+            if self._shell_options['xtrace']:
+                value_text = self._get_text(value_node)
+                print(f'{self._get_ps4()}case {value_text} in', file=sys.stderr)
+                sys.stderr.flush()
+
             value = _bash_to_str(self.evaluate(value_node))
 
             for case_item in [n for n in node.children if n.type == 'case_item']:
@@ -2107,19 +2178,36 @@ class BashInterpreter(BashCSTVisitor):
 
         # Special builtins that modify interpreter state
         if cmd_name == 'set':
+            # Build args for tracing (evaluated but not used by set handler)
+            arg_nodes = node.children_by_field_name('argument')
+            set_args = [_bash_to_str(self.evaluate(a)) for a in arg_nodes]
             def do_set():
                 self._handle_set_command(node)
                 return 0
-            return InProcessCallable(do_set, name='set')
+            runnable: ShellRunnable = InProcessCallable(do_set, name='set')
+            if self._shell_options['xtrace']:
+                display = 'set' if not set_args else f'set {" ".join(set_args)}'
+                runnable = runnable.trace(display, self._get_ps4())
+            return runnable
 
         if cmd_name == 'return':
+            # Get optional return code for tracing
+            arg_nodes = node.children_by_field_name('argument')
+            return_args = [_bash_to_str(self.evaluate(a)) for a in arg_nodes]
             def do_return():
                 self._handle_return_command(node)
                 return 0
-            return InProcessCallable(do_return, name='return')
+            runnable: ShellRunnable = InProcessCallable(do_return, name='return')
+            if self._shell_options['xtrace']:
+                display = 'return' if not return_args else f'return {" ".join(return_args)}'
+                runnable = runnable.trace(display, self._get_ps4())
+            return runnable
 
         if cmd_name == ':':
-            return InProcessCallable(lambda: 0, name=':')
+            runnable: ShellRunnable = InProcessCallable(lambda: 0, name=':')
+            if self._shell_options['xtrace']:
+                runnable = runnable.trace(':', self._get_ps4())
+            return runnable
 
         # Build arguments
         cmd_args = []
@@ -2138,6 +2226,12 @@ class BashInterpreter(BashCSTVisitor):
 
         # Apply any inline redirects (e.g., here strings: cat <<< "hello")
         runnable = self._apply_redirects(runnable, node)
+
+        # Apply xtrace if enabled
+        if self._shell_options['xtrace']:
+            display = cmd_name if not cmd_args else f'{cmd_name} {" ".join(cmd_args)}'
+            runnable = runnable.trace(display, self._get_ps4())
+
         return runnable
 
     def _handle_return_command(self, node: ts.Node):
@@ -2200,6 +2294,12 @@ class BashInterpreter(BashCSTVisitor):
 
                     name = _bash_to_str(self.evaluate(name_node))
                     value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
+
+                    # Trace the assignment (bash traces each assignment inside export/declare)
+                    if self._shell_options['xtrace']:
+                        print(f'{self._get_ps4()}{name}={value}', file=sys.stderr)
+                        sys.stderr.flush()
+
                     self._env[name] = value
 
                     if keyword == 'export':
@@ -2211,7 +2311,26 @@ class BashInterpreter(BashCSTVisitor):
                             self._env.export(var_name)
             return 0
 
-        return InProcessCallable(do_declare, name=keyword)
+        runnable: ShellRunnable = InProcessCallable(do_declare, name=keyword)
+
+        if self._shell_options['xtrace']:
+            # Build display string: keyword followed by evaluated arguments
+            parts = [keyword]
+            for child in node.children:
+                if child == keyword_node:
+                    continue
+                if child.type == 'variable_assignment':
+                    name_node = child.child_by_field_name('name')
+                    value_node = child.child_by_field_name('value')
+                    if name_node:
+                        name = _bash_to_str(self.evaluate(name_node))
+                        value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
+                        parts.append(f'{name}={value}')
+                elif child.type in ('word', 'string', 'raw_string', 'variable_name'):
+                    parts.append(_bash_to_str(self.evaluate(child)))
+            runnable = runnable.trace(' '.join(parts), self._get_ps4())
+
+        return runnable
 
     def _execute_c_style_expr(self, node: ts.Node) -> int:
         """Execute a c-style for loop expression/statement and return its integer value.
@@ -2290,7 +2409,16 @@ class BashInterpreter(BashCSTVisitor):
 
             body_node = node.child_by_field_name('body')
             if body_node:
+                # Build trace display once (values are the same for all iterations)
+                values_str = ' '.join(values)
+                trace_display = f'for {var_name} in {values_str}' if values else f'for {var_name}'
+
                 for value in values:
+                    # Trace before each iteration
+                    if self._shell_options['xtrace']:
+                        print(f'{self._get_ps4()}{trace_display}', file=sys.stderr)
+                        sys.stderr.flush()
+
                     self._env[var_name] = value
                     self.execute(body_node)
 
@@ -2665,17 +2793,25 @@ class BashInterpreter(BashCSTVisitor):
         value_node = node.child_by_field_name('value')
         name = self._get_text(name_node)
 
+        # Evaluate value now for both execution and xtrace display
+        if value_node:
+            value = self.evaluate(value_node)
+            if not isinstance(value, list):
+                value = _bash_to_str(value)
+        else:
+            value = ''
+
         def do_assign():
-            if value_node:
-                value = self.evaluate(value_node)
-                if not isinstance(value, list):
-                    value = _bash_to_str(value)
-            else:
-                value = ''
             self._set_variable(name, value)
             return 0
 
-        return InProcessCallable(do_assign, name=f'{name}=...')
+        runnable: ShellRunnable = InProcessCallable(do_assign, name=f'{name}=...')
+
+        if self._shell_options['xtrace']:
+            display_value = ' '.join(value) if isinstance(value, list) else value
+            runnable = runnable.trace(f'{name}={display_value}', self._get_ps4())
+
+        return runnable
 
     def visit_while_statement(self, node: ts.Node) -> ShellRunnable:
         def do_while():
@@ -2852,7 +2988,8 @@ def run_bash_code(
     try:
         interpreter.execute(tree.root_node)
     except BashScriptError as e:
-        print(f'bash: {e}', file=sys.stderr)
+        if e.message:
+            print(f'bash: {e.message}', file=sys.stderr)
         env.last_exit = e.exit_code
 
     # Wire defined functions into Python namespace

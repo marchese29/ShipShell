@@ -280,3 +280,4 @@ class BashTest:
     setup_env: dict[str, str] = field(default_factory=dict)
     skip: str | None = None
     check_stdout: bool = True  # Whether to compare stdout (False for exit-code-only tests)
+    check_stderr: bool = True  # Whether to compare stderr

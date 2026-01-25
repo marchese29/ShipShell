@@ -415,6 +415,10 @@ class ShellRunnable(ABC):
     def neg(self) -> Negated:
         return Negated(self)
 
+    def trace(self, display: str, prefix: str = '+ ') -> TracedRunnable:
+        """Wrap with trace output (prints to stderr before execution)."""
+        return TracedRunnable(self, display, prefix)
+
 
 class NoopRunnable(ShellRunnable):
     """A runnable that does nothing and returns a fixed exit code.
@@ -569,10 +573,24 @@ class Pipeline(ShellRunnable):
         # Merge: instance config takes precedence over passed io
         actual = self._io.merge_over(io)
 
+        # Print all traces in order BEFORE forking to ensure deterministic output
+        all_stages: list[NotPipeline] = [*self.predecessors, self.final_cmd]
+        unwrapped: list[NotPipeline] = []
+        for stage in all_stages:
+            if isinstance(stage, TracedRunnable):
+                print(f'{stage._prefix}{stage._display_text}', file=sys.stderr)
+                unwrapped.append(cast(NotPipeline, stage._inner))
+            else:
+                unwrapped.append(stage)
+        sys.stderr.flush()
+
+        predecessors = unwrapped[:-1]
+        final_cmd = unwrapped[-1]
+
         child_pids = []
 
         # Handle first predecessor - it gets stdin from pipeline
-        first_stage = self.predecessors[0]
+        first_stage = predecessors[0]
         pipe_r, pipe_w = os.pipe()
         os.set_inheritable(pipe_r, False)
         os.set_inheritable(pipe_w, False)
@@ -597,7 +615,7 @@ class Pipeline(ShellRunnable):
         current_pipe_read = pipe_r
 
         # Handle remaining predecessors - they get int pipe fds
-        for stage in self.predecessors[1:]:
+        for stage in predecessors[1:]:
             pipe_r, pipe_w = os.pipe()
             os.set_inheritable(pipe_r, False)
             os.set_inheritable(pipe_w, False)
@@ -625,7 +643,7 @@ class Pipeline(ShellRunnable):
         # Execute final command in current process
         # Use run() so Commands fork and InProcessCallables run in current process
         result = run(
-            self.final_cmd,
+            final_cmd,
             IOConfig(stdin=current_pipe_read, stdout=actual.stdout, stderr=actual.stderr),
         )
 
@@ -714,7 +732,32 @@ class Negated(ShellRunnable):
         return ~result
 
 
-NotPipeline = Command | InProcessCallable | Subshell | Negated
+class TracedRunnable(ShellRunnable):
+    """Wrapper that prints trace output before executing.
+
+    Used by bash xtrace (-x) and can be used by Python for debugging.
+
+    Trace output goes to sys.stderr, which reflects outer-scope redirections
+    (from _redirected context). Per-command redirects don't affect trace
+    because trace is written before the command's redirects are applied.
+    """
+
+    def __init__(self, inner: ShellRunnable, display_text: str, prefix: str = '+ '):
+        super().__init__()
+        self._inner = inner
+        self._display_text = display_text
+        self._prefix = prefix
+
+    @override
+    def _exec(self, io: IOConfig | None = None) -> ShellResult:
+        print(f'{self._prefix}{self._display_text}', file=sys.stderr)
+        sys.stderr.flush()
+        # Merge our IO config with passed io so redirects propagate to inner
+        actual = self._io.merge_over(io)
+        return run(self._inner, actual)
+
+
+NotPipeline = Command | InProcessCallable | Subshell | Negated | TracedRunnable
 
 
 class Program:
