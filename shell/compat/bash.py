@@ -26,6 +26,7 @@ from shell.model import (
     Pipeline,
     ShellEscapingException,
     ShellRunnable,
+    Subshell,
     capture,
     prog,
 )
@@ -2630,21 +2631,18 @@ class BashInterpreter(BashCSTVisitor):
         Subshells inherit ALL variables (not just exported ones) and execute
         in an isolated environment where changes don't affect the parent.
         """
-        full_text = self._get_text(node)
-        commands_text = full_text[1:-1].strip()  # Remove outer ( and )
+        inner = self.visit_children(node)
 
-        if not commands_text:
-            return InProcessCallable(lambda: 0, name='subshell')
+        def run_in_subshell() -> int:
+            # Increment BASH_SUBSHELL (we're in the child after fork)
+            self._subshell_depth += 1
+            self._xtrace_depth += 1
+            self._env['BASH_SUBSHELL'] = str(self._subshell_depth)
+            # Execute the subshell contents
+            inner()
+            return self._env.last_exit
 
-        # Get ALL current variables (not just exported ones)
-        all_vars = dict(self._env.items())
-
-        # Pass shell options via SHELLOPTS for inheritance
-        shellopts = self._build_shellopts()
-        if shellopts:
-            all_vars['SHELLOPTS'] = shellopts
-
-        return prog('bash')('-c', commands_text).env(**all_vars)
+        return Subshell(InProcessCallable(run_in_subshell, name='subshell'))
 
     # --- Test expression precedence fix (ShipShell-53a) ---
     #

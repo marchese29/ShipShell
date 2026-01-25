@@ -1685,5 +1685,60 @@
     "name": "local_recursive_arithmetic",
     "category": "function",
     "code": "count() { local n=$1; echo $n; if (( n > 0 )); then count $((n-1)); fi; }; count 3"
+  },
+  {
+    "name": "subshell_simple",
+    "category": "subshell",
+    "code": "(echo hello)"
+  },
+  {
+    "name": "subshell_exit_code",
+    "category": "subshell",
+    "code": "(exit 42); echo $?"
+  },
+  {
+    "name": "subshell_var_isolation",
+    "category": "subshell",
+    "code": "x=1; (x=2; echo $x); echo $x"
+  },
+  {
+    "name": "subshell_inherits_vars",
+    "category": "subshell",
+    "code": "y=world; (echo hello $y)"
+  },
+  {
+    "name": "subshell_in_pipeline",
+    "category": "subshell",
+    "code": "(echo a; echo b) | sort -r"
+  },
+  {
+    "name": "subshell_nested",
+    "category": "subshell",
+    "code": "(echo outer; (echo inner))"
+  },
+  {
+    "name": "subshell_local_var",
+    "category": "subshell",
+    "code": "foo() { local x=hello; (echo $x); }; foo"
+  },
+  {
+    "name": "subshell_bash_subshell_var",
+    "category": "subshell",
+    "code": "echo $BASH_SUBSHELL; (echo $BASH_SUBSHELL)"
+  },
+  {
+    "name": "subshell_nested_bash_subshell",
+    "category": "subshell",
+    "code": "(echo $BASH_SUBSHELL; (echo $BASH_SUBSHELL))"
+  },
+  {
+    "name": "subshell_lineno",
+    "category": "subshell",
+    "code": "(echo line=$LINENO)"
+  },
+  {
+    "name": "subshell_funcname_in_func",
+    "category": "subshell",
+    "code": "foo() { (echo ${FUNCNAME[*]}); }; foo"
   }
 ]
