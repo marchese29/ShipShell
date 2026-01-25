@@ -2225,6 +2225,9 @@ class BashInterpreter(BashCSTVisitor):
 
             i += 1
 
+        # Sync shell options that affect core shell behavior
+        self._env.physical = self._shell_options['physical']
+
         self._env.last_exit = 0
 
     def visit_command(self, node: ts.Node) -> ShellRunnable:

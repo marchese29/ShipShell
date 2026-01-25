@@ -1740,5 +1740,30 @@
     "name": "subshell_funcname_in_func",
     "category": "subshell",
     "code": "foo() { (echo ${FUNCNAME[*]}); }; foo"
+  },
+  {
+    "name": "onecmd_noop_in_script",
+    "category": "shell_options",
+    "code": "set -t; echo hello; echo world"
+  },
+  {
+    "name": "physical_pwd_flag",
+    "category": "shell_options",
+    "code": "cd /tmp && pwd -P"
+  },
+  {
+    "name": "physical_set_option_pwd",
+    "category": "shell_options",
+    "code": "set -o physical; cd /tmp && pwd"
+  },
+  {
+    "name": "physical_set_flag_pwd",
+    "category": "shell_options",
+    "code": "set -P; cd /tmp && pwd"
+  },
+  {
+    "name": "physical_disabled_by_default",
+    "category": "shell_options",
+    "code": "cd /tmp && pwd"
   }
 ]

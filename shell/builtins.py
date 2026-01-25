@@ -274,6 +274,7 @@ def cd(target: CdTarget = None, physical: Annotated[bool, _Flag('P')] = False):
         target: Directory to change to. If None, changes to $HOME.
                 Use "-" to change to the previous directory ($OLDPWD).
         physical: If True (-P flag), resolve symlinks in the path.
+                  Also enabled by env.physical shell setting.
 
     Examples:
         cd("/tmp")              # Change to /tmp
@@ -283,7 +284,7 @@ def cd(target: CdTarget = None, physical: Annotated[bool, _Flag('P')] = False):
         cd(target="/tmp", physical=True)  # Keyword style
     """
     target = cast(Path, target)
-    if physical:
+    if physical or env.physical:
         target = target.resolve()
     env.chdir(target)
     os.chdir(target)
@@ -299,14 +300,18 @@ def pwd(physical: Annotated[bool, _Flag('P')] = False):
 
     Args:
         physical: If True (-P flag), resolve symlinks to show the physical path.
+                  Also enabled by env.physical shell setting.
 
     Examples:
         pwd()           # Print current directory
         pwd("-P")       # Print physical path (symlinks resolved)
     """
-    path = Path.cwd()
-    if physical:
-        path = path.resolve()
+    if physical or env.physical:
+        # Physical mode: show resolved path (no symlinks)
+        path = Path.cwd().resolve()
+    else:
+        # Logical mode: show path as given to cd (preserves symlinks)
+        path = env.pwd
     print(str(path))
 
 

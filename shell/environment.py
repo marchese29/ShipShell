@@ -80,6 +80,9 @@ class ShellEnvironment(MutableMapping):
         self._pysh_config_dir: Path = Path.home() / '.config' / 'pysh'
         self._shlvl: int = 0
 
+        # Shell options
+        self._physical: bool = False  # Don't follow symlinks in cd/pwd (-P)
+
     @property
     def last_exit(self) -> int:
         """Get the last exit code ($?)."""
@@ -89,6 +92,16 @@ class ShellEnvironment(MutableMapping):
     def last_exit(self, code: int):
         """Set the last exit code ($?)."""
         self._last_exit = code
+
+    @property
+    def physical(self) -> bool:
+        """Get the physical mode setting (-P)."""
+        return self._physical
+
+    @physical.setter
+    def physical(self, value: bool):
+        """Set the physical mode setting (-P)."""
+        self._physical = value
 
     # Variables with computed values that can't be set via __setitem__
     # TODO: We should be able to inherit some of these from the parent environment
