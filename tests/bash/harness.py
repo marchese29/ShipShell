@@ -173,6 +173,9 @@ def run_bash_reference(
 ) -> CapturedState:
     """Run bash code using the system bash for reference comparison.
 
+    Uses a temp script file instead of -c to get proper script semantics
+    for LINENO, FUNCNAME, BASH_LINENO, etc.
+
     Args:
         code: Bash code to execute
         setup_env: Environment variables to set before running
@@ -180,6 +183,8 @@ def run_bash_reference(
     Returns:
         CapturedState with stdout, stderr, exit_code (env is always empty)
     """
+    import tempfile
+
     setup_env = setup_env or {}
 
     # Build minimal environment for bash
@@ -189,12 +194,20 @@ def run_bash_reference(
         **setup_env,
     }
 
-    result = subprocess.run(
-        ['bash', '-c', code],
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    # Write code to temp file and source it (matches our interpreter semantics)
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
+        f.write(code)
+        script_path = f.name
+
+    try:
+        result = subprocess.run(
+            ['bash', '-c', f'source "{script_path}"'],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+    finally:
+        os.unlink(script_path)
 
     return CapturedState(
         stdout=result.stdout,

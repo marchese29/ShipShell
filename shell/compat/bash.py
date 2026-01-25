@@ -46,6 +46,7 @@ class CallFrame:
     func_name: str
     positional_params: list[str]
     local_vars: dict[str, BashValue] = field(default_factory=dict)
+    call_lineno: int = 0  # Line number where this function was called
 
 
 class BashReturnException(ShellEscapingException):
@@ -431,8 +432,22 @@ class BashInterpreter(BashCSTVisitor):
         # Track cleanup state for __del__
         self._cleaned_up = False
 
-        # Subshell depth for xtrace (increases in command substitution)
+        # BASH_SUBSHELL: Actual subshell depth (pipes, $(), etc.)
         self._subshell_depth = 0
+
+        # Xtrace depth: Starts at 1 for source semantics (shows ++ instead of +)
+        self._xtrace_depth = 1
+
+        # Flag to suppress LINENO updates when evaluating synthetic strings
+        self._in_string_eval = False
+
+        # Initialize special variables in environment
+        self._env['LINENO'] = '1'
+        self._env['BASH_SUBSHELL'] = '0'
+        # At top level, stack variables are EMPTY (not in any function)
+        self._env['FUNCNAME'] = []
+        self._env['BASH_LINENO'] = []
+        self._env['BASH_SOURCE'] = []
 
     def cleanup(self):
         """Clean up temporary resources created during execution."""
@@ -463,9 +478,9 @@ class BashInterpreter(BashCSTVisitor):
         ps4_raw = self._env.get('PS4', '+ ')
         ps4 = self._evaluate_string(ps4_raw)
 
-        # Repeat first char based on subshell depth
-        if self._subshell_depth > 0 and ps4:
-            return ps4[0] * self._subshell_depth + ps4
+        # Repeat first char based on xtrace depth (source/function nesting)
+        if self._xtrace_depth > 0 and ps4:
+            return ps4[0] * self._xtrace_depth + ps4
         return ps4
 
     def _evaluate_string(self, s: str) -> str:
@@ -484,14 +499,16 @@ class BashInterpreter(BashCSTVisitor):
             if child.type == 'string':
                 old_source = self._source
                 self._source = code
+                self._in_string_eval = True
                 try:
                     return _bash_to_str(self.evaluate_string(child))
                 finally:
                     self._source = old_source
+                    self._in_string_eval = False
         return s
 
     def _execute_function_body(
-        self, func_name: str, args: list[str], body_node: ts.Node
+        self, func_name: str, args: list[str], body_node: ts.Node, call_lineno: int = 0
     ) -> int:
         """Execute a function body with the given arguments.
 
@@ -502,19 +519,44 @@ class BashInterpreter(BashCSTVisitor):
             func_name: Name of the function being called
             args: Positional arguments passed to the function
             body_node: The compound_statement AST node containing the function body
+            call_lineno: Line number where this function was called
 
         Returns:
             The exit code from the function execution
         """
-        frame = CallFrame(func_name=func_name, positional_params=args)
+        frame = CallFrame(
+            func_name=func_name, positional_params=args, call_lineno=call_lineno
+        )
         self._call_stack.append(frame)
+        self._update_stack_vars()
         try:
             self.execute(body_node)
         except BashReturnException as e:
             self._env.last_exit = e.exit_code
         finally:
             self._call_stack.pop()
+            self._update_stack_vars()
         return self._env.last_exit
+
+    def _update_stack_vars(self) -> None:
+        """Update FUNCNAME, BASH_LINENO, BASH_SOURCE in environment."""
+        if self._call_stack:
+            # Inside a function: FUNCNAME[0]=current, FUNCNAME[-1]=source
+            # We use 'source' because our semantics match `source script.sh`
+            self._env['FUNCNAME'] = [
+                f.func_name for f in reversed(self._call_stack)
+            ] + ['source']
+            self._env['BASH_LINENO'] = [
+                str(f.call_lineno) for f in reversed(self._call_stack)
+            ] + ['0']
+            self._env['BASH_SOURCE'] = [self._script_name] * (
+                len(self._call_stack) + 1
+            )
+        else:
+            # At top level: these arrays are EMPTY (bash returns count=0)
+            self._env['FUNCNAME'] = []
+            self._env['BASH_LINENO'] = []
+            self._env['BASH_SOURCE'] = []
 
     # --- Shell option helpers ---
 
@@ -628,6 +670,11 @@ class BashInterpreter(BashCSTVisitor):
 
     def execute(self, node: ts.Node):
         """Dispatch to visit_* method and execute the returned runnable."""
+        # Update LINENO (tree-sitter is 0-indexed, bash is 1-indexed)
+        # Skip if we're evaluating a synthetic string (like PS4 expansion)
+        if not self._in_string_eval:
+            self._env['LINENO'] = str(node.start_point[0] + 1)
+
         # Verbose (-v): Print input lines as they are read (before expansion)
         if self._shell_options['verbose'] and node.type in (
             'command', 'pipeline', 'list', 'compound_statement',
@@ -1055,12 +1102,16 @@ class BashInterpreter(BashCSTVisitor):
             # Empty command substitution
             return ''
 
-        # Track subshell depth for xtrace output (++ for nested substitutions)
+        # Track depths for BASH_SUBSHELL and xtrace output (++ for nesting)
         self._subshell_depth += 1
+        self._xtrace_depth += 1
+        self._env['BASH_SUBSHELL'] = str(self._subshell_depth)
         try:
             return capture(self.visit(command_node)).read_stdout()
         finally:
             self._subshell_depth -= 1
+            self._xtrace_depth -= 1
+            self._env['BASH_SUBSHELL'] = str(self._subshell_depth)
 
     def evaluate_concatenation(self, node: ts.Node) -> BashValue:
         """Concatenate child nodes, expanding variables and other constructs."""
@@ -1498,7 +1549,9 @@ class BashInterpreter(BashCSTVisitor):
         """
         var_name = self._get_text(node)
         if self._resolve_vars:
-            return self._env.get(var_name, '')
+            # Use _get_variable for proper scoping (local vars, then env)
+            value = self._get_variable(var_name)
+            return value if value is not None else ''
         return var_name
 
     def evaluate_binary_expression(self, node: ts.Node) -> BashValue:
@@ -2081,8 +2134,12 @@ class BashInterpreter(BashCSTVisitor):
         and command substitution with proper FD redirection.
         """
         body_node = self._functions[func_name]
+        # Capture call line now (at lambda creation, not execution)
+        call_lineno = int(self._env.get('LINENO', '0'))
         return InProcessCallable(
-            lambda: self._execute_function_body(func_name, args, body_node),
+            lambda: self._execute_function_body(
+                func_name, args, body_node, call_lineno
+            ),
             name=func_name,
         )
 

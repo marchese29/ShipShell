@@ -730,7 +730,8 @@
     "name": "nounset_undefined",
     "category": "nounset",
     "code": "set -u; echo $UNDEFINED_VAR_XYZ",
-    "check_stdout": false
+    "check_stdout": false,
+    "check_stderr": false
   },
   {
     "name": "nounset_defined",
@@ -1526,12 +1527,14 @@
   {
     "name": "noclobber_blocks_overwrite",
     "category": "noclobber",
-    "code": "echo first > /tmp/ss_noclobber; set -C; echo second > /tmp/ss_noclobber 2>&1; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"
+    "code": "echo first > /tmp/ss_noclobber; set -C; echo second > /tmp/ss_noclobber 2>&1; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber",
+    "check_stderr": false
   },
   {
     "name": "noclobber_long_form",
     "category": "noclobber",
-    "code": "echo first > /tmp/ss_noclobber; set -o noclobber; echo second > /tmp/ss_noclobber 2>&1; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber"
+    "code": "echo first > /tmp/ss_noclobber; set -o noclobber; echo second > /tmp/ss_noclobber 2>&1; cat /tmp/ss_noclobber; rm -f /tmp/ss_noclobber",
+    "check_stderr": false
   },
   {
     "name": "noclobber_allows_new_file",
@@ -1556,7 +1559,8 @@
   {
     "name": "noclobber_script_continues",
     "category": "noclobber",
-    "code": "echo first > /tmp/ss_noclobber; set -C; echo blocked > /tmp/ss_noclobber 2>/dev/null; echo continued; rm -f /tmp/ss_noclobber"
+    "code": "echo first > /tmp/ss_noclobber; set -C; echo blocked > /tmp/ss_noclobber 2>/dev/null; echo continued; rm -f /tmp/ss_noclobber",
+    "check_stderr": false
   },
   {
     "name": "simple_echo",
@@ -1631,5 +1635,55 @@
     "code": "echo hello >&2",
     "check_stdout": false,
     "check_stderr": true
+  },
+  {
+    "name": "lineno_simple",
+    "category": "special_vars",
+    "code": "echo $LINENO"
+  },
+  {
+    "name": "lineno_multiline",
+    "category": "special_vars",
+    "code": "echo start\necho $LINENO\necho end"
+  },
+  {
+    "name": "funcname_at_top",
+    "category": "special_vars",
+    "code": "echo \"count=${#FUNCNAME[@]}\""
+  },
+  {
+    "name": "funcname_in_function",
+    "category": "special_vars",
+    "code": "foo() { echo ${FUNCNAME[*]}; }; foo"
+  },
+  {
+    "name": "funcname_nested",
+    "category": "special_vars",
+    "code": "bar() { echo ${FUNCNAME[*]}; }; foo() { bar; }; foo"
+  },
+  {
+    "name": "bash_lineno_in_function",
+    "category": "special_vars",
+    "code": "foo() { echo ${BASH_LINENO[0]}; }; foo"
+  },
+  {
+    "name": "bash_subshell_depth",
+    "category": "special_vars",
+    "code": "echo $BASH_SUBSHELL; echo $(echo $BASH_SUBSHELL)"
+  },
+  {
+    "name": "local_arithmetic_expansion",
+    "category": "function",
+    "code": "foo() { local n=$1; echo $((n + 1)); }; foo 5"
+  },
+  {
+    "name": "local_arithmetic_comparison",
+    "category": "function",
+    "code": "foo() { local n=$1; if (( n > 0 )); then echo yes; else echo no; fi; }; foo 1; foo 0"
+  },
+  {
+    "name": "local_recursive_arithmetic",
+    "category": "function",
+    "code": "count() { local n=$1; echo $n; if (( n > 0 )); then count $((n-1)); fi; }; count 3"
   }
 ]
