@@ -439,3 +439,89 @@ class TestTrapIntegration:
         assert events == ['debug', 'trace', 'err']
 
 
+# =============================================================================
+# Subshell Trap Inheritance Tests
+# =============================================================================
+
+
+class TestSubshellTrapInheritance:
+    """Tests for inherit_traps parameter on Subshell and Pipeline."""
+
+    def test_subshell_default_no_inheritance(self):
+        """By default, synthetic traps are NOT inherited by subshells."""
+        # Set an ERR trap that prints a marker
+        env.traps.set(
+            TrapType.ERR,
+            InProcessCallable(lambda: print('ERR_TRAP_FIRED') or 0)
+        )
+
+        # Run subshell with failing command (default inherit_traps=False)
+        def fail_in_subshell():
+            InProcessCallable(lambda: 1)()  # This fails
+            return 0
+
+        result = capture(Subshell(InProcessCallable(fail_in_subshell)))
+        output = result.read_stdout()
+
+        # ERR trap should NOT have fired in subshell
+        assert 'ERR_TRAP_FIRED' not in output
+
+    def test_subshell_with_inherit_traps(self):
+        """With inherit_traps=True, synthetic traps ARE inherited."""
+        # Set an ERR trap that prints a marker
+        env.traps.set(
+            TrapType.ERR,
+            InProcessCallable(lambda: print('ERR_TRAP_FIRED') or 0)
+        )
+
+        # Run subshell with failing command AND inherit_traps=True
+        def fail_in_subshell():
+            InProcessCallable(lambda: 1)()  # This fails
+            return 0
+
+        result = capture(Subshell(InProcessCallable(fail_in_subshell), inherit_traps=True))
+        output = result.read_stdout()
+
+        # ERR trap SHOULD have fired in subshell
+        assert 'ERR_TRAP_FIRED' in output
+
+    def test_subshell_exit_trap_never_inherited(self):
+        """EXIT trap is never inherited, even with inherit_traps=True."""
+        # Set an EXIT trap that prints a marker
+        env.traps.set(
+            TrapType.EXIT,
+            InProcessCallable(lambda: print('PARENT_EXIT_TRAP') or 0)
+        )
+
+        # Run subshell with inherit_traps=True
+        def subshell_body():
+            print('SUBSHELL_RAN')
+            return 0
+
+        result = capture(Subshell(InProcessCallable(subshell_body), inherit_traps=True))
+        output = result.read_stdout()
+
+        # Subshell ran, but parent's EXIT trap should NOT have fired
+        assert 'SUBSHELL_RAN' in output
+        assert 'PARENT_EXIT_TRAP' not in output
+
+    def test_subshell_debug_trap_inherited(self):
+        """DEBUG trap is inherited with inherit_traps=True."""
+        # Set a DEBUG trap that prints a marker
+        env.traps.set(
+            TrapType.DEBUG,
+            InProcessCallable(lambda: print('DEBUG_TRAP_FIRED') or 0)
+        )
+
+        # Run subshell with a command
+        def subshell_body():
+            InProcessCallable(lambda: 0)()  # DEBUG should fire before this
+            return 0
+
+        result = capture(Subshell(InProcessCallable(subshell_body), inherit_traps=True))
+        output = result.read_stdout()
+
+        # DEBUG trap should have fired
+        assert 'DEBUG_TRAP_FIRED' in output
+
+

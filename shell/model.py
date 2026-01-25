@@ -584,13 +584,28 @@ class InProcessCallable(ShellRunnable):
 
 
 class Pipeline(ShellRunnable):
+    """Execute commands connected by pipes.
+
+    Args:
+        predecessors: Commands before the final stage (each runs in a forked process).
+        final_cmd: The last command (runs in current process).
+        pipefail: If True, pipeline fails if any stage fails (not just last).
+        inherit_traps: If True, synthetic traps (DEBUG, ERR, RETURN, TRACE) are
+            inherited by forked pipeline stages. EXIT is never inherited.
+    """
+
     def __init__(
-        self, predecessors: list[NotPipeline], final_cmd: NotPipeline, pipefail: bool = False
+        self,
+        predecessors: list[NotPipeline],
+        final_cmd: NotPipeline,
+        pipefail: bool = False,
+        inherit_traps: bool = False,
     ):
         super().__init__()
         self.predecessors = predecessors
         self.final_cmd = final_cmd
         self.pipefail = pipefail
+        self._inherit_traps = inherit_traps
 
     @override
     def _exec(self, io: IOConfig | None = None) -> ShellResult:
@@ -620,8 +635,11 @@ class Pipeline(ShellRunnable):
         os.set_inheritable(pipe_w, False)
 
         if (pid := os.fork()) == 0:
-            # Child process - reset trap state for forked child
-            env.traps.reset_for_child()
+            # Child process - handle trap inheritance
+            if self._inherit_traps:
+                env.traps.set(TrapType.EXIT, None)
+            else:
+                env.traps.reset_for_child()
             os.close(pipe_r)
 
             exit_code = 0
@@ -661,8 +679,11 @@ class Pipeline(ShellRunnable):
             os.set_inheritable(pipe_w, False)
 
             if (pid := os.fork()) == 0:
-                # Child process - reset trap state for forked child
-                env.traps.reset_for_child()
+                # Child process - handle trap inheritance
+                if self._inherit_traps:
+                    env.traps.set(TrapType.EXIT, None)
+                else:
+                    env.traps.reset_for_child()
                 os.close(pipe_r)
 
                 exit_code = 0
@@ -744,9 +765,19 @@ class Pipeline(ShellRunnable):
 
 
 class Subshell(ShellRunnable):
-    def __init__(self, runnable: ShellRunnable):
+    """Execute a runnable in a forked subprocess.
+
+    Args:
+        runnable: The command/pipeline to execute in the subshell.
+        inherit_traps: If True, synthetic traps (DEBUG, ERR, RETURN, TRACE) are
+            inherited from the parent. EXIT is never inherited. Default False
+            matches bash default; set True when errtrace/functrace are enabled.
+    """
+
+    def __init__(self, runnable: ShellRunnable, *, inherit_traps: bool = False):
         super().__init__()
         self._runnable = runnable
+        self._inherit_traps = inherit_traps
 
     @override
     def _exec(self, io: IOConfig | None = None) -> ShellResult:
@@ -758,8 +789,13 @@ class Subshell(ShellRunnable):
         sys.stderr.flush()
 
         if (pid := os.fork()) == 0:
-            # Child process - reset trap state for forked child
-            env.traps.reset_for_child()
+            # Child process - handle trap inheritance
+            if self._inherit_traps:
+                # Keep synthetic traps but clear EXIT (each subshell has its own)
+                env.traps.set(TrapType.EXIT, None)
+            else:
+                # Default: clear all synthetic traps (bash default behavior)
+                env.traps.reset_for_child()
             env.update(self._env_overlay)
 
             exit_code = 0
