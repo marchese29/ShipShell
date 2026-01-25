@@ -75,6 +75,75 @@ The interpreter in `shell/compat/bash.py` uses a visitor pattern:
 
 Pure functions (tested in `test_bash_pure.py`): `_bash_to_str()`, `_expand_braces()`, `_split_commas()`, etc.
 
+### Trap System (`shell/trap.py`)
+
+The shell supports traps for responding to events and signals:
+
+**Synthetic traps** (shell events):
+- `DEBUG` - Fires BEFORE command execution
+- `TRACE` - Fires AFTER every command (regardless of exit code)
+- `ERR` - Fires AFTER command with non-zero exit only
+- `EXIT` - Fires when shell/subshell exits
+- `RETURN` - Fires when function returns (future)
+
+**Signal traps**: `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGQUIT`, `SIGALRM`, `SIGUSR1`, `SIGUSR2`
+
+**Usage** (Python API, not bash syntax):
+```python
+from shell.trap import TrapType
+
+# Set a trap (plain callables auto-wrapped in InProcessCallable)
+env.traps.set(TrapType.EXIT, lambda: print("goodbye"))
+env.traps.set(TrapType.ERR, lambda: print(f"command failed with {env.last_exit}"))
+
+# Clear a trap
+env.traps.set(TrapType.EXIT, None)
+
+# Check current traps
+trap_show()()  # or env.traps.list()
+```
+
+**Key behaviors:**
+- Traps fire via `run()` for "atomic" runnables (`Command`, `InProcessCallable`)
+- EXIT traps fire from REPL finally block and subshell cleanup
+- Synthetic traps don't inherit to subshells (bash default); signal traps do
+- Reentrancy guard prevents recursive trap firing
+
+### Builtin Commands (`shell/builtins.py`)
+
+The `@builtin_command` decorator provides **bash calling convention compatibility** for shell builtins. It is NOT a universal wrapper for all functions.
+
+**When to use `@builtin_command`:**
+- Builtins that users call with bash-style arguments: `cd`, `echo`, `pwd`, `test`
+- Functions that need flag parsing (`-n`, `-e`, `-P`) via the `_Flag` annotation
+- Commands where positional args come as a tuple of strings
+
+**When NOT to use it:**
+- Python-first APIs where you want native types (e.g., `env.traps.set()`)
+- Internal helper functions
+- Functions that accept complex Python objects as arguments
+
+**Example - good use:**
+```python
+@builtin_command
+def echo(
+    args: tuple[str, ...] = (),
+    escape: Annotated[bool, _Flag('e')] = False,  # -e flag
+):
+    ...
+```
+
+**Anti-pattern - don't do this:**
+```python
+# DON'T wrap Python-first APIs in @builtin_command
+@builtin_command  # Wrong!
+def set_trap(handler: ShellRunnable, signal: TrapType):
+    ...
+
+# DO expose a clean Python API instead
+env.traps.set(TrapType.EXIT, handler)
+```
+
 ### User Initialization Phases
 
 1. `env.initialize()` - Base shell environment

@@ -9,6 +9,9 @@ import sys
 import traceback
 from collections.abc import Callable, Iterator
 
+from shell.environment import env
+from shell.trap import TrapType
+
 
 class REPLHooks:
     """Manages REPL execution lifecycle hooks."""
@@ -147,13 +150,20 @@ def run_repl(input_source: Iterator[str] | None = None):
                     _execute_code(code, repl_globals)
                 except SystemExit:
                     print('Exiting...')
-                    return
+                    return  # Will hit finally block
     except KeyboardInterrupt:
         # Ctrl+C during iteration
         print('\n^C')
     except EOFError:
         # Ctrl+D or end of input
         print('Exiting...')
+    finally:
+        # Fire EXIT trap on ANY shell exit (exit(), Ctrl+C, Ctrl+D, script end)
+        try:
+            env.traps.fire(TrapType.EXIT)
+        except Exception:
+            pass  # Don't let trap failure prevent exit
+        env.traps.cleanup()
 
 
 if __name__ == '__main__':

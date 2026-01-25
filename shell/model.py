@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Self, cast, override
 
 from .environment import env, env_to_str
+from .trap import TrapType
 
 FileLike = int | str | Path
 
@@ -180,6 +181,16 @@ def run(runnable: ShellRunnable, io: IOConfig | None = None) -> ShellResult:
             If raw fds are passed, they are the caller's responsibility to close.
             If paths are passed, they will be opened/closed by the runnable.
     """
+    # Process any pending signals first
+    env.traps.process_pending_signals()
+
+    # Fire DEBUG before "atomic" commands (Command, InProcessCallable)
+    # NOT for structural wrappers (Pipeline, Subshell, Negated, TracedRunnable)
+    is_atomic = isinstance(runnable, (Command, InProcessCallable))
+    if is_atomic:
+        env.current_runnable = runnable  # Set BEFORE DEBUG fires
+        env.traps.fire(TrapType.DEBUG)
+
     if isinstance(command := runnable, Command):
         # Commands need to fork before _exec
         if (pid := os.fork()) == 0:
@@ -200,6 +211,19 @@ def run(runnable: ShellRunnable, io: IOConfig | None = None) -> ShellResult:
         result = runnable._exec(io)
 
     env.last_exit = result.exit_code
+
+    # Update context AFTER execution
+    if is_atomic:
+        env.last_runnable = runnable
+        env.current_runnable = None
+
+        # Fire TRACE after atomic commands (regardless of exit code)
+        env.traps.fire(TrapType.TRACE)
+
+        # Fire ERR on non-zero exit
+        if result.exit_code != 0:
+            env.traps.fire(TrapType.ERR)
+
     return result
 
 
@@ -596,16 +620,32 @@ class Pipeline(ShellRunnable):
         os.set_inheritable(pipe_w, False)
 
         if (pid := os.fork()) == 0:
-            # Child process
+            # Child process - reset trap state for forked child
+            env.traps.reset_for_child()
             os.close(pipe_r)
 
-            # First stage gets actual.stdin
-            result = first_stage._exec(
-                IOConfig(stdin=actual.stdin, stdout=pipe_w, stderr=actual.stderr)
-            )
+            exit_code = 0
+            try:
+                # First stage gets actual.stdin
+                result = first_stage._exec(
+                    IOConfig(stdin=actual.stdin, stdout=pipe_w, stderr=actual.stderr)
+                )
+                exit_code = result.exit_code
+            except SystemExit as e:
+                exit_code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
+            except ShellEscapingException as e:
+                exit_code = getattr(e, 'exit_code', 1)
+            except Exception:
+                exit_code = 1
+            finally:
+                os.close(pipe_w)
+                try:
+                    env.traps.fire(TrapType.EXIT)
+                except Exception:
+                    pass
+                env.traps.cleanup()
 
-            os.close(pipe_w)
-            os._exit(result.exit_code)
+            os._exit(exit_code)
         else:
             # Parent process
             child_pids.append(pid)
@@ -621,17 +661,33 @@ class Pipeline(ShellRunnable):
             os.set_inheritable(pipe_w, False)
 
             if (pid := os.fork()) == 0:
-                # Child process
+                # Child process - reset trap state for forked child
+                env.traps.reset_for_child()
                 os.close(pipe_r)
 
-                # Middle stages get int fd from previous pipe
-                result = stage._exec(
-                    IOConfig(stdin=current_pipe_read, stdout=pipe_w, stderr=actual.stderr)
-                )
+                exit_code = 0
+                try:
+                    # Middle stages get int fd from previous pipe
+                    result = stage._exec(
+                        IOConfig(stdin=current_pipe_read, stdout=pipe_w, stderr=actual.stderr)
+                    )
+                    exit_code = result.exit_code
+                except SystemExit as e:
+                    exit_code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
+                except ShellEscapingException as e:
+                    exit_code = getattr(e, 'exit_code', 1)
+                except Exception:
+                    exit_code = 1
+                finally:
+                    os.close(pipe_w)
+                    os.close(current_pipe_read)
+                    try:
+                        env.traps.fire(TrapType.EXIT)
+                    except Exception:
+                        pass
+                    env.traps.cleanup()
 
-                os.close(pipe_w)
-                os.close(current_pipe_read)
-                os._exit(result.exit_code)
+                os._exit(exit_code)
             else:
                 # Parent process
                 child_pids.append(pid)
@@ -702,10 +758,28 @@ class Subshell(ShellRunnable):
         sys.stderr.flush()
 
         if (pid := os.fork()) == 0:
-            # Child process - isolated environment
+            # Child process - reset trap state for forked child
+            env.traps.reset_for_child()
             env.update(self._env_overlay)
-            result = run(self._runnable, actual)
-            os._exit(result.exit_code)
+
+            exit_code = 0
+            try:
+                result = run(self._runnable, actual)
+                exit_code = result.exit_code
+            except SystemExit as e:
+                exit_code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
+            except ShellEscapingException as e:
+                exit_code = getattr(e, 'exit_code', 1)
+            except Exception:
+                exit_code = 1
+            finally:
+                try:
+                    env.traps.fire(TrapType.EXIT)
+                except Exception:
+                    pass
+                env.traps.cleanup()
+
+            os._exit(exit_code)
         else:
             # Parent process
             _, status = os.waitpid(pid, 0)

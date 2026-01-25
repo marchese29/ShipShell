@@ -14,6 +14,8 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
+from shell.trap import TrapType
+
 
 @dataclass
 class CapturedState:
@@ -98,6 +100,9 @@ def _run_in_child(
     global_env._exported.clear()
     global_env.initialize()
 
+    # Reset trap state inherited from parent
+    global_env.traps.reset_for_child()
+
     # Populate with setup vars
     for key, value in setup_env.items():
         global_env._env[key] = value
@@ -109,9 +114,19 @@ def _run_in_child(
     try:
         run_bash_code(code, env=global_env)
         exit_code = global_env.last_exit
+    except SystemExit as e:
+        # Handle exit() builtin
+        exit_code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
     except Exception as e:
         print(f'Error: {e}', file=sys.stderr)
         exit_code = 1
+    finally:
+        # Fire EXIT trap if set during bash execution
+        try:
+            global_env.traps.fire(TrapType.EXIT)
+        except Exception:
+            pass  # Don't let trap failure prevent exit
+        global_env.traps.cleanup()
 
     # Flush output before writing results
     sys.stdout.flush()

@@ -19,6 +19,7 @@ from pydantic import BeforeValidator, ConfigDict, ValidationError, validate_call
 
 from .environment import env
 from .model import BUILTIN_REGISTRY, InProcessCallable
+from .trap import TrapType
 from .types import ShellError, ShellInt, ShellPath
 
 
@@ -434,6 +435,9 @@ def exit_(*, code: int = ...) -> InProcessCallable: ...
 def exit_(code: int = 0):
     """Exit the shell with the given exit code.
 
+    Uses sys.exit() rather than os._exit() so the exit can be caught and
+    EXIT traps can fire before the process terminates.
+
     Args:
         code: Exit code to return to the parent process. Defaults to 0.
 
@@ -441,7 +445,7 @@ def exit_(code: int = 0):
         exit_()     # Exit with code 0
         exit_(1)    # Exit with code 1
     """
-    os._exit(code)
+    sys.exit(code)
 
 
 def _find_in_path(name: str, find_all: bool = False) -> list[Path]:
@@ -771,3 +775,31 @@ def source_bash_file(file: BashFile, args: tuple[str, ...] = ()):
         run_bash_code(code, args=list(args), script_name=str(file), env=env)
     except BashScriptError as e:
         raise ShellError(str(e), exit_code=e.exit_code) from e
+
+
+@builtin_command
+def trap_list():
+    """List available trap/signal names.
+
+    Prints all trap types that can be used with env.traps.set().
+
+    Examples:
+        trap_list()()  # Print available trap names
+    """
+    for trap_type in TrapType:
+        print(trap_type.name)
+
+
+@builtin_command
+def trap_show():
+    """Show current trap settings.
+
+    Displays all currently configured trap handlers in a format similar
+    to bash's 'trap -p' output.
+
+    Examples:
+        trap_show()()  # Print current trap settings
+    """
+    output = env.traps.list()
+    if output:
+        print(output)

@@ -4,7 +4,11 @@ import os
 import platform
 from collections.abc import Iterator, MutableMapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .model import ShellRunnable
+    from .trap import TrapManager
 
 
 # I'm sure I will come to regret this function some day
@@ -83,6 +87,11 @@ class ShellEnvironment(MutableMapping):
         # Shell options
         self._physical: bool = False  # Don't follow symlinks in cd/pwd (-P)
 
+        # Trap system
+        self._traps: TrapManager | None = None
+        self._current_runnable: ShellRunnable | None = None
+        self._last_runnable: ShellRunnable | None = None
+
     @property
     def last_exit(self) -> int:
         """Get the last exit code ($?)."""
@@ -102,6 +111,33 @@ class ShellEnvironment(MutableMapping):
     def physical(self, value: bool):
         """Set the physical mode setting (-P)."""
         self._physical = value
+
+    @property
+    def traps(self) -> TrapManager:
+        """Get the trap manager (lazy initialized)."""
+        if self._traps is None:
+            from .trap import TrapManager
+
+            self._traps = TrapManager()
+        return self._traps
+
+    @property
+    def current_runnable(self) -> ShellRunnable | None:
+        """The runnable currently executing. For DEBUG trap handlers."""
+        return self._current_runnable
+
+    @current_runnable.setter
+    def current_runnable(self, value: ShellRunnable | None):
+        self._current_runnable = value
+
+    @property
+    def last_runnable(self) -> ShellRunnable | None:
+        """The last runnable that completed. For ERR/TRACE trap handlers."""
+        return self._last_runnable
+
+    @last_runnable.setter
+    def last_runnable(self, value: ShellRunnable | None):
+        self._last_runnable = value
 
     # Variables with computed values that can't be set via __setitem__
     # TODO: We should be able to inherit some of these from the parent environment
