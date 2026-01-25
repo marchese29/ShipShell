@@ -299,7 +299,7 @@ def prompt():
     print()
 
     # Get the main module's namespace for completion
-    import __main__
+    import __main__  # noqa: PLC0415 - must be imported at call time, not module load
 
     repl_globals = __main__.__dict__
 

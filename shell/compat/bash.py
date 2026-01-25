@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import builtins as builtins_module
 import fnmatch
 import glob
+import keyword
 import os
 import re
 import stat
 import sys
 import tempfile
+import types
+import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -2948,12 +2952,7 @@ def _wire_functions(
     with a warning. Functions that shadow Python builtins are allowed but
     warned about.
     """
-    import builtins
-    import keyword
-    import types
-    import warnings
-
-    import __main__
+    import __main__  # noqa: PLC0415 - must be imported at call time, not module load
 
     # Get or create target namespace
     if scope is None or scope == '__main__':
@@ -2996,7 +2995,7 @@ def _wire_functions(
             )
 
         # Warn about builtin shadowing
-        if hasattr(builtins, py_name):
+        if hasattr(builtins_module, py_name):
             warnings.warn(
                 f"Bash function '{func_name}' shadows Python builtin '{py_name}'",
                 stacklevel=3,

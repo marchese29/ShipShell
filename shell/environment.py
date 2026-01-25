@@ -116,7 +116,8 @@ class ShellEnvironment(MutableMapping):
     def traps(self) -> TrapManager:
         """Get the trap manager (lazy initialized)."""
         if self._traps is None:
-            from .trap import TrapManager
+            # Avoid circular: environment.py ← trap.py ← model.py
+            from .trap import TrapManager  # noqa: PLC0415
 
             self._traps = TrapManager()
         return self._traps

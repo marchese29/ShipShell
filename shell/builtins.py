@@ -17,6 +17,8 @@ from typing import (
 
 from pydantic import BeforeValidator, ConfigDict, ValidationError, validate_call
 
+from .compat import run_bash_code
+from .compat.bash import BashScriptError
 from .environment import env
 from .model import BUILTIN_REGISTRY, InProcessCallable
 from .trap import TrapType
@@ -577,7 +579,7 @@ def source(file: SourceFile, args: tuple[str, ...] = ()):
     """
     file = cast(Path, file)
 
-    import __main__
+    import __main__  # noqa: PLC0415 - must be imported at call time, not module load
 
     # Save and set sys.argv and __file__
     saved_argv = sys.argv
@@ -720,9 +722,6 @@ def source_bash_code(code: str):
         source_bash_code("for i in 1 2 3; do echo $i; done")()
         capture(source_bash_code("seq 1 10")).read_stdout()
     """
-    from shell.compat import run_bash_code
-    from shell.compat.bash import BashScriptError
-
     try:
         run_bash_code(code, env=env)
     except BashScriptError as e:
@@ -766,8 +765,6 @@ def source_bash_file(file: BashFile, args: tuple[str, ...] = ()):
         source_bash_file("setup.sh", "arg1", "arg2")()
         capture(source_bash_file("generate.sh")).read_stdout()
     """
-    from shell.compat.bash import BashScriptError, run_bash_code
-
     file = cast(Path, file)
     code = file.read_text()
 

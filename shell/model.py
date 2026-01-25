@@ -1012,6 +1012,7 @@ def pyshexec(file: str | Path, *args: Any) -> Subshell:
         pyshexec("~/scripts/process.py", "input.txt", "--verbose")()
         result = capture(pyshexec("script.py", "arg1"))
     """
-    from .builtins import source
+    # Avoid circular: model.py ← builtins.py
+    from .builtins import source  # noqa: PLC0415
 
     return Subshell(source(str(file), *[str(a) for a in args]))

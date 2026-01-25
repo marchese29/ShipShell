@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import IO
 
 from .environment import env
+from .model import BUILTIN_REGISTRY
 
 __all__ = [
     'exec_in_scope',
@@ -29,7 +30,7 @@ def exec_in_scope(code: str | IO[str], scope: str | None = None) -> None:
         scope: Optional module name. If provided, creates/uses a module object
                accessible as __main__.{scope}. If None, executes in __main__.
     """
-    import __main__
+    import __main__  # noqa: PLC0415 - must be imported at call time, not module load
 
     code_str: str = code.read() if hasattr(code, 'read') else code  # type: ignore[union-attr]
 
@@ -98,8 +99,6 @@ def wire_path_programs(target: str | None = None) -> None:
         cat('file.txt')
         grep('pattern', 'file.txt')
     """
-    from .model import BUILTIN_REGISTRY
-
     # Get PATH from environment
     path_list = env.get('PATH', [])
     if not path_list:

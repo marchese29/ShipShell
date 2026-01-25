@@ -31,6 +31,7 @@ select = [
     "UP",     # pyupgrade
     "B",      # flake8-bugbear
     "C4",     # flake8-comprehensions
+    "PLC0415", # import-outside-top-level
 ]
 
 [tool.ruff.lint.flake8-quotes]

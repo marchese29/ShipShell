@@ -10,6 +10,8 @@ import traceback
 from collections.abc import Callable, Iterator
 
 from shell.environment import env
+from shell.model import ShellResult, ShellRunnable
+from shell.repl.default import prompt
 from shell.trap import TrapType
 
 
@@ -94,8 +96,6 @@ def _execute_code(code: str, globals_dict: dict) -> None:
     Auto-runs ShellRunnable objects if they're the result of an expression.
     Raises SystemExit if exit() is called.
     """
-    from shell.model import ShellResult, ShellRunnable
-
     # Fire before_execute hook
     hooks.fire_before_execute(code)
 
@@ -132,14 +132,12 @@ def run_repl(input_source: Iterator[str] | None = None):
                      If None, uses the default prompt-based input from repl.default.
     """
     # Get the main module's namespace for REPL execution
-    import __main__
+    import __main__  # noqa: PLC0415 - must be imported at call time, not module load
 
     repl_globals = __main__.__dict__
 
     # Use default prompt-based input if no custom source provided
     if input_source is None:
-        from shell.repl.default import prompt
-
         input_source = prompt()
 
     # Process each code string from the input source

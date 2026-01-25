@@ -161,8 +161,8 @@ class TrapManager:
             return
 
         # Auto-wrap plain callables
-        # Import here to avoid circular import: trap.py ← environment.py ← model.py
-        from .model import InProcessCallable, ShellRunnable
+        # Avoid circular: trap.py ← environment.py ← model.py
+        from .model import InProcessCallable, ShellRunnable  # noqa: PLC0415
 
         if not isinstance(handler, ShellRunnable):
             handler = InProcessCallable(handler)
