@@ -34,6 +34,7 @@ from shell.model import (
     capture,
     prog,
 )
+from shell.trap import TrapType
 
 
 def _expect[T](thing: T | None) -> T:
@@ -380,79 +381,109 @@ FLAG_TO_OPTION = {
 
 
 class BashInterpreter(BashCSTVisitor):
+    # Default shell options
+    _DEFAULT_SHELL_OPTIONS: dict[str, bool] = {
+        'errexit': False,
+        'nounset': False,
+        'xtrace': False,
+        'pipefail': False,
+        'noglob': False,
+        'allexport': False,
+        'verbose': False,
+        'noexec': False,
+        'braceexpand': True,    # ON by default
+        'noclobber': False,
+        'errtrace': False,
+        'functrace': False,
+        'physical': False,
+        'hashall': True,        # ON by default
+        'keyword': False,
+        'onecmd': False,
+        'privileged': False,
+        'histexpand': False,
+        'notify': False,
+        'monitor': False,
+        'emacs': False,
+        'vi': False,
+        'history': False,
+        'ignoreeof': False,
+        'interactive-comments': True,  # ON by default
+        'posix': False,
+        'nolog': False,
+    }
+
     def __init__(
         self,
         source: str,
         args: list[str] | None = None,
         script_name: str = 'bash',
-        env: ShellEnvironment = global_env,
+        env: ShellEnvironment | None = None,
+        functions: dict[str, tuple[str, int]] | None = None,
+        shell_options: dict[str, bool] | None = None,
+        *,
+        parent: BashInterpreter | None = None,
+        line_offset: int = 0,
+        func_name: str | None = None,
+        call_lineno: int = 0,
     ):
         self._source = source
-        self._positional_params = args if args is not None else []
         self._script_name = script_name
-        self._env = env
+        self._positional_params = args if args is not None else []
+        self._env = env if env is not None else global_env
+        self._functions: dict[str, tuple[str, int]] = functions if functions is not None else {}
+        if shell_options is not None:
+            self._shell_options = shell_options
+        else:
+            self._shell_options = self._DEFAULT_SHELL_OPTIONS.copy()
+
+        # Parent chain for variable lookup and call stack
+        self._parent = parent
+        self._line_offset = line_offset
+        self._func_name = func_name
+        self._call_lineno = call_lineno
+        self._local_vars: dict[str, BashValue] = {}
+
+        # Internal state (not inherited)
         self._temp_files: list[str] = []  # Temp files to clean up (e.g., heredocs)
         self._resolve_vars = False  # When True, variable_name nodes are looked up
+        self._errexit_suppressed = False  # Inside context where errexit shouldn't trigger
+        self._cleaned_up = False  # Track cleanup state for __del__
+        self._subshell_depth = 0  # BASH_SUBSHELL: Actual subshell depth
+        self._xtrace_depth = 1  # Xtrace depth: Starts at 1 for source semantics
+        self._in_string_eval = False  # Suppress LINENO updates in synthetic strings
 
-        # Shell options (set -o). All are parsed; behavior implemented incrementally.
-        self._shell_options: dict[str, bool] = {
-            'errexit': False,
-            'nounset': False,
-            'xtrace': False,
-            'pipefail': False,
-            'noglob': False,
-            'allexport': False,
-            'verbose': False,
-            'noexec': False,
-            'braceexpand': True,    # ON by default
-            'noclobber': False,
-            'errtrace': False,
-            'functrace': False,
-            'physical': False,
-            'hashall': True,        # ON by default
-            'keyword': False,
-            'onecmd': False,
-            'privileged': False,
-            'histexpand': False,
-            'notify': False,
-            'monitor': False,
-            'emacs': False,
-            'vi': False,
-            'history': False,
-            'ignoreeof': False,
-            'interactive-comments': True,  # ON by default
-            'posix': False,
-            'nolog': False,
-        }
+        # Initialize special variables in environment (only for root interpreter)
+        if parent is None:
+            self._env['LINENO'] = '1'
+            self._env['BASH_SUBSHELL'] = '0'
+            self._env['FUNCNAME'] = []
+            self._env['BASH_LINENO'] = []
+            self._env['BASH_SOURCE'] = []
 
-        # True when inside a context where errexit shouldn't trigger (conditions, && chains)
-        self._errexit_suppressed = False
-
-        # Function definitions: name -> compound_statement body node
-        self._functions: dict[str, ts.Node] = {}
-
-        # Call stack for function scope management
-        self._call_stack: list[CallFrame] = []
-
-        # Track cleanup state for __del__
-        self._cleaned_up = False
-
-        # BASH_SUBSHELL: Actual subshell depth (pipes, $(), etc.)
-        self._subshell_depth = 0
-
-        # Xtrace depth: Starts at 1 for source semantics (shows ++ instead of +)
-        self._xtrace_depth = 1
-
-        # Flag to suppress LINENO updates when evaluating synthetic strings
-        self._in_string_eval = False
-
-        # Initialize special variables in environment
-        self._env['LINENO'] = '1'
-        self._env['BASH_SUBSHELL'] = '0'
-        # At top level, stack variables are EMPTY (not in any function)
-        self._env['FUNCNAME'] = []
-        self._env['BASH_LINENO'] = []
-        self._env['BASH_SOURCE'] = []
+    @classmethod
+    def child_of(
+        cls,
+        parent: BashInterpreter,
+        source: str,
+        *,
+        args: list[str] | None = None,
+        line_offset: int = 0,
+        func_name: str | None = None,
+        call_lineno: int = 0,
+    ) -> BashInterpreter:
+        """Create a child interpreter inheriting context from parent."""
+        return cls(
+            source,
+            args=args,
+            script_name=parent._script_name,
+            env=parent._env,
+            functions=parent._functions,
+            shell_options=parent._shell_options.copy(),
+            parent=parent,
+            line_offset=line_offset,
+            func_name=func_name,
+            call_lineno=call_lineno,
+        )
 
     def cleanup(self):
         """Clean up temporary resources created during execution."""
@@ -513,52 +544,80 @@ class BashInterpreter(BashCSTVisitor):
         return s
 
     def _execute_function_body(
-        self, func_name: str, args: list[str], body_node: ts.Node, call_lineno: int = 0
+        self,
+        func_name: str,
+        args: list[str],
+        body_source: str,
+        start_line: int,
+        call_lineno: int = 0,
     ) -> int:
-        """Execute a function body with the given arguments.
-
-        This is the shared implementation for both direct function calls
-        (from _build_function_runnable) and Python-wired function calls.
+        """Execute a function body in a child interpreter.
 
         Args:
             func_name: Name of the function being called
             args: Positional arguments passed to the function
-            body_node: The compound_statement AST node containing the function body
+            body_source: Function body source text
+            start_line: 0-indexed line where body appeared in original script
             call_lineno: Line number where this function was called
 
         Returns:
             The exit code from the function execution
         """
-        frame = CallFrame(
-            func_name=func_name, positional_params=args, call_lineno=call_lineno
+        # Create child interpreter using factory method
+        child = BashInterpreter.child_of(
+            self,
+            body_source,
+            args=args,
+            line_offset=start_line,
+            func_name=func_name,
+            call_lineno=call_lineno,
         )
-        self._call_stack.append(frame)
-        self._update_stack_vars()
+
+        # Update stack variables for the new context
+        child._update_stack_vars()
+
+        # Parse and execute
+        bash_language = Language(tsbash.language())
+        tree = Parser(bash_language).parse(bytes(body_source, 'utf-8'))
+
         try:
-            self.execute(body_node)
+            child.execute(tree.root_node)
         except BashReturnException as e:
             self._env.last_exit = e.exit_code
         finally:
-            self._call_stack.pop()
-            self._update_stack_vars()
+            # Fire RETURN trap after function completes
+            self._env.traps.fire(TrapType.RETURN)
+
         return self._env.last_exit
 
+    def _is_in_function(self) -> bool:
+        """Check if we're inside a function (this or any parent)."""
+        if self._func_name:
+            return True
+        if self._parent:
+            return self._parent._is_in_function()
+        return False
+
     def _update_stack_vars(self) -> None:
-        """Update FUNCNAME, BASH_LINENO, BASH_SOURCE in environment."""
-        if self._call_stack:
+        """Update FUNCNAME, BASH_LINENO, BASH_SOURCE from parent chain."""
+        funcnames = []
+        lineenos = []
+        interp: BashInterpreter | None = self
+        while interp:
+            if interp._func_name:
+                funcnames.append(interp._func_name)
+                lineenos.append(str(interp._call_lineno))
+            interp = interp._parent
+
+        if funcnames:
             # Inside a function: FUNCNAME[0]=current, FUNCNAME[-1]=source
-            # We use 'source' because our semantics match `source script.sh`
-            self._env['FUNCNAME'] = [
-                f.func_name for f in reversed(self._call_stack)
-            ] + ['source']
-            self._env['BASH_LINENO'] = [
-                str(f.call_lineno) for f in reversed(self._call_stack)
-            ] + ['0']
-            self._env['BASH_SOURCE'] = [self._script_name] * (
-                len(self._call_stack) + 1
-            )
+            funcnames.append('source')
+            lineenos.append('0')
+            self._env['FUNCNAME'] = funcnames
+            self._env['BASH_LINENO'] = lineenos
+            self._env['BASH_SOURCE'] = [self._script_name] * len(funcnames)
         else:
-            # At top level: these arrays are EMPTY (bash returns count=0)
+            # At top level: these arrays are EMPTY
             self._env['FUNCNAME'] = []
             self._env['BASH_LINENO'] = []
             self._env['BASH_SOURCE'] = []
@@ -604,25 +663,31 @@ class BashInterpreter(BashCSTVisitor):
         # Special variables are always defined - skip nounset check
         if var_name in ('?', '#', '$', '!', '@', '*', '-', '_'):
             return
-        # Check local scopes first
-        for frame in reversed(self._call_stack):
-            if var_name in frame.local_vars:
-                return
+        # Check local scopes through parent chain
+        if self._has_local_var(var_name):
+            return
         if self._shell_options['nounset'] and var_name not in self._env:
             raise BashScriptError(f'{var_name}: unbound variable', 127)
 
     def _get_positional_params(self) -> list[str]:
-        """Get positional params from current call frame or script level."""
-        if self._call_stack:
-            return self._call_stack[-1].positional_params
+        """Get positional params - each interpreter owns its own (no chaining)."""
         return self._positional_params
+
+    def _has_local_var(self, name: str) -> bool:
+        """Check if variable is declared local in this interpreter or parent chain."""
+        if name in self._local_vars:
+            return True
+        if self._parent:
+            return self._parent._has_local_var(name)
+        return False
 
     def _get_variable(self, name: str, *, check_unset: bool = True) -> BashValue | None:
         """Get variable with dynamic scoping. Returns None if unset.
 
         Resolution order (first match wins):
-        1. Local variables in call stack (most recent frame first)
-        2. Environment variables
+        1. Local variables in this interpreter
+        2. Local variables in parent chain (dynamic scoping)
+        3. Environment variables
 
         Args:
             name: Variable name to look up
@@ -636,10 +701,13 @@ class BashInterpreter(BashCSTVisitor):
         Raises:
             BashScriptError: If nounset enabled, check_unset=True, and var is unset.
         """
-        # Check local scopes first (dynamic scoping)
-        for frame in reversed(self._call_stack):
-            if name in frame.local_vars:
-                return frame.local_vars[name]
+        # Check this interpreter's local scope
+        if name in self._local_vars:
+            return self._local_vars[name]
+
+        # Chain to parent interpreter (dynamic scoping)
+        if self._parent:
+            return self._parent._get_variable(name, check_unset=check_unset)
 
         # Check environment
         if name in self._env:
@@ -656,13 +724,17 @@ class BashInterpreter(BashCSTVisitor):
     def _set_variable(self, name: str, value: BashValue) -> None:
         """Set variable respecting local scope.
 
-        If variable is declared local in any active frame, set it there.
+        If variable is declared local in this interpreter or parent chain, set it there.
         Otherwise, set in environment (global).
         """
-        for frame in reversed(self._call_stack):
-            if name in frame.local_vars:
-                frame.local_vars[name] = value
-                return
+        # Check this interpreter's local scope
+        if name in self._local_vars:
+            self._local_vars[name] = value
+            return
+        # Check parent chain for existing local
+        if self._parent and self._parent._has_local_var(name):
+            self._parent._set_variable(name, value)
+            return
         # Global scope
         self._env[name] = value if isinstance(value, list) else _bash_to_str(value)
         # Auto-export if allexport (-a) is enabled
@@ -678,7 +750,7 @@ class BashInterpreter(BashCSTVisitor):
         # Update LINENO (tree-sitter is 0-indexed, bash is 1-indexed)
         # Skip if we're evaluating a synthetic string (like PS4 expansion)
         if not self._in_string_eval:
-            self._env['LINENO'] = str(node.start_point[0] + 1)
+            self._env['LINENO'] = str(node.start_point[0] + 1 + self._line_offset)
 
         # Verbose (-v): Print input lines as they are read (before expansion)
         if self._shell_options['verbose'] and node.type in (
@@ -2138,12 +2210,12 @@ class BashInterpreter(BashCSTVisitor):
         Uses InProcessCallable to enable function execution in pipelines
         and command substitution with proper FD redirection.
         """
-        body_node = self._functions[func_name]
+        body_source, start_line = self._functions[func_name]
         # Capture call line now (at lambda creation, not execution)
         call_lineno = int(self._env.get('LINENO', '0'))
         return InProcessCallable(
-            lambda: self._execute_function_body(
-                func_name, args, body_node, call_lineno
+            lambda bs=body_source, sl=start_line, ln=call_lineno: self._execute_function_body(
+                func_name, args, bs, sl, ln
             ),
             name=func_name,
         )
@@ -2274,6 +2346,21 @@ class BashInterpreter(BashCSTVisitor):
                 runnable = runnable.trace(':', self._get_ps4())
             return runnable
 
+        if cmd_name == 'trap':
+            # Build args for tracing
+            arg_nodes = node.children_by_field_name('argument')
+            trap_args = [_bash_to_str(self.evaluate(a)) for a in arg_nodes]
+
+            def do_trap():
+                self._handle_trap_command(node)
+                return 0
+
+            runnable: ShellRunnable = InProcessCallable(do_trap, name='trap')
+            if self._shell_options['xtrace']:
+                display = 'trap' if not trap_args else f'trap {" ".join(trap_args)}'
+                runnable = runnable.trace(display, self._get_ps4())
+            return runnable
+
         # Build arguments
         cmd_args = []
         for arg_node in node.children_by_field_name('argument'):
@@ -2301,7 +2388,7 @@ class BashInterpreter(BashCSTVisitor):
 
     def _handle_return_command(self, node: ts.Node):
         """Handle the return builtin - exits from a function with an exit code."""
-        if not self._call_stack:
+        if not self._is_in_function():
             # Not inside a function - bash prints error and continues
             print('bash: return: can only `return` from a function or sourced script',
                   file=sys.stderr)
@@ -2318,6 +2405,106 @@ class BashInterpreter(BashCSTVisitor):
 
         raise BashReturnException(exit_code)
 
+    def _handle_trap_command(self, node: ts.Node) -> None:
+        """Handle the trap builtin - set/clear/list trap handlers.
+
+        Syntax:
+            trap                    # Print all traps (same as trap -p)
+            trap -p                 # Print all traps
+            trap -l                 # List signal names
+            trap SIGNAL             # Print trap for SIGNAL
+            trap handler SIGNAL...  # Set handler for signal(s)
+            trap - SIGNAL...        # Reset signal(s) to default
+            trap '' SIGNAL...       # Ignore signal(s)
+        """
+        from shell.builtins import trap_list, trap_show  # noqa: PLC0415
+
+        arg_nodes = list(node.children_by_field_name('argument'))
+        args = [_bash_to_str(self.evaluate(a)) for a in arg_nodes]
+
+        # trap (no args) or trap -p: use existing trap_show builtin
+        if not args or (len(args) == 1 and args[0] == '-p'):
+            trap_show()()
+            return
+
+        # trap -l: use existing trap_list builtin
+        if len(args) == 1 and args[0] == '-l':
+            trap_list()()
+            return
+
+        # trap handler sigspec [sigspec ...]
+        handler_str = args[0]
+        signal_specs = args[1:] if len(args) > 1 else []
+
+        if not signal_specs:
+            # Single arg: print trap for that signal
+            try:
+                trap_type = TrapType.from_string(handler_str)
+                handler = self._env.traps.get(trap_type)
+                if handler:
+                    print(f'trap -- {handler!r} {trap_type.name}')
+                return
+            except ValueError:
+                print(
+                    f'bash: trap: {handler_str}: invalid signal specification',
+                    file=sys.stderr,
+                )
+                self._env.last_exit = 1
+                return
+
+        # Multiple args: handler + signal specs
+        for spec in signal_specs:
+            try:
+                trap_type = TrapType.from_string(spec)
+            except ValueError:
+                print(
+                    f'bash: trap: {spec}: invalid signal specification',
+                    file=sys.stderr,
+                )
+                self._env.last_exit = 1
+                continue
+
+            if handler_str == '-':
+                # Reset to default
+                self._env.traps.set(trap_type, None)
+            elif handler_str == '':
+                # Ignore signal (empty handler)
+                self._env.traps.set(
+                    trap_type, InProcessCallable(lambda: 0, name='trap:noop')
+                )
+            else:
+                # Handler can be bash code OR a function name - both work!
+                handler = self._create_trap_handler(handler_str)
+                self._env.traps.set(trap_type, handler)
+
+    def _create_trap_handler(self, code: str) -> ShellRunnable:
+        """Create a trap handler that executes bash code in a child interpreter.
+
+        Uses child_of() to create a child interpreter that shares:
+        - The shell environment (variables, exports, traps)
+        - Function definitions from the parent interpreter
+        - Shell options (copied)
+
+        Trap handlers are not functions, so func_name=None and line_offset=0.
+        """
+        parent = self  # Capture reference for closure
+
+        def execute_trap_code():
+            # Parse the trap code using tree-sitter
+            bash_language = Language(tsbash.language())
+            tree = Parser(bash_language).parse(bytes(code, 'utf-8'))
+
+            if tree.root_node.has_error:
+                print(f'bash: trap: syntax error in: {code}', file=sys.stderr)
+                return 1
+
+            # Create child interpreter - trap handlers aren't functions
+            child = BashInterpreter.child_of(parent, code)
+            child.execute(tree.root_node)
+            return child._env.last_exit
+
+        return InProcessCallable(execute_trap_code, name=f'trap:{code[:20]}')
+
     def visit_declaration_command(self, node: ts.Node) -> ShellRunnable:
         """Build declaration command runnable: export, declare, typeset, readonly, local"""
         keyword_node = node.children[0] if node.children else None
@@ -2329,11 +2516,10 @@ class BashInterpreter(BashCSTVisitor):
         def do_declare():
             # Handle 'local' - only valid inside functions
             if keyword == 'local':
-                if not self._call_stack:
+                if not self._is_in_function():
                     print('bash: local: can only be used in a function', file=sys.stderr)
                     return 1
 
-                current_frame = self._call_stack[-1]
                 for child in node.children:
                     if child.type == 'variable_assignment':
                         name_node = child.child_by_field_name('name')
@@ -2341,11 +2527,11 @@ class BashInterpreter(BashCSTVisitor):
                         if name_node:
                             name = _bash_to_str(self.evaluate(name_node))
                             value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
-                            current_frame.local_vars[name] = value
+                            self._local_vars[name] = value
                     elif child.type in ('word', 'variable_name') and child != keyword_node:
                         var_name = self._get_text(child)
-                        if var_name not in current_frame.local_vars:
-                            current_frame.local_vars[var_name] = ''
+                        if var_name not in self._local_vars:
+                            self._local_vars[var_name] = ''
                 return 0
 
             # Handle variable assignments in the command
@@ -2509,8 +2695,16 @@ class BashInterpreter(BashCSTVisitor):
         if body_node is None:
             raise BashScriptError(f'function {func_name} has no body')
 
+        # Store function body as (source_text, start_line) tuple
+        # This allows re-parsing with correct LINENO offsets
+        body_bytes = body_node.text
+        if body_bytes is None:
+            raise BashScriptError(f'function {func_name} body has no text')
+        body_text = body_bytes.decode('utf-8')
+        start_line = body_node.start_point[0]  # 0-indexed
+
         def do_define():
-            self._functions[func_name] = body_node
+            self._functions[func_name] = (body_text, start_line)
             return 0
 
         return InProcessCallable(do_define, name=f'function {func_name}')
@@ -2966,7 +3160,8 @@ def _wire_functions(
         target_ns = module.__dict__
 
     # Create callable wrapper for each function
-    for func_name, body_node in interpreter._functions.items():
+    for func_name, body_tuple in interpreter._functions.items():
+        body_source, start_line = body_tuple
         # Transform name to valid Python identifier
         py_name = func_name.replace('-', '_')  # my-func -> my_func
 
@@ -3002,17 +3197,18 @@ def _wire_functions(
             )
             # Still wire it - user may intentionally want to override
 
-        # Create a closure that captures the interpreter and body node
-        def make_wrapper(interp: BashInterpreter, name: str, body: ts.Node):
+        # Create a closure that captures the interpreter and body info
+        def make_wrapper(interp: BashInterpreter, name: str, body_src: str, start_ln: int):
             def wrapper(*args: str) -> int:
                 """Call bash function with arguments. Returns exit code."""
-                return interp._execute_function_body(name, [str(a) for a in args], body)
+                str_args = [str(a) for a in args]
+                return interp._execute_function_body(name, str_args, body_src, start_ln)
 
             wrapper.__name__ = name
             wrapper.__doc__ = f'Bash function: {name}'
             return wrapper
 
-        target_ns[py_name] = make_wrapper(interpreter, func_name, body_node)
+        target_ns[py_name] = make_wrapper(interpreter, func_name, body_source, start_line)
 
 
 def run_bash_code(
@@ -3048,6 +3244,9 @@ def run_bash_code(
         if e.message:
             print(f'bash: {e.message}', file=sys.stderr)
         env.last_exit = e.exit_code
+    finally:
+        # Fire RETURN trap at end of sourced script (matches bash source semantics)
+        env.traps.fire(TrapType.RETURN)
 
     # Wire defined functions into Python namespace
     if scope is not None and interpreter._functions:

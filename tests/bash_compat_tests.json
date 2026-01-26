@@ -1765,5 +1765,45 @@
     "name": "physical_disabled_by_default",
     "category": "shell_options",
     "code": "cd /tmp && pwd"
+  },
+  {
+    "name": "trap_exit_string",
+    "category": "trap",
+    "code": "trap 'echo cleanup' EXIT; echo hello"
+  },
+  {
+    "name": "trap_exit_function",
+    "category": "trap",
+    "code": "cleanup() { echo bye; }; trap cleanup EXIT; echo hello"
+  },
+  {
+    "name": "trap_err_fires_on_failure",
+    "category": "trap",
+    "code": "trap 'echo oops' ERR; false; echo after"
+  },
+  {
+    "name": "trap_return_in_function",
+    "category": "trap",
+    "code": "f() { trap 'echo ret' RETURN; echo in; }; f; echo out"
+  },
+  {
+    "name": "trap_reset_with_dash",
+    "category": "trap",
+    "code": "trap 'echo x' EXIT; trap - EXIT; echo done"
+  },
+  {
+    "name": "trap_print_empty",
+    "category": "trap",
+    "code": "trap -p"
+  },
+  {
+    "name": "trap_empty_handler_ignores",
+    "category": "trap",
+    "code": "trap '' EXIT; echo done"
+  },
+  {
+    "name": "lineno_in_function",
+    "category": "function",
+    "code": "# L1\nfoo() {\n  echo $LINENO\n}\nfoo"
   }
 ]
