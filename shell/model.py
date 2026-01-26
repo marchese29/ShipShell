@@ -186,7 +186,10 @@ def run(runnable: ShellRunnable, io: IOConfig | None = None) -> ShellResult:
 
     # Fire DEBUG before "atomic" commands (Command, InProcessCallable)
     # NOT for structural wrappers (Pipeline, Subshell, Negated, TracedRunnable)
-    is_atomic = isinstance(runnable, (Command, InProcessCallable))
+    # InProcessCallable can opt out via is_atomic=False (e.g., function definitions)
+    is_atomic = isinstance(runnable, Command) or (
+        isinstance(runnable, InProcessCallable) and runnable._is_atomic
+    )
     if is_atomic:
         env.current_runnable = runnable  # Set BEFORE DEBUG fires
         env.traps.fire(TrapType.DEBUG)
@@ -218,11 +221,16 @@ def run(runnable: ShellRunnable, io: IOConfig | None = None) -> ShellResult:
         env.current_runnable = None
 
         # Fire TRACE after atomic commands (regardless of exit code)
+        # Save/restore last_exit around trap execution (bash preserves $? across traps)
+        saved_exit = env.last_exit
         env.traps.fire(TrapType.TRACE)
+        env.last_exit = saved_exit
 
         # Fire ERR on non-zero exit
         if result.exit_code != 0:
+            saved_exit = env.last_exit
             env.traps.fire(TrapType.ERR)
+            env.last_exit = saved_exit
 
     return result
 
@@ -539,7 +547,13 @@ class InProcessCallable(ShellRunnable):
         prog('echo')('hello') | upper  # Auto-wrapped to InProcessCallable
     """
 
-    def __init__(self, func: Callable[[], Any], *, name: str | None = None):
+    def __init__(
+        self,
+        func: Callable[[], Any],
+        *,
+        name: str | None = None,
+        is_atomic: bool = True,
+    ):
         super().__init__()
         # Ban async callables - they need a fundamentally different execution model
         if inspect.iscoroutinefunction(func) or inspect.isasyncgenfunction(func):
@@ -549,6 +563,7 @@ class InProcessCallable(ShellRunnable):
             )
         self._func = func
         self._name = name  # Optional, for debugging/error messages
+        self._is_atomic = is_atomic  # Whether DEBUG/TRACE/ERR traps should fire
 
     @override
     def _exec(self, io: IOConfig | None = None) -> ShellResult:

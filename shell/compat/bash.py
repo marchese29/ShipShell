@@ -576,17 +576,47 @@ class BashInterpreter(BashCSTVisitor):
         # Update stack variables for the new context
         child._update_stack_vars()
 
+        # Save and clear traps that shouldn't be inherited (bash default behavior)
+        # functrace (-T): when OFF, DEBUG and RETURN traps don't fire in functions
+        # errtrace (-E): when OFF, ERR trap doesn't fire in functions
+        # Note: Even without functrace, a function can set its OWN RETURN trap
+        saved_debug = saved_return = saved_err = None
+        if not self._shell_options['functrace']:
+            saved_debug = self._env.traps.get(TrapType.DEBUG)
+            saved_return = self._env.traps.get(TrapType.RETURN)
+            if saved_debug:
+                self._env.traps.set(TrapType.DEBUG, None)
+            if saved_return:
+                self._env.traps.set(TrapType.RETURN, None)
+        if not self._shell_options['errtrace']:
+            saved_err = self._env.traps.get(TrapType.ERR)
+            if saved_err:
+                self._env.traps.set(TrapType.ERR, None)
+
         # Parse and execute
         bash_language = Language(tsbash.language())
         tree = Parser(bash_language).parse(bytes(body_source, 'utf-8'))
+
+        # With functrace, DEBUG fires when entering function body (before first command)
+        if self._shell_options['functrace']:
+            self._env.traps.fire(TrapType.DEBUG)
 
         try:
             child.execute(tree.root_node)
         except BashReturnException as e:
             self._env.last_exit = e.exit_code
         finally:
-            # Fire RETURN trap after function completes
+            # Fire RETURN trap BEFORE restoring outer traps
+            # This fires the function's own RETURN trap (if it set one)
             self._env.traps.fire(TrapType.RETURN)
+
+            # Restore outer traps (overwrites any function-local traps)
+            if saved_debug:
+                self._env.traps.set(TrapType.DEBUG, saved_debug)
+            if saved_return:
+                self._env.traps.set(TrapType.RETURN, saved_return)
+            if saved_err:
+                self._env.traps.set(TrapType.ERR, saved_err)
 
         return self._env.last_exit
 
@@ -779,7 +809,9 @@ class BashInterpreter(BashCSTVisitor):
                 self.execute(child)
             return self._env.last_exit
 
-        return InProcessCallable(run_children, name='compound')
+        # Generic children wrapper is structural, not a "simple command"
+        # DEBUG/ERR traps should fire for the actual commands inside, not this wrapper
+        return InProcessCallable(run_children, name='compound', is_atomic=False)
 
     def _get_text(self, node: ts.Node) -> str:
         return self._source[node.start_byte : node.end_byte]
@@ -2707,7 +2739,8 @@ class BashInterpreter(BashCSTVisitor):
             self._functions[func_name] = (body_text, start_line)
             return 0
 
-        return InProcessCallable(do_define, name=f'function {func_name}')
+        # Function definitions are not "simple commands" - DEBUG trap shouldn't fire
+        return InProcessCallable(do_define, name=f'function {func_name}', is_atomic=False)
 
     def _visit_elif_clause(self, node: ts.Node) -> bool:
         it = iter(node.children)
@@ -3029,7 +3062,8 @@ class BashInterpreter(BashCSTVisitor):
                         self.execute(child)
                 return self._env.last_exit
 
-            return InProcessCallable(do_brace_group, name='{ }')
+            # Compound statements are not "simple commands" - DEBUG trap shouldn't fire
+            return InProcessCallable(do_brace_group, name='{ }', is_atomic=False)
 
     def visit_unset_command(self, node: ts.Node) -> ShellRunnable:
         """Build unset command runnable to remove variables"""

@@ -1802,6 +1802,36 @@
     "code": "trap '' EXIT; echo done"
   },
   {
+    "name": "trap_err_not_inherited_by_default",
+    "category": "trap",
+    "code": "trap 'echo ERR' ERR; f() { false; }; f; echo done"
+  },
+  {
+    "name": "trap_err_inherited_with_errtrace",
+    "category": "trap",
+    "code": "set -E; trap 'echo ERR' ERR; f() { false; }; f; echo done"
+  },
+  {
+    "name": "trap_debug_not_inherited_by_default",
+    "category": "trap",
+    "code": "trap 'echo D' DEBUG; f() { echo in; }; f; echo done"
+  },
+  {
+    "name": "trap_debug_inherited_with_functrace",
+    "category": "trap",
+    "code": "set -T; trap 'echo D' DEBUG; f() { echo in; }; f; echo done"
+  },
+  {
+    "name": "trap_return_not_inherited_by_default",
+    "category": "trap",
+    "code": "trap 'echo R' RETURN; f() { echo in; }; f; echo done"
+  },
+  {
+    "name": "trap_return_inherited_with_functrace",
+    "category": "trap",
+    "code": "set -T; trap 'echo R' RETURN; f() { echo in; }; f; echo done"
+  },
+  {
     "name": "lineno_in_function",
     "category": "function",
     "code": "# L1\nfoo() {\n  echo $LINENO\n}\nfoo"
