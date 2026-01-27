@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Literal, Self, cast, override
+from typing import IO, Any, Literal, Self, cast, override
 
 from .environment import env, env_to_str
 from .trap import TrapType
@@ -457,6 +457,52 @@ class ShellRunnable(ABC):
     def with_stdin(self, source: FileLike) -> Self:
         self._io.with_stdin(source)
         return self
+
+    def stdin_content(self, content: str | bytes | IO[Any]) -> Pipeline:
+        """Pipe content to stdin.
+
+        Creates a pipeline where a writer callable feeds content to this command's stdin.
+
+        Args:
+            content: Content to pipe:
+                - str: string content
+                - bytes: binary content
+                - IO: file-like object to read from
+
+        Returns:
+            Pipeline that writes content then runs this command.
+
+        Example:
+            prog('cat')().stdin_content('hello')()
+            prog('wc')('-l').stdin_content(open('data.txt'))()
+        """
+        # String content
+        if isinstance(content, str):
+            text = content
+
+            def write_str() -> None:
+                print(text, end='')
+
+            return InProcessCallable(write_str) | self
+
+        # Bytes content
+        if isinstance(content, bytes):
+            data = content
+
+            def write_bytes() -> None:
+                sys.stdout.buffer.write(data)
+
+            return InProcessCallable(write_bytes) | self
+
+        # File-like object
+        def write_filelike() -> None:
+            data = content.read()
+            if isinstance(data, str):
+                print(data, end='')
+            else:
+                sys.stdout.buffer.write(data)
+
+        return InProcessCallable(write_filelike) | self
 
     def env(self, **env_overlay: Any) -> Self:
         self._env_overlay.update(env_overlay)

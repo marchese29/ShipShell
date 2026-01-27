@@ -4,6 +4,7 @@ Verifies that Python callables can participate in shell pipelines.
 """
 
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -374,3 +375,63 @@ def test_uncalled_program_chain():
     # ls without args: ls | cat | cat
     result = capture(prog('echo')('test') | prog('cat') | prog('cat'))
     assert result.read_stdout() == 'test'
+
+
+# =============================================================================
+# Stdin Content Tests
+# =============================================================================
+
+
+def test_stdin_content_string():
+    """stdin_content() pipes string content to command."""
+    result = capture(prog('cat')().stdin_content('hello world'))
+    assert result.read_stdout() == 'hello world'
+
+
+def test_stdin_content_multiline():
+    """stdin_content() handles multiline strings."""
+    result = capture(prog('wc')('-l').stdin_content('line1\nline2\nline3\n'))
+    assert result.read_stdout().strip() == '3'
+
+
+def test_stdin_content_bytes():
+    """stdin_content() pipes bytes content to command."""
+    result = capture(prog('cat')().stdin_content(b'binary data'))
+    assert result.read_stdout() == 'binary data'
+
+
+def test_stdin_content_filelike():
+    """stdin_content() reads from file-like object."""
+    from io import StringIO
+
+    content = StringIO('from stringio')
+    result = capture(prog('cat')().stdin_content(content))
+    assert result.read_stdout() == 'from stringio'
+
+
+def test_stdin_content_bytesio():
+    """stdin_content() reads from BytesIO."""
+    from io import BytesIO
+
+    content = BytesIO(b'from bytesio')
+    result = capture(prog('cat')().stdin_content(content))
+    assert result.read_stdout() == 'from bytesio'
+
+
+def test_stdin_content_with_pipeline():
+    """stdin_content() works in pipelines."""
+    result = capture(prog('grep')('hello').stdin_content('hello world\ngoodbye') | prog('cat')())
+    assert result.read_stdout() == 'hello world'
+
+
+def test_stdin_content_with_redirect():
+    """stdin_content() can be combined with output redirect."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        outpath = Path(f.name)
+    try:
+        (prog('cat')().stdin_content('test output') > outpath)()
+        assert outpath.read_text() == 'test output'
+    finally:
+        outpath.unlink()
