@@ -1835,5 +1835,26 @@
     "name": "lineno_in_function",
     "category": "function",
     "code": "# L1\nfoo() {\n  echo $LINENO\n}\nfoo"
+  },
+  {
+    "name": "input_basic",
+    "category": "process_substitution",
+    "code": "cat <(echo hello)"
+  },
+  {
+    "name": "input_multiple",
+    "category": "process_substitution",
+    "code": "diff <(echo a) <(echo b)",
+    "check_stdout": true
+  },
+  {
+    "name": "output_basic",
+    "category": "process_substitution",
+    "code": "echo hello | tee >(cat)"
+  },
+  {
+    "name": "with_variable",
+    "category": "process_substitution",
+    "code": "x=world; cat <(echo hello $x)"
   }
 ]

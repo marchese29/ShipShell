@@ -154,3 +154,50 @@ def test_callable_with_command_on_both_sides():
     result = capture(prog('echo')('test') | double | prog('wc')('-l'))
     # 'test' becomes 'test\ntest\n' which is 2 lines
     assert result.read_stdout().strip() == '2'
+
+
+# =============================================================================
+# Process Substitution Tests
+# =============================================================================
+
+
+def test_process_input_basic():
+    """ProcessInput provides a readable path to command output."""
+    with prog('echo')('hello').as_input() as inp:
+        result = capture(prog('cat')(inp.path))
+        assert result.read_stdout() == 'hello'
+
+
+def test_process_input_multiple():
+    """Multiple process inputs work together."""
+    with (
+        prog('echo')('a').as_input() as a,
+        prog('echo')('b').as_input() as b,
+    ):
+        result = capture(prog('diff')(a.path, b.path))
+        assert result.exit_code != 0  # diff exits non-zero when files differ
+
+
+def test_process_output_basic():
+    """ProcessOutput provides a writable path to command stdin."""
+    # cat with no args reads from stdin and writes to stdout
+    # We redirect echo's output to cat's stdin via the process substitution
+    with prog('cat')().as_output() as out:
+        # This writes "hello" to the cat process's stdin
+        result = capture(prog('echo')('hello') > out.path)
+        assert result.exit_code == 0
+
+
+def test_process_substitution_fd_property():
+    """fd property returns the raw file descriptor."""
+    with prog('echo')('test').as_input() as inp:
+        assert isinstance(inp.fd, int)
+        assert inp.fd > 2  # Not stdin/stdout/stderr
+
+
+def test_process_substitution_path_is_path_object():
+    """path property returns a Path object."""
+    from pathlib import Path
+    with prog('echo')('test').as_input() as inp:
+        assert isinstance(inp.path, Path)
+        assert str(inp.path).startswith('/dev/fd/')

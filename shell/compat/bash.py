@@ -16,7 +16,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import tree_sitter as ts
 import tree_sitter_bash as tsbash
@@ -28,6 +28,7 @@ from shell.model import (
     NoopRunnable,
     NotPipeline,
     Pipeline,
+    ProcessSubstitution,
     ShellEscapingException,
     ShellRunnable,
     Subshell,
@@ -445,6 +446,7 @@ class BashInterpreter(BashCSTVisitor):
 
         # Internal state (not inherited)
         self._temp_files: list[str] = []  # Temp files to clean up (e.g., heredocs)
+        self._process_subs: list[ProcessSubstitution] = []  # Active process substitutions
         self._resolve_vars = False  # When True, variable_name nodes are looked up
         self._errexit_suppressed = False  # Inside context where errexit shouldn't trigger
         self._cleaned_up = False  # Track cleanup state for __del__
@@ -790,11 +792,19 @@ class BashInterpreter(BashCSTVisitor):
         ):
             print(self._get_text(node), file=sys.stderr)
 
+        # Track process substitutions created during this command
+        subs_start = len(self._process_subs)
+
         runnable = self.visit(node)
 
         # Noexec (-n): Parse but don't execute (syntax check mode)
         if not self._shell_options['noexec']:
             runnable()
+
+            # Wait on process substitutions created during this command
+            for sub in self._process_subs[subs_start:]:
+                sub.wait()
+            self._process_subs = self._process_subs[:subs_start]
 
             # Don't check errexit for 'list' nodes - they contain && or || chains
             # which shouldn't trigger errexit.
@@ -1521,9 +1531,32 @@ class BashInterpreter(BashCSTVisitor):
             return 0
 
     def evaluate_process_substitution(self, node: ts.Node) -> BashValue:
-        # TODO: grep <(cmd -arg)
-        # This will probably need to be something that adds to an accrued state
-        raise NotImplementedError('process_substitution expression')
+        """Evaluate process substitution: <(cmd) or >(cmd).
+
+        Creates a ProcessSubstitution and returns the /dev/fd/N path.
+        The substitution is tracked and waited on after command execution.
+        """
+        # Detect direction from first child token
+        first_child = node.children[0]
+        is_input = self._get_text(first_child) == '<('
+
+        # Find the command node (skip the <( or >( and ) tokens)
+        command_node = next(
+            (c for c in node.children if c.is_named),
+            None,
+        )
+        if command_node is None:
+            return ''
+
+        # Create process substitution with appropriate mode
+        mode: Literal['r', 'w'] = 'r' if is_input else 'w'
+        sub = ProcessSubstitution(self.visit(command_node), mode)
+
+        # Track for cleanup after command execution
+        self._process_subs.append(sub)
+
+        # Return path as string for bash argument expansion
+        return str(sub.path)
 
     def evaluate_string(self, node: ts.Node) -> BashValue:
         """Double-quoted strings with variable/command expansion.

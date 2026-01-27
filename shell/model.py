@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Self, cast, override
+from typing import Any, Literal, Self, cast, override
 
 from .environment import env, env_to_str
 from .trap import TrapType
@@ -450,6 +450,30 @@ class ShellRunnable(ABC):
     def trace(self, display: str, prefix: str = '+ ') -> TracedRunnable:
         """Wrap with trace output (prints to stderr before execution)."""
         return TracedRunnable(self, display, prefix)
+
+    def as_input(self) -> ProcessInput:
+        """Use this command's stdout as an input file <(cmd).
+
+        Returns a context manager. Access .path or .fd inside the with block.
+        The child process starts immediately when entering the context.
+
+        Example:
+            with prog("ls")().as_input() as inp:
+                run(prog("cat")(inp.path))
+        """
+        return ProcessInput(self)
+
+    def as_output(self) -> ProcessOutput:
+        """Use this command's stdin as an output file >(cmd).
+
+        Returns a context manager. Access .path or .fd inside the with block.
+        The child process starts immediately when entering the context.
+
+        Example:
+            with prog("grep")("error").as_output() as out:
+                run(prog("echo")("test") > out.path)
+        """
+        return ProcessOutput(self)
 
 
 class NoopRunnable(ShellRunnable):
@@ -1041,6 +1065,199 @@ def capture(runnable: ShellRunnable) -> CapturedResult:
             exit_code = 1
 
         return CapturedResult(exit_code, stdout_r, stderr_r)
+
+
+class ProcessSubstitution:
+    """Exposes a runnable's I/O as a /dev/fd/N path.
+
+    Creates a pipe and forks a child process to run the command. The parent
+    receives a file descriptor that can be accessed via path or fd properties.
+
+    This is an internal class - users should use the ProcessInput/ProcessOutput
+    context managers via .as_input() and .as_output() on ShellRunnable.
+
+    Args:
+        runnable: The command to run behind the file descriptor.
+        mode: 'r' for input substitution <(cmd) - reading yields command's stdout
+              'w' for output substitution >(cmd) - writing feeds command's stdin
+    """
+
+    # macOS requires high FD numbers for /dev/fd/N to work reliably after fork+exec.
+    # Bash uses FDs starting at 63 for process substitution.
+    _next_fd = 63
+
+    def __init__(self, runnable: ShellRunnable, mode: Literal['r', 'w']):
+        self._mode = mode
+        self._pid: int
+        self._fd: int
+        self._waited = False
+
+        # Create pipe and fork immediately (eager execution)
+        pipe_r, pipe_w = os.pipe()
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        if (pid := os.fork()) == 0:
+            # Child process
+            env.traps.reset_for_child()
+            exit_code = 1
+
+            try:
+                if mode == 'r':
+                    # <(cmd): child writes to pipe, parent reads
+                    os.close(pipe_r)
+                    # Use _exec() directly - avoids double-fork for Commands
+                    # Command._exec() does execve() which replaces this process
+                    # Other runnables handle their own execution model
+                    result = runnable._exec(IOConfig(stdout=pipe_w))
+                    exit_code = result.exit_code
+                else:
+                    # >(cmd): child reads from pipe, parent writes
+                    os.close(pipe_w)
+                    result = runnable._exec(IOConfig(stdin=pipe_r))
+                    exit_code = result.exit_code
+            except SystemExit as e:
+                exit_code = e.code if isinstance(e.code, int) else 1
+            except Exception:
+                exit_code = 1
+
+            # Only reached if _exec() returned (not for Command which does execve)
+            os._exit(exit_code)
+        else:
+            # Parent process - dup to high FD for macOS /dev/fd compatibility
+            self._pid = pid
+            if mode == 'r':
+                os.close(pipe_w)
+                low_fd = pipe_r
+            else:
+                os.close(pipe_r)
+                low_fd = pipe_w
+
+            # Move to high FD (bash uses 63+) for reliable /dev/fd/N access
+            high_fd = ProcessSubstitution._next_fd
+            ProcessSubstitution._next_fd += 1
+            os.dup2(low_fd, high_fd)
+            os.close(low_fd)
+            self._fd = high_fd
+
+    @property
+    def fd(self) -> int:
+        """The raw file descriptor number."""
+        return self._fd
+
+    @property
+    def path(self) -> Path:
+        """The /dev/fd/N path as a Path object."""
+        return Path(f'/dev/fd/{self._fd}')
+
+    def wait(self) -> int:
+        """Wait for child process and close FD. Returns exit code."""
+        if self._waited:
+            return 0
+
+        # Close the FD first (signals EOF to child if mode='w')
+        try:
+            os.close(self._fd)
+        except OSError:
+            pass
+
+        # Wait for child
+        try:
+            _, status = os.waitpid(self._pid, 0)
+            if os.WIFEXITED(status):
+                exit_code = os.WEXITSTATUS(status)
+            elif os.WIFSIGNALED(status):
+                exit_code = 128 + os.WTERMSIG(status)
+            else:
+                exit_code = 1
+        except ChildProcessError:
+            exit_code = 0
+
+        self._waited = True
+        return exit_code
+
+    def __del__(self):
+        """Cleanup if wait() wasn't called."""
+        if not self._waited:
+            self.wait()
+
+
+class ProcessInput:
+    """Context manager for input process substitution <(cmd).
+
+    Runs a command and provides access to its stdout via a file path.
+    The path is only valid within the context manager block.
+
+    Usage:
+        with prog("echo")("hello").as_input() as inp:
+            run(prog("cat")(inp.path))
+    """
+
+    def __init__(self, runnable: ShellRunnable):
+        self._runnable = runnable
+        self._sub: ProcessSubstitution | None = None
+
+    def __enter__(self) -> Self:
+        self._sub = ProcessSubstitution(self._runnable, mode='r')
+        return self
+
+    def __exit__(self, exc_type: type | None, exc_val: Exception | None, exc_tb: Any) -> bool:
+        if self._sub:
+            self._sub.wait()
+        return False
+
+    @property
+    def path(self) -> Path:
+        """The /dev/fd/N path as a Path object."""
+        if self._sub is None:
+            raise RuntimeError('ProcessInput must be used as context manager')
+        return self._sub.path
+
+    @property
+    def fd(self) -> int:
+        """The raw file descriptor number."""
+        if self._sub is None:
+            raise RuntimeError('ProcessInput must be used as context manager')
+        return self._sub.fd
+
+
+class ProcessOutput:
+    """Context manager for output process substitution >(cmd).
+
+    Runs a command and provides access to its stdin via a file path.
+    The path is only valid within the context manager block.
+
+    Usage:
+        with prog("grep")("error").as_output() as out:
+            run(prog("echo")("test") > out.path)
+    """
+
+    def __init__(self, runnable: ShellRunnable):
+        self._runnable = runnable
+        self._sub: ProcessSubstitution | None = None
+
+    def __enter__(self) -> Self:
+        self._sub = ProcessSubstitution(self._runnable, mode='w')
+        return self
+
+    def __exit__(self, exc_type: type | None, exc_val: Exception | None, exc_tb: Any) -> bool:
+        if self._sub:
+            self._sub.wait()
+        return False
+
+    @property
+    def path(self) -> Path:
+        """The /dev/fd/N path as a Path object."""
+        if self._sub is None:
+            raise RuntimeError('ProcessOutput must be used as context manager')
+        return self._sub.path
+
+    @property
+    def fd(self) -> int:
+        """The raw file descriptor number."""
+        if self._sub is None:
+            raise RuntimeError('ProcessOutput must be used as context manager')
+        return self._sub.fd
 
 
 def pyshexec(file: str | Path, *args: Any) -> Subshell:

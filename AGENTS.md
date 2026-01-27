@@ -2,6 +2,12 @@
 
 ShipShell is a Python REPL with a custom bash compatibility layer. The name comes from **shell-python** → sh-p → "ship" → ShipShell. It uses tree-sitter-bash for parsing and provides shell-like functionality within Python.
 
+This is a **UV-managed project**. Always use `uv run` to execute Python code:
+```bash
+uv run python ...      # Run Python scripts
+uv run pytest ...      # Run tests
+```
+
 This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
 
 ## Quick Reference
