@@ -798,6 +798,9 @@ class Pipeline(ShellRunnable):
                 unwrapped.append(cast(NotPipeline, stage._inner))
             else:
                 unwrapped.append(stage)
+
+        # Flush before forking to avoid duplicated output
+        sys.stdout.flush()
         sys.stderr.flush()
 
         predecessors = unwrapped[:-1]
