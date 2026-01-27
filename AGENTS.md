@@ -39,6 +39,9 @@ uv sync                    # Sync lockfile with pyproject.toml
 # Run the shell
 uv run python main.py
 
+# See a demo of ShipShell's Python+shell integration
+uv run python demo.py
+
 # Testing
 uv run pytest tests/ -v                    # All tests
 uv run pytest tests/test_bash_compat.py -v # Integration tests vs real bash
