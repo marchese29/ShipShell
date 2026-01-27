@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import IO
 
 from .environment import env
-from .model import BUILTIN_REGISTRY
+from .model import BUILTIN_REGISTRY, prog
 
 __all__ = [
     'exec_in_scope',
@@ -75,16 +75,18 @@ def wire_module(module: str, target: str | None = None) -> None:
 
 def wire_path_programs(target: str | None = None) -> None:
     """
-    Auto-wire executable programs from PATH as callable Python functions.
+    Auto-wire executable programs from PATH as Program objects.
 
-    Scans all directories in env['PATH'] and creates lambda wrappers
+    Scans all directories in env['PATH'] and creates Program objects
     for each executable program with a valid Python identifier name (that
     is not a Python reserved word).
 
-    Each program is wired up as: {name} = lambda *args: prog('{name}')(*args)
+    Each program is wired up as: {name} = prog('{name}')
 
-    This makes system commands directly callable without needing to use prog()
-    explicitly each time.
+    Program objects support:
+    - Calling with args: ls('-la') returns a Command
+    - Direct use in operators: ls | grep('pattern') auto-calls with no args
+    - Conditional chaining: cmd + ls or cmd - ls
 
     Note: Built-in commands are skipped to preserve their ergonomic wrappers
     that are set up before user initialization scripts run.
@@ -98,6 +100,8 @@ def wire_path_programs(target: str | None = None) -> None:
         ls('-la')
         cat('file.txt')
         grep('pattern', 'file.txt')
+        # Or in pipelines without calling:
+        ls | grep('py') | wc('-l')
     """
     # Get PATH from environment
     path_list = env.get('PATH', [])
@@ -149,14 +153,22 @@ def wire_path_programs(target: str | None = None) -> None:
             # Skip directories we can't read
             continue
 
-    # Build Python code string with lambda definitions
-    # Skip built-ins to preserve their ergonomic wrappers
-    code_lines = []
-    for var_name, prog_name in sorted(executables.items()):
-        # Skip if this is a builtin command
-        if var_name not in BUILTIN_REGISTRY:
-            code_lines.append(f"{var_name} = lambda *args: prog('{prog_name}')(*args)")
+    # Get target namespace
+    import __main__  # noqa: PLC0415 - must be imported at call time
 
-    # Execute the generated code
-    if code_lines:
-        exec_in_scope('\n'.join(code_lines), scope=target)
+    if target is None:
+        namespace = __main__
+    else:
+        if hasattr(__main__, target):
+            namespace = getattr(__main__, target)
+            if not isinstance(namespace, types.ModuleType):
+                raise ValueError(f"'{target}' already exists in __main__ but is not a module")
+        else:
+            namespace = types.ModuleType(target)
+            setattr(__main__, target, namespace)
+
+    # Wire Program objects directly into namespace
+    # Skip built-ins to preserve their ergonomic wrappers
+    for var_name, prog_name in executables.items():
+        if var_name not in BUILTIN_REGISTRY:
+            setattr(namespace, var_name, prog(prog_name))
