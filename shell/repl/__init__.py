@@ -10,7 +10,7 @@ import traceback
 from collections.abc import Callable, Iterator
 
 from shell.environment import env
-from shell.model import ShellResult, ShellRunnable
+from shell.model import Program, ShellResult, ShellRunnable
 from shell.repl.default import prompt
 from shell.trap import TrapType
 
@@ -104,9 +104,11 @@ def _execute_code(code: str, globals_dict: dict) -> None:
         if _is_expression(code):
             result = eval(code, globals_dict)
 
-            # Auto-run ShellRunnable objects
+            # Auto-run ShellRunnable and Program objects
             if isinstance(result, ShellRunnable):
                 result()
+            elif isinstance(result, Program):
+                result()()  # Call with no args, then run
             elif result is not None and not isinstance(result, ShellResult):
                 print(repr(result))
         else:

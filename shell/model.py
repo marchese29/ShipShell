@@ -1123,6 +1123,72 @@ class Program:
         """Reverse conditional failure: my_func - cmd."""
         return other - self()
 
+    def __lt__(self, source: FileLike) -> Command | InProcessCallable:
+        """Stdin redirect: cat < 'file.txt' - auto-calls with no args."""
+        return self() < source
+
+    def __gt__(self, target: FileLike) -> Command | InProcessCallable:
+        """Stdout redirect: ls > 'file.txt' - auto-calls with no args."""
+        return self() > target
+
+    def __rshift__(self, target: FileLike) -> Command | InProcessCallable:
+        """Append redirect: ls >> 'file.txt' - auto-calls with no args."""
+        return self() >> target
+
+    # Methods delegated from ShellRunnable - enables autocomplete and clean stack traces
+
+    def with_stdin(self, source: FileLike) -> Command | InProcessCallable:
+        """Stdin redirect from file. Auto-calls with no args."""
+        return self().with_stdin(source)
+
+    def with_stdout(
+        self, target: FileLike, append: bool = False
+    ) -> Command | InProcessCallable:
+        """Stdout redirect to file. Auto-calls with no args."""
+        return self().with_stdout(target, append)
+
+    def with_stderr(
+        self, target: FileLike, append: bool = False
+    ) -> Command | InProcessCallable:
+        """Stderr redirect to file. Auto-calls with no args."""
+        return self().with_stderr(target, append)
+
+    def stdin_content(self, content: str | bytes | IO[Any]) -> Pipeline:
+        """Pipe content to stdin. Auto-calls with no args."""
+        return self().stdin_content(content)
+
+    def env(self, **env_overlay: Any) -> Command | InProcessCallable:
+        """Set environment variables. Auto-calls with no args."""
+        return self().env(**env_overlay)
+
+    def neg(self) -> Negated:
+        """Negate exit code. Auto-calls with no args."""
+        return self().neg()
+
+    def if_success(
+        self, other: ShellRunnable | Program | Callable[[], Any]
+    ) -> ConditionalChain:
+        """Execute other only if this succeeds. Auto-calls with no args."""
+        return self().if_success(other)
+
+    def if_fail(
+        self, other: ShellRunnable | Program | Callable[[], Any]
+    ) -> ConditionalChain:
+        """Execute other only if this fails. Auto-calls with no args."""
+        return self().if_fail(other)
+
+    def as_input(self) -> ProcessInput:
+        """Use stdout as input file <(cmd). Auto-calls with no args."""
+        return self().as_input()
+
+    def as_output(self) -> ProcessOutput:
+        """Use stdin as output file >(cmd). Auto-calls with no args."""
+        return self().as_output()
+
+    def trace(self, display: str, prefix: str = '+ ') -> TracedRunnable:
+        """Wrap with trace output. Auto-calls with no args."""
+        return self().trace(display, prefix)
+
 
 def cmd(prog: str | Path, *args: Any, **env_overlay: Any) -> Command | InProcessCallable:
     """Construct a command or builtin with the given name, args, and optional environment overlay"""

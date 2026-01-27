@@ -130,9 +130,15 @@ For explicit control without wiring, use `prog()`:
 prog('my-cmd')('--flag', 'arg')()      # Build any command
 run(prog('grep')('pattern', 'file'))   # Explicit run()
 
-# Programs with no args auto-call in pipelines/chains
+# Programs auto-invoke with no args for operators and methods
 prog('echo')('hello') | prog('cat')    # No need for prog('cat')()
 prog('true') + prog('echo')('done')    # No need for prog('true')()
+prog('cat') < 'input.txt'              # Redirects work too
+prog('cat').stdin_content('hello')()   # Methods delegate automatically
+
+# Pipe content directly to stdin
+prog('cat')().stdin_content('hello world')()
+prog('wc')('-l').stdin_content(open('data.txt'))()  # File-like objects too
 ```
 
 ### Bash Interpreter Pattern

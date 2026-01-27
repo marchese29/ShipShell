@@ -377,6 +377,63 @@ def test_uncalled_program_chain():
     assert result.read_stdout() == 'test'
 
 
+def test_uncalled_program_stdin_redirect():
+    """Uncalled Program with < operator auto-invokes."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        f.write('redirected input')
+        f.flush()
+        inpath = Path(f.name)
+    try:
+        result = capture(prog('cat') < inpath)
+        assert result.read_stdout() == 'redirected input'
+    finally:
+        inpath.unlink()
+
+
+def test_uncalled_program_stdout_redirect():
+    """Uncalled Program with > operator auto-invokes."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        outpath = Path(f.name)
+    try:
+        (prog('echo')('redirected output') | prog('cat') > outpath)()
+        assert outpath.read_text() == 'redirected output\n'
+    finally:
+        outpath.unlink()
+
+
+def test_uncalled_program_append_redirect():
+    """Uncalled Program with >> operator auto-invokes."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        f.write('first\n')
+        f.flush()
+        outpath = Path(f.name)
+    try:
+        (prog('echo')('second') | prog('cat') >> outpath)()
+        assert outpath.read_text() == 'first\nsecond\n'
+    finally:
+        outpath.unlink()
+
+
+def test_uncalled_program_method_delegation():
+    """Uncalled Program delegates method calls with auto-invoke."""
+    # prog('cat').stdin_content('hello') should work without ()
+    result = capture(prog('cat').stdin_content('hello via delegation'))
+    assert result.read_stdout() == 'hello via delegation'
+
+
+def test_uncalled_program_neg_method():
+    """Uncalled Program.neg() delegates with auto-invoke."""
+    # prog('true').neg() should auto-call true, then negate (exit 1)
+    result = capture(prog('true').neg())
+    assert result.exit_code == 1
+
+
 # =============================================================================
 # Stdin Content Tests
 # =============================================================================
