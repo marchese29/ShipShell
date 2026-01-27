@@ -4,8 +4,11 @@
 
 Tests are organized by type:
 
-- `test_bash_compat.py` - Integration tests comparing our bash interpreter against real bash
+- `test_bash_compat.py` - Integration tests comparing bash interpreter against real bash
 - `test_bash_pure.py` - Unit tests for pure functions (no side effects)
+- `test_callable_pipeline.py` - Python API tests (pipelines, callables, process substitution)
+- `test_trap.py` - Trap system tests (DEBUG, ERR, EXIT, signals)
+- `test_function_wiring.py` - Shell function wiring tests
 - `test_harness_smoke.py` - Smoke tests for the test harness itself
 
 ## Test Harness (`tests/bash/`)

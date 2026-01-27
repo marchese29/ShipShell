@@ -1,8 +1,10 @@
 # Bash Compatibility Layer
 
+This module provides bash syntax support for ShipShell. It's a **feature** of the REPL, not the core - the core is `shell/model.py` which provides the Pythonic shell abstractions that the bash interpreter builds upon.
+
 ## Architecture
 
-The bash interpreter uses tree-sitter-bash to parse bash code into a CST, then walks the tree to execute commands.
+The bash interpreter uses tree-sitter-bash to parse bash code into a CST, then walks the tree to build `ShellRunnable` objects from `shell/model.py`.
 
 ### Key Components
 
@@ -111,3 +113,20 @@ Exit codes are captured via `env.last_exit` after commands run:
 from shell.model import run
 result = some_runnable()  # run() sets env.last_exit automatically
 ```
+
+### Shell Options
+
+The interpreter tracks shell options in `self._shell_options`. Key options:
+
+| Option | Flag | Effect |
+|--------|------|--------|
+| `errexit` | `-e` | Exit on command failure |
+| `nounset` | `-u` | Error on unset variables |
+| `xtrace` | `-x` | Print commands before execution |
+| `pipefail` | | Pipeline fails if any stage fails |
+| `errtrace` | `-E` | ERR trap inherited by functions/subshells |
+| `functrace` | `-T` | DEBUG/RETURN traps inherited |
+
+### Process Substitution
+
+`<(cmd)` and `>(cmd)` are handled by `evaluate_process_substitution()`, which uses `ProcessSubstitution` from `shell/model.py`. Process subs are tracked in `self._process_subs` and cleaned up in `execute()`.

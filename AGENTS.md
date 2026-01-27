@@ -1,6 +1,8 @@
 # Agent Instructions
 
-ShipShell is a Python REPL with a custom bash compatibility layer. The name comes from **shell-python** → sh-p → "ship" → ShipShell. It uses tree-sitter-bash for parsing and provides shell-like functionality within Python.
+ShipShell is a **Python REPL with ergonomic shell bindings**. The name comes from **shell-python** → sh-p → "ship" → ShipShell.
+
+The core value is `shell/model.py` - Pythonic abstractions for shell operations (pipelines, subshells, process substitution, I/O redirection) that make the REPL powerful. Bash compatibility (`shell/compat/`) is a feature that lets you run bash syntax, but the primary interface is Python.
 
 This is a **UV-managed project**. Always use `uv run` to execute Python code:
 ```bash
@@ -53,6 +55,9 @@ uv run pyright shell/
 Test organization:
 - `tests/test_bash_compat.py` - Integration tests comparing against real bash
 - `tests/test_bash_pure.py` - Unit tests for pure functions
+- `tests/test_callable_pipeline.py` - Python API tests (pipelines, process substitution)
+- `tests/test_trap.py` - Trap system tests
+- `tests/test_function_wiring.py` - Shell function wiring tests
 - `tests/test_harness_smoke.py` - Harness smoke tests
 
 See `tests/AGENTS.md` for detailed testing patterns and the test harness API.
@@ -63,23 +68,132 @@ Component-specific patterns and debugging utilities:
 - `tests/AGENTS.md` - Test harness API and testing patterns
 - `shell/compat/AGENTS.md` - Bash interpreter debugging and visitor patterns
 
+**Keep documentation current**: After implementing features or discovering notable insights, consider if AGENTS.md files need updates. These files are the primary onboarding path for agents working on the codebase.
+
 ## Architecture
 
 ### Core Components
 
-- **`shell/model.py`** - Command execution abstraction (`ShellResult`, `IOConfig`, `InProcessCallable`)
-- **`shell/builtins.py`** - Shell builtins (cd, pwd, echo, test, source, etc.)
+- **`main.py`** - Entry point for the interactive REPL
+- **`shell/model.py`** - **The heart of ShipShell**: Pythonic shell abstractions (`ShellRunnable`, `Command`, `Pipeline`, `Subshell`, `ProcessSubstitution`, `capture()`, `prog()`)
 - **`shell/environment.py`** - Shell environment state (`ShellEnvironment` singleton)
-- **`shell/compat/bash.py`** - Bash interpreter using tree-sitter (2500+ lines)
+- **`shell/builtins.py`** - Shell builtins (cd, pwd, echo, test, source, trap, set, etc.)
+- **`shell/trap.py`** - Trap system for shell events and signals
 - **`shell/repl/`** - Interactive REPL using prompt_toolkit
+- **`shell/compat/bash.py`** - Bash syntax interpreter using tree-sitter (3300+ lines)
+
+### Python Shell API (`shell/model.py`)
+
+The primary interface - ergonomic Python for shell operations:
+
+```python
+from shell.model import prog, capture, sub
+from shell.wiring import wire_path_programs
+from pathlib import Path
+
+# Wire PATH programs into __main__ for maximum ergonomics
+wire_path_programs()  # Now ls, grep, cat, etc. are available
+
+# Clean, Pythonic shell pipelines
+ls('-la') | grep('hello') > Path.home() / 'my-file.txt'
+cat() < 'input.txt' | sort() | uniq()
+
+# Native Python functions work seamlessly in pipelines
+def upper():
+    for line in sys.stdin:
+        print(line.upper(), end='')
+
+def add_timestamp():
+    from datetime import datetime
+    for line in sys.stdin:
+        print(f'[{datetime.now()}] {line}', end='')
+
+# Mix shell commands and Python functions freely
+cat('server.log') | grep('ERROR') | upper | add_timestamp > 'errors.txt'
+
+# Capture output for further Python processing
+result = capture(ls('-la') | grep('.py'))
+for line in result.read_stdout().splitlines():
+    print(f'Found: {line}')
+
+# Subshells isolate environment changes
+sub(cd('/tmp') | ls())()  # cd doesn't affect parent
+
+# Process substitution
+with echo('hello').as_input() as inp:
+    cat(inp.path)()
+```
+
+For explicit control without wiring, use `prog()`:
+
+```python
+prog('my-cmd')('--flag', 'arg')()      # Build any command
+run(prog('grep')('pattern', 'file'))   # Explicit run()
+```
 
 ### Bash Interpreter Pattern
 
 The interpreter in `shell/compat/bash.py` uses a visitor pattern:
-- `visit_*` methods execute nodes with side effects (commands, assignments)
-- `evaluate_*` methods return values without side effects (expansions, expressions)
+- `visit_*` methods build `ShellRunnable` objects (deferred execution)
+- `evaluate_*` methods return `BashValue` (expansions, expressions)
+- `execute()` dispatches to `visit_*` and runs the returned runnable
 
 Pure functions (tested in `test_bash_pure.py`): `_bash_to_str()`, `_expand_braces()`, `_split_commas()`, etc.
+
+### Process Substitution (`shell/model.py`)
+
+Process substitution allows command output to be used as a file path:
+
+```python
+from shell.model import prog, run
+
+# Input substitution <(cmd) - read from command's stdout
+with prog('echo')('hello').as_input() as inp:
+    run(prog('cat')(inp.path))
+
+# Output substitution >(cmd) - write to command's stdin
+with prog('grep')('error').as_output() as out:
+    run(prog('echo')('error line') > out.path)
+
+# Multiple substitutions
+with (
+    prog('ls')('dir1').as_input() as a,
+    prog('ls')('dir2').as_input() as b,
+):
+    run(prog('diff')(a.path, b.path))
+```
+
+**Key details:**
+- Context-managed: `.path` and `.fd` only valid inside `with` block
+- Uses high FD numbers (63+) for macOS `/dev/fd/N` compatibility
+- Eager execution: child process starts on `__enter__`
+
+### Shell Options
+
+The interpreter supports bash shell options via `set -o` / `set +o`:
+
+| Option | Flag | Description |
+|--------|------|-------------|
+| `errexit` | `-e` | Exit on command failure |
+| `nounset` | `-u` | Error on unset variables |
+| `xtrace` | `-x` | Print commands before execution |
+| `pipefail` | | Pipeline fails if any stage fails |
+| `errtrace` | `-E` | ERR trap inherited by functions/subshells |
+| `functrace` | `-T` | DEBUG/RETURN traps inherited by functions |
+| `noclobber` | `-C` | Prevent `>` from overwriting files |
+| `noglob` | `-f` | Disable pathname expansion |
+| `allexport` | `-a` | Export all variables |
+| `braceexpand` | `-B` | Enable brace expansion (default on) |
+
+### Special Variables
+
+| Variable | Description |
+|----------|-------------|
+| `LINENO` | Current line number in script |
+| `FUNCNAME` | Array of function call stack names |
+| `BASH_LINENO` | Array of line numbers in call stack |
+| `BASH_SOURCE` | Array of source file names in call stack |
+| `BASH_SUBSHELL` | Subshell nesting depth (0 = main shell) |
 
 ### Trap System (`shell/trap.py`)
 
