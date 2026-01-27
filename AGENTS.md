@@ -55,7 +55,7 @@ uv run pyright shell/
 Test organization:
 - `tests/test_bash_compat.py` - Integration tests comparing against real bash
 - `tests/test_bash_pure.py` - Unit tests for pure functions
-- `tests/test_callable_pipeline.py` - Python API tests (pipelines, process substitution)
+- `tests/test_callable_pipeline.py` - Python API tests (pipelines, process substitution, conditional chaining)
 - `tests/test_trap.py` - Trap system tests
 - `tests/test_function_wiring.py` - Shell function wiring tests
 - `tests/test_harness_smoke.py` - Harness smoke tests
@@ -68,14 +68,14 @@ Component-specific patterns and debugging utilities:
 - `tests/AGENTS.md` - Test harness API and testing patterns
 - `shell/compat/AGENTS.md` - Bash interpreter debugging and visitor patterns
 
-**Keep documentation current**: After implementing features or discovering notable insights, consider if AGENTS.md files need updates. These files are the primary onboarding path for agents working on the codebase.
+**⚠️ Keep documentation current**: Before committing code changes, ALWAYS consider if AGENTS.md files need updates. New features, API changes, and architectural insights should be reflected here. These files are the primary onboarding path for agents - stale docs waste context and cause confusion.
 
 ## Architecture
 
 ### Core Components
 
 - **`main.py`** - Entry point for the interactive REPL
-- **`shell/model.py`** - **The heart of ShipShell**: Pythonic shell abstractions (`ShellRunnable`, `Command`, `Pipeline`, `Subshell`, `ProcessSubstitution`, `capture()`, `prog()`)
+- **`shell/model.py`** - **The heart of ShipShell**: Pythonic shell abstractions (`ShellRunnable`, `Command`, `Pipeline`, `Subshell`, `ProcessSubstitution`, `ConditionalChain`, `capture()`, `prog()`)
 - **`shell/environment.py`** - Shell environment state (`ShellEnvironment` singleton)
 - **`shell/builtins.py`** - Shell builtins (cd, pwd, echo, test, source, trap, set, etc.)
 - **`shell/trap.py`** - Trap system for shell events and signals
@@ -129,6 +129,10 @@ For explicit control without wiring, use `prog()`:
 ```python
 prog('my-cmd')('--flag', 'arg')()      # Build any command
 run(prog('grep')('pattern', 'file'))   # Explicit run()
+
+# Programs with no args auto-call in pipelines/chains
+prog('echo')('hello') | prog('cat')    # No need for prog('cat')()
+prog('true') + prog('echo')('done')    # No need for prog('true')()
 ```
 
 ### Bash Interpreter Pattern
@@ -167,6 +171,37 @@ with (
 - Context-managed: `.path` and `.fd` only valid inside `with` block
 - Uses high FD numbers (63+) for macOS `/dev/fd/N` compatibility
 - Eager execution: child process starts on `__enter__`
+
+### Conditional Chaining (`shell/model.py`)
+
+Short-circuit conditional execution, equivalent to bash's `&&` and `||`:
+
+```python
+from shell.model import prog, capture
+
+# if_success() - run second only if first succeeds (bash &&)
+prog('make')().if_success(prog('make')('install'))()
+
+# if_fail() - run second only if first fails (bash ||)
+prog('test')('-f', 'config.json').if_fail(prog('cp')('config.example.json', 'config.json'))()
+
+# Ergonomic operators: + for &&, - for ||
+prog('true')() + prog('echo')('succeeded')   # runs echo
+prog('false')() - prog('echo')('recovered')  # runs echo
+
+# Chain multiple conditions
+prog('build')() + prog('test')() + prog('deploy')() - notify_failure
+
+# Plain callables auto-wrap (like | operator)
+prog('true')() + lambda: print('done!')
+```
+
+**Key details:**
+- Returns `ConditionalChain`, a `ShellRunnable` (deferred execution)
+- `+` is alias for `if_success()`, `-` is alias for `if_fail()`
+- Uncalled `Program` objects auto-call with no args: `prog('true') + prog('echo')` works
+- Plain callables auto-wrapped in `InProcessCallable`
+- Exit code comes from last command that actually ran
 
 ### Shell Options
 
@@ -277,6 +312,7 @@ env.traps.set(TrapType.EXIT, handler)
 - Single quotes for strings
 - Ruff for linting (E, F, I, Q, UP, B, C4 rules)
 - Pyright for type checking
+- **No string forward references** - All modules use `from __future__ import annotations`, so type hints are lazily evaluated. Use `Program` not `'Program'`. Enforced by ruff's UP037.
 
 ## Landing the Plane (Session Completion)
 

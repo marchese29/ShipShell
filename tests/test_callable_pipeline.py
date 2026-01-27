@@ -201,3 +201,176 @@ def test_process_substitution_path_is_path_object():
     with prog('echo')('test').as_input() as inp:
         assert isinstance(inp.path, Path)
         assert str(inp.path).startswith('/dev/fd/')
+
+
+# =============================================================================
+# Conditional Chaining Tests
+# =============================================================================
+
+
+def test_if_success_runs_on_zero_exit():
+    """if_success runs second command when first succeeds."""
+    result = capture(prog('true')().if_success(prog('echo')('yes')))
+    assert result.read_stdout() == 'yes'
+    assert result.exit_code == 0
+
+
+def test_if_success_skips_on_nonzero_exit():
+    """if_success skips second command when first fails."""
+    result = capture(prog('false')().if_success(prog('echo')('yes')))
+    assert result.read_stdout() == ''
+    assert result.exit_code == 1
+
+
+def test_if_fail_runs_on_nonzero_exit():
+    """if_fail runs second command when first fails."""
+    result = capture(prog('false')().if_fail(prog('echo')('failed')))
+    assert result.read_stdout() == 'failed'
+    assert result.exit_code == 0
+
+
+def test_if_fail_skips_on_zero_exit():
+    """if_fail skips second command when first succeeds."""
+    result = capture(prog('true')().if_fail(prog('echo')('failed')))
+    assert result.read_stdout() == ''
+    assert result.exit_code == 0
+
+
+def test_conditional_chain_multiple():
+    """Multiple conditions can be chained."""
+    # true && echo a && echo b -> both echoes run, both write to stdout
+    result = capture(
+        prog('true')()
+        .if_success(prog('echo')('a'))
+        .if_success(prog('echo')('b'))
+    )
+    assert result.read_stdout() == 'a\nb'
+
+
+def test_conditional_accepts_callable():
+    """if_success/if_fail accept plain callables."""
+    def say_hello():
+        print('hello')
+
+    result = capture(prog('true')().if_success(say_hello))
+    assert result.read_stdout() == 'hello'
+
+
+def test_conditional_callable_return_false():
+    """Callable returning False has exit code 1."""
+    def fail():
+        return False
+
+    result = capture(prog('true')().if_success(fail))
+    assert result.exit_code == 1
+
+
+def test_if_success_with_pipeline():
+    """Conditional can contain a pipeline."""
+    result = capture(
+        prog('true')().if_success(prog('echo')('hello') | prog('cat')())
+    )
+    assert result.read_stdout() == 'hello'
+
+
+# =============================================================================
+# Operator Conditional Chaining Tests (+ for && and - for ||)
+# =============================================================================
+
+
+def test_plus_operator_success():
+    """+ operator runs second command when first succeeds."""
+    result = capture(prog('true')() + prog('echo')('yes'))
+    assert result.read_stdout() == 'yes'
+    assert result.exit_code == 0
+
+
+def test_plus_operator_failure():
+    """+ operator skips second command when first fails."""
+    result = capture(prog('false')() + prog('echo')('yes'))
+    assert result.read_stdout() == ''
+    assert result.exit_code == 1
+
+
+def test_minus_operator_failure():
+    """- operator runs second command when first fails."""
+    result = capture(prog('false')() - prog('echo')('recovered'))
+    assert result.read_stdout() == 'recovered'
+    assert result.exit_code == 0
+
+
+def test_minus_operator_success():
+    """- operator skips second command when first succeeds."""
+    result = capture(prog('true')() - prog('echo')('fallback'))
+    assert result.read_stdout() == ''
+    assert result.exit_code == 0
+
+
+def test_operator_chain_multiple():
+    """Operators can be chained: true + echo a + echo b."""
+    result = capture(prog('true')() + prog('echo')('a') + prog('echo')('b'))
+    assert result.read_stdout() == 'a\nb'
+
+
+def test_operator_mixed_chain():
+    """Mixed operators: false - echo fallback + echo next."""
+    result = capture(prog('false')() - prog('echo')('fallback') + prog('echo')('next'))
+    assert result.read_stdout() == 'fallback\nnext'
+
+
+def test_plus_with_callable():
+    """+ operator accepts plain callables."""
+    def greet():
+        print('hello')
+
+    result = capture(prog('true')() + greet)
+    assert result.read_stdout() == 'hello'
+
+
+def test_minus_with_callable():
+    """- operator accepts plain callables."""
+    def handle_error():
+        print('error handled')
+
+    result = capture(prog('false')() - handle_error)
+    assert result.read_stdout() == 'error handled'
+
+
+# =============================================================================
+# Uncalled Program Auto-Invoke Tests
+# =============================================================================
+
+
+def test_uncalled_program_in_pipeline_right():
+    """Uncalled Program on right side of pipe auto-invokes."""
+    # prog('cat') without () should auto-invoke
+    result = capture(prog('echo')('hello') | prog('cat'))
+    assert result.read_stdout() == 'hello'
+
+
+def test_uncalled_program_in_pipeline_left():
+    """Uncalled Program on left side of pipe auto-invokes."""
+    # prog('true') without () should auto-invoke
+    result = capture(prog('true') | prog('echo')('piped'))
+    assert result.read_stdout() == 'piped'
+
+
+def test_uncalled_program_in_conditional_plus():
+    """Uncalled Program with + operator auto-invokes."""
+    # prog('true') without () should auto-invoke
+    result = capture(prog('true') + prog('echo')('success'))
+    assert result.read_stdout() == 'success'
+
+
+def test_uncalled_program_in_conditional_minus():
+    """Uncalled Program with - operator auto-invokes."""
+    # prog('false') without () should auto-invoke
+    result = capture(prog('false') - prog('echo')('fallback'))
+    assert result.read_stdout() == 'fallback'
+
+
+def test_uncalled_program_chain():
+    """Multiple uncalled Programs can be chained."""
+    # ls without args: ls | cat | cat
+    result = capture(prog('echo')('test') | prog('cat') | prog('cat'))
+    assert result.read_stdout() == 'test'

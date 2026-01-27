@@ -394,14 +394,18 @@ class ShellRunnable(ABC):
     def __call__(self) -> ShellResult:
         return run(self)
 
-    def __or__(self, value: ShellRunnable | Callable[[], Any]) -> Pipeline:
+    def __or__(self, value: ShellRunnable | Program | Callable[[], Any]) -> Pipeline:
         """
         Allows for building pipeline like `cmd("arg") | cmd2("arg2")`
 
         Also supports plain callables: `cmd("arg") | my_function`
+        And uncalled Programs: `cmd("arg") | prog('cat')` auto-calls with no args
         """
+        # Auto-call uncalled Programs (e.g., prog('cat') without ())
+        if isinstance(value, Program):
+            value = value()
         # Auto-wrap plain callables
-        if callable(value) and not isinstance(value, ShellRunnable):
+        elif callable(value) and not isinstance(value, ShellRunnable):
             value = InProcessCallable(value)
 
         if isinstance(self, Pipeline):
@@ -413,12 +417,15 @@ class ShellRunnable(ABC):
         value = cast(NotPipeline, value)
         return Pipeline([self], value)
 
-    def __ror__(self, value: Callable[[], Any]) -> Pipeline:
+    def __ror__(self, value: Program | Callable[[], Any]) -> Pipeline:
         """
-        Handle callable | ShellRunnable (when callable is on the left).
+        Handle callable/Program | ShellRunnable (when on the left).
 
         Example: my_function | grep("pattern")
         """
+        # Auto-call uncalled Programs
+        if isinstance(value, Program):
+            return value() | self
         if callable(value) and not isinstance(value, ShellRunnable):
             left = InProcessCallable(value)
             return left | self
@@ -457,6 +464,80 @@ class ShellRunnable(ABC):
 
     def neg(self) -> Negated:
         return Negated(self)
+
+    def if_success(
+        self, other: ShellRunnable | Program | Callable[[], Any]
+    ) -> ConditionalChain:
+        """Execute other only if this command succeeds (exit code 0).
+
+        Equivalent to bash's && operator. Accepts ShellRunnable, Program, or callable.
+
+        Example:
+            prog('make')().if_success(prog('make')('install'))()
+            prog('test')().if_success(lambda: print('passed'))()
+            prog('true')().if_success(prog('echo'))  # auto-calls with no args
+        """
+        if isinstance(other, Program):
+            other = other()
+        elif callable(other) and not isinstance(other, ShellRunnable):
+            other = InProcessCallable(other)
+        return ConditionalChain(self, other, on_success=True)
+
+    def if_fail(
+        self, other: ShellRunnable | Program | Callable[[], Any]
+    ) -> ConditionalChain:
+        """Execute other only if this command fails (non-zero exit code).
+
+        Equivalent to bash's || operator. Accepts ShellRunnable, Program, or callable.
+
+        Example:
+            prog('test')().if_fail(echo('test failed'))()
+            prog('cmd')().if_fail(lambda: print('error'))()
+            prog('false')().if_fail(prog('echo'))  # auto-calls with no args
+        """
+        if isinstance(other, Program):
+            other = other()
+        elif callable(other) and not isinstance(other, ShellRunnable):
+            other = InProcessCallable(other)
+        return ConditionalChain(self, other, on_success=False)
+
+    def __add__(
+        self, other: ShellRunnable | Program | Callable[[], Any]
+    ) -> ConditionalChain:
+        """Execute other only if this command succeeds. Alias for if_success().
+
+        Example:
+            (prog('make')() + prog('make')('install'))()
+        """
+        return self.if_success(other)
+
+    def __radd__(self, other: Program | Callable[[], Any]) -> ConditionalChain:
+        """Handle callable/Program + ShellRunnable (left side)."""
+        if isinstance(other, Program):
+            return other() + self
+        if callable(other) and not isinstance(other, ShellRunnable):
+            left = InProcessCallable(other)
+            return left + self
+        return NotImplemented
+
+    def __sub__(
+        self, other: ShellRunnable | Program | Callable[[], Any]
+    ) -> ConditionalChain:
+        """Execute other only if this command fails. Alias for if_fail().
+
+        Example:
+            (prog('test')() - prog('echo')('failed'))()
+        """
+        return self.if_fail(other)
+
+    def __rsub__(self, other: Program | Callable[[], Any]) -> ConditionalChain:
+        """Handle callable/Program - ShellRunnable (left side)."""
+        if isinstance(other, Program):
+            return other() - self
+        if callable(other) and not isinstance(other, ShellRunnable):
+            left = InProcessCallable(other)
+            return left - self
+        return NotImplemented
 
     def trace(self, display: str, prefix: str = '+ ') -> TracedRunnable:
         """Wrap with trace output (prints to stderr before execution)."""
@@ -790,9 +871,12 @@ class Pipeline(ShellRunnable):
         return result
 
     @override
-    def __or__(self, value: ShellRunnable | Callable[[], Any]) -> Pipeline:
+    def __or__(self, value: ShellRunnable | Program | Callable[[], Any]) -> Pipeline:
+        # Auto-call uncalled Programs
+        if isinstance(value, Program):
+            value = value()
         # Auto-wrap plain callables
-        if callable(value) and not isinstance(value, ShellRunnable):
+        elif callable(value) and not isinstance(value, ShellRunnable):
             value = InProcessCallable(value)
 
         # Pipelines flatten into one another
@@ -878,6 +962,39 @@ class Negated(ShellRunnable):
         return ~result
 
 
+class ConditionalChain(ShellRunnable):
+    """Execute second command conditionally based on first command's exit code.
+
+    Used by if_success() and if_fail() methods for && and || chaining.
+
+    Args:
+        first: The command to run first.
+        second: The command to run conditionally.
+        on_success: If True, run second on success (&&). If False, run on failure (||).
+    """
+
+    def __init__(self, first: ShellRunnable, second: ShellRunnable, on_success: bool):
+        super().__init__()
+        self._first = first
+        self._second = second
+        self._on_success = on_success
+
+    @override
+    def _exec(self, io: IOConfig | None = None) -> ShellResult:
+        actual = self._io.merge_over(io)
+
+        # Run first command
+        result = run(self._first, actual)
+
+        # Check condition: run second if (success and on_success) or (fail and not on_success)
+        should_run_second = (result.exit_code == 0) == self._on_success
+
+        if should_run_second:
+            return run(self._second, actual)
+        else:
+            return result
+
+
 class TracedRunnable(ShellRunnable):
     """Wrapper that prints trace output before executing.
 
@@ -903,10 +1020,16 @@ class TracedRunnable(ShellRunnable):
         return run(self._inner, actual)
 
 
-NotPipeline = Command | InProcessCallable | Subshell | Negated | TracedRunnable
+NotPipeline = Command | InProcessCallable | Subshell | Negated | ConditionalChain | TracedRunnable
 
 
 class Program:
+    """A program builder that can be called with arguments to create a Command.
+
+    When used directly in operators without being called, auto-invokes with no args.
+    This allows ergonomic usage like: ls | grep('hello')
+    """
+
     def __init__(self, name: str):
         self._cmd = name
 
@@ -926,6 +1049,33 @@ class Program:
         if len(env_overlay) > 0:
             command.env(**env_overlay)
         return command
+
+    # Operator support: auto-call with no args when used in operators
+    # Enables: ls | grep('hello'), ls + echo('ok'), etc.
+
+    def __or__(self, other: Any) -> Pipeline:
+        """Pipe: ls | grep('hello') - auto-calls ls with no args."""
+        return self() | other
+
+    def __ror__(self, other: Any) -> Pipeline:
+        """Reverse pipe: my_func | ls - auto-calls ls with no args."""
+        return other | self()
+
+    def __add__(self, other: Any) -> ConditionalChain:
+        """Conditional success: ls + echo('ok') - auto-calls ls with no args."""
+        return self() + other
+
+    def __radd__(self, other: Any) -> ConditionalChain:
+        """Reverse conditional success: my_func + ls."""
+        return other + self()
+
+    def __sub__(self, other: Any) -> ConditionalChain:
+        """Conditional failure: cmd - fallback."""
+        return self() - other
+
+    def __rsub__(self, other: Any) -> ConditionalChain:
+        """Reverse conditional failure: my_func - cmd."""
+        return other - self()
 
 
 def cmd(prog: str | Path, *args: Any, **env_overlay: Any) -> Command | InProcessCallable:
