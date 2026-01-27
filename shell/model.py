@@ -120,6 +120,23 @@ def _resolve_fd(
     return os.open(path, flags, 0o666)
 
 
+def _wait_child(pid: int) -> int:
+    """Wait for child process and return its exit code.
+
+    Handles normal exit, signal termination, unexpected status, and
+    ChildProcessError (returns 0 if child was already reaped).
+    """
+    try:
+        _, status = os.waitpid(pid, 0)
+        if os.WIFEXITED(status):
+            return os.WEXITSTATUS(status)
+        elif os.WIFSIGNALED(status):
+            return 128 + os.WTERMSIG(status)
+        return 1
+    except ChildProcessError:
+        return 0
+
+
 # Registry of builtin commands - populated by @builtin_command decorator in builtins.py
 BUILTIN_REGISTRY: dict[str, Callable[..., InProcessCallable]] = {}
 
@@ -202,13 +219,7 @@ def run(runnable: ShellRunnable, io: IOConfig | None = None) -> ShellResult:
             os._exit(127)  # Should never reach here
         else:
             # Parent - wait for child
-            _, status = os.waitpid(pid, 0)
-            if os.WIFEXITED(status):
-                result = ShellResult(os.WEXITSTATUS(status))
-            elif os.WIFSIGNALED(status):
-                result = ShellResult(128 + os.WTERMSIG(status))
-            else:
-                raise RuntimeError('Unexpected process status')
+            result = ShellResult(_wait_child(pid))
     else:
         # Everything else handles its own execution model
         result = runnable._exec(io)
@@ -767,15 +778,7 @@ class Pipeline(ShellRunnable):
         os.close(current_pipe_read)
 
         # Wait for all children and collect exit codes
-        exit_codes = []
-        for pid in child_pids:
-            _, status = os.waitpid(pid, 0)
-            if os.WIFEXITED(status):
-                exit_codes.append(os.WEXITSTATUS(status))
-            elif os.WIFSIGNALED(status):
-                exit_codes.append(128 + os.WTERMSIG(status))
-            else:
-                exit_codes.append(1)
+        exit_codes = [_wait_child(pid) for pid in child_pids]
 
         # If pipefail, use first non-zero exit code from pipeline stages
         if self.pipefail:
@@ -857,13 +860,7 @@ class Subshell(ShellRunnable):
             os._exit(exit_code)
         else:
             # Parent process
-            _, status = os.waitpid(pid, 0)
-            if os.WIFEXITED(status):
-                return ShellResult(os.WEXITSTATUS(status))
-            elif os.WIFSIGNALED(status):
-                return ShellResult(128 + os.WTERMSIG(status))
-            else:
-                raise RuntimeError('Unexpected process status')
+            return ShellResult(_wait_child(pid))
 
 
 class Negated(ShellRunnable):
@@ -1055,16 +1052,7 @@ def capture(runnable: ShellRunnable) -> CapturedResult:
         os.close(stdout_w)
         os.close(stderr_w)
 
-        # Wait for child
-        _, status = os.waitpid(pid, 0)
-        if os.WIFEXITED(status):
-            exit_code = os.WEXITSTATUS(status)
-        elif os.WIFSIGNALED(status):
-            exit_code = 128 + os.WTERMSIG(status)
-        else:
-            exit_code = 1
-
-        return CapturedResult(exit_code, stdout_r, stderr_r)
+        return CapturedResult(_wait_child(pid), stdout_r, stderr_r)
 
 
 class ProcessSubstitution:
@@ -1161,18 +1149,7 @@ class ProcessSubstitution:
         except OSError:
             pass
 
-        # Wait for child
-        try:
-            _, status = os.waitpid(self._pid, 0)
-            if os.WIFEXITED(status):
-                exit_code = os.WEXITSTATUS(status)
-            elif os.WIFSIGNALED(status):
-                exit_code = 128 + os.WTERMSIG(status)
-            else:
-                exit_code = 1
-        except ChildProcessError:
-            exit_code = 0
-
+        exit_code = _wait_child(self._pid)
         self._waited = True
         return exit_code
 
@@ -1182,7 +1159,43 @@ class ProcessSubstitution:
             self.wait()
 
 
-class ProcessInput:
+class _ProcessSubContext:
+    """Base context manager for process substitution.
+
+    Internal class - use ProcessInput or ProcessOutput instead.
+    """
+
+    _mode: Literal['r', 'w']  # Set by subclasses
+
+    def __init__(self, runnable: ShellRunnable):
+        self._runnable = runnable
+        self._sub: ProcessSubstitution | None = None
+
+    def __enter__(self) -> Self:
+        self._sub = ProcessSubstitution(self._runnable, mode=self._mode)
+        return self
+
+    def __exit__(self, exc_type: type | None, exc_val: Exception | None, exc_tb: Any) -> bool:
+        if self._sub:
+            self._sub.wait()
+        return False
+
+    @property
+    def path(self) -> Path:
+        """The /dev/fd/N path as a Path object."""
+        if self._sub is None:
+            raise RuntimeError(f'{type(self).__name__} must be used as context manager')
+        return self._sub.path
+
+    @property
+    def fd(self) -> int:
+        """The raw file descriptor number."""
+        if self._sub is None:
+            raise RuntimeError(f'{type(self).__name__} must be used as context manager')
+        return self._sub.fd
+
+
+class ProcessInput(_ProcessSubContext):
     """Context manager for input process substitution <(cmd).
 
     Runs a command and provides access to its stdout via a file path.
@@ -1193,35 +1206,10 @@ class ProcessInput:
             run(prog("cat")(inp.path))
     """
 
-    def __init__(self, runnable: ShellRunnable):
-        self._runnable = runnable
-        self._sub: ProcessSubstitution | None = None
-
-    def __enter__(self) -> Self:
-        self._sub = ProcessSubstitution(self._runnable, mode='r')
-        return self
-
-    def __exit__(self, exc_type: type | None, exc_val: Exception | None, exc_tb: Any) -> bool:
-        if self._sub:
-            self._sub.wait()
-        return False
-
-    @property
-    def path(self) -> Path:
-        """The /dev/fd/N path as a Path object."""
-        if self._sub is None:
-            raise RuntimeError('ProcessInput must be used as context manager')
-        return self._sub.path
-
-    @property
-    def fd(self) -> int:
-        """The raw file descriptor number."""
-        if self._sub is None:
-            raise RuntimeError('ProcessInput must be used as context manager')
-        return self._sub.fd
+    _mode: Literal['r', 'w'] = 'r'
 
 
-class ProcessOutput:
+class ProcessOutput(_ProcessSubContext):
     """Context manager for output process substitution >(cmd).
 
     Runs a command and provides access to its stdin via a file path.
@@ -1232,32 +1220,7 @@ class ProcessOutput:
             run(prog("echo")("test") > out.path)
     """
 
-    def __init__(self, runnable: ShellRunnable):
-        self._runnable = runnable
-        self._sub: ProcessSubstitution | None = None
-
-    def __enter__(self) -> Self:
-        self._sub = ProcessSubstitution(self._runnable, mode='w')
-        return self
-
-    def __exit__(self, exc_type: type | None, exc_val: Exception | None, exc_tb: Any) -> bool:
-        if self._sub:
-            self._sub.wait()
-        return False
-
-    @property
-    def path(self) -> Path:
-        """The /dev/fd/N path as a Path object."""
-        if self._sub is None:
-            raise RuntimeError('ProcessOutput must be used as context manager')
-        return self._sub.path
-
-    @property
-    def fd(self) -> int:
-        """The raw file descriptor number."""
-        if self._sub is None:
-            raise RuntimeError('ProcessOutput must be used as context manager')
-        return self._sub.fd
+    _mode: Literal['r', 'w'] = 'w'
 
 
 def pyshexec(file: str | Path, *args: Any) -> Subshell:
