@@ -1927,5 +1927,33 @@
     "name": "assoc_overwrite",
     "category": "assoc_array",
     "code": "declare -A m; m[k]=old; m[k]=new; echo ${m[k]}"
+  },
+  {
+    "name": "readonly_declare",
+    "category": "readonly",
+    "code": "declare -r x=5; echo $x"
+  },
+  {
+    "name": "readonly_keyword",
+    "category": "readonly",
+    "code": "readonly y=10; echo $y"
+  },
+  {
+    "name": "readonly_modify_stops_script",
+    "category": "readonly",
+    "code": "readonly x=5; x=10; echo SHOULD_NOT_SEE",
+    "check_stdout": false,
+    "check_stderr": false
+  },
+  {
+    "name": "readonly_unset_fails",
+    "category": "readonly",
+    "code": "readonly x=5; unset x; echo $x",
+    "check_stderr": false
+  },
+  {
+    "name": "readonly_after_set",
+    "category": "readonly",
+    "code": "x=first; readonly x; echo $x"
   }
 ]

@@ -461,6 +461,11 @@ class BashInterpreter(BashCSTVisitor):
         self._call_lineno = call_lineno
         self._local_vars: dict[str, BashValue] = {}
 
+        # Variable attributes (inherited from parent)
+        self._readonly_vars: set[str] = set()
+        if parent is not None:
+            self._readonly_vars = parent._readonly_vars  # Share with parent
+
         # Internal state (not inherited)
         self._temp_files: list[str] = []  # Temp files to clean up (e.g., heredocs)
         self._process_subs: list[ProcessSubstitution] = []  # Active process substitutions
@@ -776,6 +781,10 @@ class BashInterpreter(BashCSTVisitor):
         If variable is declared local in this interpreter or parent chain, set it there.
         Otherwise, set in environment (global).
         """
+        # Check readonly
+        if name in self._readonly_vars:
+            raise BashScriptError(f'{name}: readonly variable', 1)
+
         # Check this interpreter's local scope
         if name in self._local_vars:
             self._local_vars[name] = value
@@ -2630,15 +2639,17 @@ class BashInterpreter(BashCSTVisitor):
         keyword = self._get_text(keyword_node)
 
         def do_declare():
-            # Check for -A flag (associative array)
+            # Check for flags: -A (associative array), -r (readonly)
             is_assoc = False
+            is_readonly = keyword == 'readonly'  # readonly command implies -r
             for child in node.children:
                 if child == keyword_node:
                     continue
                 text = self._get_text(child)
                 if text == '-A':
                     is_assoc = True
-                    break
+                elif text == '-r':
+                    is_readonly = True
 
             # Handle 'export -f' for function export
             if keyword == 'export':
@@ -2718,20 +2729,23 @@ class BashInterpreter(BashCSTVisitor):
 
                     if keyword == 'export':
                         self._env.export(name)
+                    if is_readonly:
+                        self._readonly_vars.add(name)
                 elif child.type in ('word', 'string', 'raw_string', 'variable_name'):
                     text = self._get_text(child)
-                    # Skip flags like -A
+                    # Skip flags like -A, -r
                     if text.startswith('-'):
                         continue
+                    var_name = _bash_to_str(text)
                     if keyword == 'export':
-                        var_name = _bash_to_str(text)
                         if var_name in self._env:
                             self._env.export(var_name)
                     elif is_assoc:
                         # declare -A varname (without assignment) - init as empty dict
-                        var_name = _bash_to_str(text)
                         if var_name not in self._env:
                             self._env[var_name] = {}
+                    if is_readonly:
+                        self._readonly_vars.add(var_name)
             return 0
 
         runnable: ShellRunnable = InProcessCallable(do_declare, name=keyword)
@@ -3211,6 +3225,10 @@ class BashInterpreter(BashCSTVisitor):
             for child in node.children:
                 if child.type in ('word', 'variable_name'):
                     var_name = self._get_text(child)
+                    if var_name in self._readonly_vars:
+                        msg = f'bash: unset: {var_name}: cannot unset: readonly variable'
+                        print(msg, file=sys.stderr)
+                        return 1
                     if var_name in self._env:
                         del self._env[var_name]
             return 0
