@@ -242,8 +242,17 @@ def _expand_braces(string: str) -> list[str]:
                 else:
                     # Not a range:
                     # Get options by separating on commas at the current depth
+                    comma_split = _split_commas(content)
+
+                    # Brace expansion only happens with comma OR range
+                    # If no comma (0 or 1 items), treat braces as literal: {} -> {}, {a} -> {a}
+                    if len(comma_split) <= 1:
+                        result = [r + '{' + content + '}' for r in result]
+                        i = j
+                        continue
+
                     expanded_options = []
-                    for option in _split_commas(content):
+                    for option in comma_split:
                         # Flatten if there are multiple options
                         expanded_options.extend(_expand_braces(option))
 
@@ -2579,6 +2588,34 @@ class BashInterpreter(BashCSTVisitor):
         keyword = self._get_text(keyword_node)
 
         def do_declare():
+            # Handle 'export -f' for function export
+            if keyword == 'export':
+                export_functions = False
+                func_names = []
+                for child in node.children:
+                    if child == keyword_node:
+                        continue
+                    text = self._get_text(child)
+                    if text == '-f':
+                        export_functions = True
+                    elif export_functions and child.type in ('word', 'variable_name'):
+                        func_names.append(text)
+
+                if export_functions:
+                    for func_name in func_names:
+                        if func_name not in self._functions:
+                            print(
+                                f'bash: export: {func_name}: not a function',
+                                file=sys.stderr,
+                            )
+                            return 1
+                        body_text, _ = self._functions[func_name]
+                        env_var_name = f'BASH_FUNC_{func_name}%%'
+                        env_var_value = f'() {body_text}'
+                        self._env[env_var_name] = env_var_value
+                        self._env.export(env_var_name)
+                    return 0
+
             # Handle 'local' - only valid inside functions
             if keyword == 'local':
                 if not self._is_in_function():

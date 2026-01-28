@@ -194,8 +194,10 @@ class TestExpandBraces:
         assert _expand_braces('') == []
 
     def test_single_item_no_expansion(self):
-        # Single item in braces doesn't expand
-        assert _expand_braces('{a}') == ['a']
+        # Single item (no comma) in braces doesn't expand - braces are literal
+        assert _expand_braces('{a}') == ['{a}']
+        # Empty braces are also literal (important for xargs -I{}, find -exec {})
+        assert _expand_braces('{}') == ['{}']
 
     def test_escaped_braces(self):
         assert _expand_braces('\\{a,b\\}') == ['{a,b}']

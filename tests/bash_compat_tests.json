@@ -1856,5 +1856,46 @@
     "name": "with_variable",
     "category": "process_substitution",
     "code": "x=world; cat <(echo hello $x)"
+  },
+  {
+    "name": "basic",
+    "category": "export_function",
+    "code": "greet() { echo \"Hello: $1\"; }; export -f greet; /bin/bash -c 'greet world'"
+  },
+  {
+    "name": "nonexistent_function",
+    "category": "export_function",
+    "code": "export -f nonexistent; echo done",
+    "check_stderr": false
+  },
+  {
+    "name": "multiple_functions",
+    "category": "export_function",
+    "code": "foo() { echo foo; }; bar() { echo bar; }; export -f foo bar; /bin/bash -c 'foo; bar'"
+  },
+  {
+    "name": "function_with_args",
+    "category": "export_function",
+    "code": "add() { echo $(($1 + $2)); }; export -f add; /bin/bash -c 'add 2 3'"
+  },
+  {
+    "name": "xargs_with_exported_function",
+    "category": "export_function",
+    "code": "greet() { echo \"hi $1\"; }; export -f greet; echo -e 'alice\\nbob' | xargs -I{} bash -c 'greet {}'"
+  },
+  {
+    "name": "empty_braces_literal",
+    "category": "brace_expansion",
+    "code": "echo {}"
+  },
+  {
+    "name": "single_item_literal",
+    "category": "brace_expansion",
+    "code": "echo {a}"
+  },
+  {
+    "name": "xargs_placeholder",
+    "category": "brace_expansion",
+    "code": "echo hello | xargs -I{} echo got: {}"
   }
 ]
