@@ -2051,5 +2051,45 @@
     "name": "case_with_empty_value",
     "category": "declare_case",
     "code": "declare -l x=; echo \"[$x]\""
+  },
+  {
+    "name": "declare_integer_arithmetic",
+    "category": "declare_int",
+    "code": "declare -i x=5+3; echo $x"
+  },
+  {
+    "name": "declare_integer_multiply",
+    "category": "declare_int",
+    "code": "declare -i x=10*2; echo $x"
+  },
+  {
+    "name": "integer_subsequent_assign",
+    "category": "declare_int",
+    "code": "declare -i x; x=3*4; echo $x"
+  },
+  {
+    "name": "integer_non_numeric",
+    "category": "declare_int",
+    "code": "declare -i x=hello; echo $x"
+  },
+  {
+    "name": "integer_with_spaces",
+    "category": "declare_int",
+    "code": "declare -i x=\"3 + 4\"; echo $x"
+  },
+  {
+    "name": "integer_complex_expr",
+    "category": "declare_int",
+    "code": "declare -i x=\"5 * (2 + 3)\"; echo $x"
+  },
+  {
+    "name": "integer_hex",
+    "category": "declare_int",
+    "code": "declare -i x=0xFF; echo $x"
+  },
+  {
+    "name": "integer_var_reference",
+    "category": "declare_int",
+    "code": "FOO=10; declare -i x=FOO+1; echo $x"
   }
 ]

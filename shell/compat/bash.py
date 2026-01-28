@@ -105,7 +105,8 @@ def _bash_to_int(value: BashValue | None) -> int:
             return val
         case str() as val:
             try:
-                return int(val)
+                # Use base=0 to auto-detect hex (0x), octal (0o/0), binary (0b)
+                return int(val, 0)
             except Exception:
                 return 0
         case list() | dict():
@@ -466,11 +467,13 @@ class BashInterpreter(BashCSTVisitor):
         self._assoc_vars: set[str] = set()  # Variables declared with -A (associative arrays)
         self._lowercase_vars: set[str] = set()  # Variables declared with -l (lowercase)
         self._uppercase_vars: set[str] = set()  # Variables declared with -u (uppercase)
+        self._integer_vars: set[str] = set()  # Variables declared with -i (integer)
         if parent is not None:
             self._readonly_vars = parent._readonly_vars  # Share with parent
             self._assoc_vars = parent._assoc_vars  # Share with parent
             self._lowercase_vars = parent._lowercase_vars  # Share with parent
             self._uppercase_vars = parent._uppercase_vars  # Share with parent
+            self._integer_vars = parent._integer_vars  # Share with parent
 
         # Internal state (not inherited)
         self._temp_files: list[str] = []  # Temp files to clean up (e.g., heredocs)
@@ -572,6 +575,44 @@ class BashInterpreter(BashCSTVisitor):
                     self._source = old_source
                     self._in_string_eval = False
         return s
+
+    def _evaluate_as_arithmetic(self, value_str: str) -> int:
+        """Evaluate a string as an arithmetic expression (for declare -i).
+
+        Returns 0 for empty strings or non-numeric values (bash behavior).
+        """
+        if not value_str:
+            return 0
+
+        # Wrap in $(( )) and parse to get arithmetic evaluation
+        # Parses as: program > command > command_name > arithmetic_expansion
+        code = f'$(({value_str}))'
+        bash_language = Language(tsbash.language())
+        tree = Parser(bash_language).parse(bytes(code, 'utf-8'))
+
+        # Navigate to the arithmetic_expansion node: program > command > command_name > arith
+        def find_arithmetic_expansion(node: ts.Node) -> ts.Node | None:
+            if node.type == 'arithmetic_expansion':
+                return node
+            for child in node.children:
+                result = find_arithmetic_expansion(child)
+                if result:
+                    return result
+            return None
+
+        arith_node = find_arithmetic_expansion(tree.root_node)
+        if arith_node is None:
+            return 0
+
+        # Evaluate using existing arithmetic expansion handler
+        old_source = self._source
+        self._source = code
+        try:
+            return _bash_to_int(self.evaluate_arithmetic_expansion(arith_node))
+        except (ValueError, TypeError):
+            return 0
+        finally:
+            self._source = old_source
 
     def _execute_function_body(
         self,
@@ -790,6 +831,10 @@ class BashInterpreter(BashCSTVisitor):
         # Check readonly
         if name in self._readonly_vars:
             raise BashScriptError(f'{name}: readonly variable', 1)
+
+        # Apply integer evaluation for -i declared variables
+        if name in self._integer_vars and isinstance(value, str):
+            value = str(self._evaluate_as_arithmetic(value))
 
         # Apply case transformation for -l/-u declared variables (only for strings)
         if isinstance(value, str):
@@ -1777,6 +1822,10 @@ class BashInterpreter(BashCSTVisitor):
         """
         var_name = self._get_text(node)
         if self._resolve_vars:
+            # Check if this looks like a numeric literal (hex, octal, binary)
+            # Convert to int directly in arithmetic context
+            if var_name.startswith(('0x', '0X', '0o', '0O', '0b', '0B')):
+                return _bash_to_int(var_name)
             # Use _get_variable for proper scoping (local vars, then env)
             value = self._get_variable(var_name)
             return value if value is not None else ''
@@ -2688,12 +2737,13 @@ class BashInterpreter(BashCSTVisitor):
 
         def do_declare():
             # Check for flags: -A (associative array), -a (indexed array), -r (readonly),
-            # -l (lowercase), -u (uppercase)
+            # -l (lowercase), -u (uppercase), -i (integer)
             is_assoc = False
             is_indexed = False
             is_readonly = keyword == 'readonly'  # readonly command implies -r
             is_lowercase = False
             is_uppercase = False
+            is_integer = False
             for child in node.children:
                 if child == keyword_node:
                     continue
@@ -2710,6 +2760,8 @@ class BashInterpreter(BashCSTVisitor):
                 elif text == '-u':
                     is_uppercase = True
                     is_lowercase = False  # -u cancels -l
+                elif text == '-i':
+                    is_integer = True
 
             # Handle 'export -f' for function export
             if keyword == 'export':
@@ -2789,6 +2841,14 @@ class BashInterpreter(BashCSTVisitor):
                     else:
                         value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
 
+                    # Apply integer attribute (must set before evaluation)
+                    if is_integer:
+                        self._integer_vars.add(name)
+
+                    # Apply integer evaluation for scalar values
+                    if is_integer and isinstance(value, str):
+                        value = str(self._evaluate_as_arithmetic(value))
+
                     # Apply case attributes (must set before transformation)
                     if is_lowercase:
                         self._lowercase_vars.add(name)
@@ -2818,7 +2878,7 @@ class BashInterpreter(BashCSTVisitor):
                         self._readonly_vars.add(name)
                 elif child.type in ('word', 'string', 'raw_string', 'variable_name'):
                     text = self._get_text(child)
-                    # Skip flags like -A, -a, -r, -l, -u
+                    # Skip flags like -A, -a, -r, -l, -u, -i
                     if text.startswith('-'):
                         continue
                     var_name = _bash_to_str(text)
@@ -2836,6 +2896,9 @@ class BashInterpreter(BashCSTVisitor):
                             self._env[var_name] = {}
                     if is_readonly:
                         self._readonly_vars.add(var_name)
+                    # Track integer attribute
+                    if is_integer:
+                        self._integer_vars.add(var_name)
                     # Track case conversion attributes
                     if is_lowercase:
                         self._lowercase_vars.add(var_name)

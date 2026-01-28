@@ -135,6 +135,7 @@ Variable attributes are tracked in interpreter-level sets, shared with parent in
 |-----|------|--------|
 | `_readonly_vars` | `-r` | Reject assignments, error on unset |
 | `_assoc_vars` | `-A` | Treat as associative array (dict) |
+| `_integer_vars` | `-i` | Evaluate values as arithmetic on assignment |
 | `_lowercase_vars` | `-l` | Lowercase values on assignment |
 | `_uppercase_vars` | `-u` | Uppercase values on assignment |
 
