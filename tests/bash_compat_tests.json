@@ -2011,5 +2011,45 @@
     "name": "local_sparse_scope",
     "category": "sparse_array",
     "code": "f() { local arr; arr[5]=local; echo ${arr[5]}; }; f; echo ${arr[5]:-unset}"
+  },
+  {
+    "name": "declare_lowercase",
+    "category": "declare_case",
+    "code": "declare -l x=HELLO; echo $x"
+  },
+  {
+    "name": "declare_uppercase",
+    "category": "declare_case",
+    "code": "declare -u x=hello; echo $x"
+  },
+  {
+    "name": "lowercase_subsequent_assign",
+    "category": "declare_case",
+    "code": "declare -l x; x=WORLD; echo $x"
+  },
+  {
+    "name": "uppercase_subsequent_assign",
+    "category": "declare_case",
+    "code": "declare -u x; x=world; echo $x"
+  },
+  {
+    "name": "lowercase_mixed_input",
+    "category": "declare_case",
+    "code": "declare -l x=HeLLo_WoRLd; echo $x"
+  },
+  {
+    "name": "uppercase_mixed_input",
+    "category": "declare_case",
+    "code": "declare -u x=HeLLo_WoRLd; echo $x"
+  },
+  {
+    "name": "case_flag_override",
+    "category": "declare_case",
+    "code": "declare -l x=HELLO; declare -u x; x=test; echo $x"
+  },
+  {
+    "name": "case_with_empty_value",
+    "category": "declare_case",
+    "code": "declare -l x=; echo \"[$x]\""
   }
 ]

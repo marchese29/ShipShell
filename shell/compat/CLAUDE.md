@@ -127,6 +127,25 @@ The interpreter tracks shell options in `self._shell_options`. Key options:
 | `errtrace` | `-E` | ERR trap inherited by functions/subshells |
 | `functrace` | `-T` | DEBUG/RETURN traps inherited |
 
+### Variable Attributes
+
+Variable attributes are tracked in interpreter-level sets, shared with parent interpreters:
+
+| Set | Flag | Effect |
+|-----|------|--------|
+| `_readonly_vars` | `-r` | Reject assignments, error on unset |
+| `_assoc_vars` | `-A` | Treat as associative array (dict) |
+| `_lowercase_vars` | `-l` | Lowercase values on assignment |
+| `_uppercase_vars` | `-u` | Uppercase values on assignment |
+
+**Adding a new attribute:**
+1. Add `_foo_vars: set[str]` in `__init__` (share with parent if inherited)
+2. Parse the flag in `visit_declaration_command` flag loop
+3. Apply the effect in `_set_variable` (for assignment-time behavior)
+4. Handle in declaration command's assignment and declaration-only branches
+
+Case conversion (`-l`/`-u`) are mutually exclusive—setting one discards the other.
+
 ### Process Substitution
 
 `<(cmd)` and `>(cmd)` are handled by `evaluate_process_substitution()`, which uses `ProcessSubstitution` from `shell/model.py`. Process subs are tracked in `self._process_subs` and cleaned up in `execute()`.

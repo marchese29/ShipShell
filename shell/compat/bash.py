@@ -464,9 +464,13 @@ class BashInterpreter(BashCSTVisitor):
         # Variable attributes (inherited from parent)
         self._readonly_vars: set[str] = set()
         self._assoc_vars: set[str] = set()  # Variables declared with -A (associative arrays)
+        self._lowercase_vars: set[str] = set()  # Variables declared with -l (lowercase)
+        self._uppercase_vars: set[str] = set()  # Variables declared with -u (uppercase)
         if parent is not None:
             self._readonly_vars = parent._readonly_vars  # Share with parent
             self._assoc_vars = parent._assoc_vars  # Share with parent
+            self._lowercase_vars = parent._lowercase_vars  # Share with parent
+            self._uppercase_vars = parent._uppercase_vars  # Share with parent
 
         # Internal state (not inherited)
         self._temp_files: list[str] = []  # Temp files to clean up (e.g., heredocs)
@@ -786,6 +790,13 @@ class BashInterpreter(BashCSTVisitor):
         # Check readonly
         if name in self._readonly_vars:
             raise BashScriptError(f'{name}: readonly variable', 1)
+
+        # Apply case transformation for -l/-u declared variables (only for strings)
+        if isinstance(value, str):
+            if name in self._lowercase_vars:
+                value = value.lower()
+            elif name in self._uppercase_vars:
+                value = value.upper()
 
         # Check this interpreter's local scope
         if name in self._local_vars:
@@ -2676,10 +2687,13 @@ class BashInterpreter(BashCSTVisitor):
         keyword = self._get_text(keyword_node)
 
         def do_declare():
-            # Check for flags: -A (associative array), -a (indexed array), -r (readonly)
+            # Check for flags: -A (associative array), -a (indexed array), -r (readonly),
+            # -l (lowercase), -u (uppercase)
             is_assoc = False
             is_indexed = False
             is_readonly = keyword == 'readonly'  # readonly command implies -r
+            is_lowercase = False
+            is_uppercase = False
             for child in node.children:
                 if child == keyword_node:
                     continue
@@ -2690,6 +2704,12 @@ class BashInterpreter(BashCSTVisitor):
                     is_indexed = True
                 elif text == '-r':
                     is_readonly = True
+                elif text == '-l':
+                    is_lowercase = True
+                    is_uppercase = False  # -l cancels -u
+                elif text == '-u':
+                    is_uppercase = True
+                    is_lowercase = False  # -u cancels -l
 
             # Handle 'export -f' for function export
             if keyword == 'export':
@@ -2769,6 +2789,21 @@ class BashInterpreter(BashCSTVisitor):
                     else:
                         value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
 
+                    # Apply case attributes (must set before transformation)
+                    if is_lowercase:
+                        self._lowercase_vars.add(name)
+                        self._uppercase_vars.discard(name)  # Can't be both
+                    elif is_uppercase:
+                        self._uppercase_vars.add(name)
+                        self._lowercase_vars.discard(name)  # Can't be both
+
+                    # Apply case transformation for scalar values
+                    if isinstance(value, str):
+                        if is_lowercase:
+                            value = value.lower()
+                        elif is_uppercase:
+                            value = value.upper()
+
                     # Trace the assignment (bash traces each assignment inside export/declare)
                     if self._shell_options['xtrace']:
                         display = str(value) if isinstance(value, (list, dict)) else value
@@ -2783,7 +2818,7 @@ class BashInterpreter(BashCSTVisitor):
                         self._readonly_vars.add(name)
                 elif child.type in ('word', 'string', 'raw_string', 'variable_name'):
                     text = self._get_text(child)
-                    # Skip flags like -A, -a, -r
+                    # Skip flags like -A, -a, -r, -l, -u
                     if text.startswith('-'):
                         continue
                     var_name = _bash_to_str(text)
@@ -2801,6 +2836,13 @@ class BashInterpreter(BashCSTVisitor):
                             self._env[var_name] = {}
                     if is_readonly:
                         self._readonly_vars.add(var_name)
+                    # Track case conversion attributes
+                    if is_lowercase:
+                        self._lowercase_vars.add(var_name)
+                        self._uppercase_vars.discard(var_name)
+                    elif is_uppercase:
+                        self._uppercase_vars.add(var_name)
+                        self._lowercase_vars.discard(var_name)
             return 0
 
         runnable: ShellRunnable = InProcessCallable(do_declare, name=keyword)
