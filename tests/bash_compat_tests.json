@@ -2091,5 +2091,15 @@
     "name": "integer_var_reference",
     "category": "declare_int",
     "code": "FOO=10; declare -i x=FOO+1; echo $x"
+  },
+  {
+    "name": "declare_export",
+    "category": "declare_export",
+    "code": "declare -x FOO=bar; bash -c 'echo $FOO'"
+  },
+  {
+    "name": "declare_export_existing",
+    "category": "declare_export",
+    "code": "FOO=existing; declare -x FOO; bash -c 'echo $FOO'"
   }
 ]

@@ -2737,10 +2737,11 @@ class BashInterpreter(BashCSTVisitor):
 
         def do_declare():
             # Check for flags: -A (associative array), -a (indexed array), -r (readonly),
-            # -l (lowercase), -u (uppercase), -i (integer)
+            # -l (lowercase), -u (uppercase), -i (integer), -x (export)
             is_assoc = False
             is_indexed = False
             is_readonly = keyword == 'readonly'  # readonly command implies -r
+            is_export = keyword == 'export'  # export command implies -x
             is_lowercase = False
             is_uppercase = False
             is_integer = False
@@ -2762,6 +2763,8 @@ class BashInterpreter(BashCSTVisitor):
                     is_lowercase = False  # -u cancels -l
                 elif text == '-i':
                     is_integer = True
+                elif text == '-x':
+                    is_export = True
 
             # Handle 'export -f' for function export
             if keyword == 'export':
@@ -2872,17 +2875,17 @@ class BashInterpreter(BashCSTVisitor):
 
                     self._env[name] = value
 
-                    if keyword == 'export':
+                    if is_export:
                         self._env.export(name)
                     if is_readonly:
                         self._readonly_vars.add(name)
                 elif child.type in ('word', 'string', 'raw_string', 'variable_name'):
                     text = self._get_text(child)
-                    # Skip flags like -A, -a, -r, -l, -u, -i
+                    # Skip flags like -A, -a, -r, -l, -u, -i, -x
                     if text.startswith('-'):
                         continue
                     var_name = _bash_to_str(text)
-                    if keyword == 'export':
+                    if is_export:
                         if var_name in self._env:
                             self._env.export(var_name)
                     elif is_assoc:
