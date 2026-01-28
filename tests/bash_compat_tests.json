@@ -1955,5 +1955,16 @@
     "name": "readonly_after_set",
     "category": "readonly",
     "code": "x=first; readonly x; echo $x"
+  },
+  {
+    "name": "readonly_modify_with_redirect",
+    "category": "readonly",
+    "code": "readonly x=5;x=10 >/dev/null;echo $x",
+    "check_stderr": false
+  },
+  {
+    "name": "assign_with_redirect",
+    "category": "variable",
+    "code": "x=hello >/dev/null;echo $x"
   }
 ]

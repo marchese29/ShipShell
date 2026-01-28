@@ -2438,6 +2438,28 @@ class BashInterpreter(BashCSTVisitor):
 
         cmd_name = self._get_text(name_node)
 
+        # Handle assignment-only commands (e.g., FOO=bar 2>/dev/null)
+        # When command_name is empty but there are variable_assignment children,
+        # these should be processed as permanent assignments
+        if not cmd_name:
+            assignments = [c for c in node.children if c.type == 'variable_assignment']
+            if assignments:
+                # Build a runnable that executes all assignments
+                def do_assignments():
+                    for assign_node in assignments:
+                        name_n = assign_node.child_by_field_name('name')
+                        value_n = assign_node.child_by_field_name('value')
+                        if name_n:
+                            var_name = self._get_text(name_n)
+                            value = _bash_to_str(self.evaluate(value_n)) if value_n else ''
+                            self._set_variable(var_name, value)
+                    return 0
+
+                runnable: ShellRunnable = InProcessCallable(do_assignments, name='assign')
+                runnable = self._apply_redirects(runnable, node)
+                return runnable
+            return InProcessCallable(lambda: 0, name='empty')
+
         # Special builtins that modify interpreter state
         if cmd_name == 'set':
             # Build args for tracing (evaluated but not used by set handler)
