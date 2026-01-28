@@ -1111,50 +1111,42 @@
   {
     "name": "case_upper_first",
     "category": "case_conversion",
-    "code": "x=hello; echo ${x^}",
-    "skip": "bash 4.0+ feature, macOS has bash 3.2"
+    "code": "x=hello; echo ${x^}"
   },
   {
     "name": "case_upper_all",
     "category": "case_conversion",
-    "code": "x=hello; echo ${x^^}",
-    "skip": "bash 4.0+ feature, macOS has bash 3.2"
+    "code": "x=hello; echo ${x^^}"
   },
   {
     "name": "case_lower_first",
     "category": "case_conversion",
-    "code": "x=HELLO; echo ${x,}",
-    "skip": "bash 4.0+ feature, macOS has bash 3.2"
+    "code": "x=HELLO; echo ${x,}"
   },
   {
     "name": "case_lower_all",
     "category": "case_conversion",
-    "code": "x=HELLO; echo ${x,,}",
-    "skip": "bash 4.0+ feature, macOS has bash 3.2"
+    "code": "x=HELLO; echo ${x,,}"
   },
   {
     "name": "case_upper_already_upper",
     "category": "case_conversion",
-    "code": "x=HELLO; echo ${x^^}",
-    "skip": "bash 4.0+ feature, macOS has bash 3.2"
+    "code": "x=HELLO; echo ${x^^}"
   },
   {
     "name": "case_lower_already_lower",
     "category": "case_conversion",
-    "code": "x=hello; echo ${x,,}",
-    "skip": "bash 4.0+ feature, macOS has bash 3.2"
+    "code": "x=hello; echo ${x,,}"
   },
   {
     "name": "case_mixed_to_upper",
     "category": "case_conversion",
-    "code": "x=HeLLo; echo ${x^^}",
-    "skip": "bash 4.0+ feature, macOS has bash 3.2"
+    "code": "x=HeLLo; echo ${x^^}"
   },
   {
     "name": "case_with_numbers",
     "category": "case_conversion",
-    "code": "x=abc123def; echo ${x^^}",
-    "skip": "bash 4.0+ feature, macOS has bash 3.2"
+    "code": "x=abc123def; echo ${x^^}"
   },
   {
     "name": "varname_prefix_at",
@@ -1179,20 +1171,18 @@
   {
     "name": "array_indices_at",
     "category": "array_indices",
-    "code": "arr=(a b c); echo ${!arr[@]}",
-    "skip": "ShipShell-oq3 + bash 4.0+ feature"
+    "code": "arr=(a b c); echo ${!arr[@]}"
   },
   {
     "name": "array_indices_star",
     "category": "array_indices",
-    "code": "arr=(a b c); echo ${!arr[*]}",
-    "skip": "ShipShell-oq3 + bash 4.0+ feature"
+    "code": "arr=(a b c); echo ${!arr[*]}"
   },
   {
     "name": "array_indices_sparse",
     "category": "array_indices",
     "code": "arr=(); arr[0]=a; arr[5]=b; arr[10]=c; echo ${!arr[@]}",
-    "skip": "ShipShell-oq3 + bash 4.0+ feature"
+    "skip": "Sparse array indices not yet implemented"
   },
   {
     "name": "array_indices_empty",
