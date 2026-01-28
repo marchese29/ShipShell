@@ -65,6 +65,21 @@ Test organization:
 
 See `tests/AGENTS.md` for detailed testing patterns and the test harness API.
 
+### Bash Version Requirements
+
+The test harness compares our bash interpreter against real bash. **macOS ships with bash 3.2**, which lacks modern features:
+- Associative arrays (`declare -A`) - requires bash 4.0+
+- Many other features added in bash 4.x/5.x
+
+The harness prefers `/opt/homebrew/bin/bash` if available (install via `brew install bash`). This gives you bash 5.x with full feature support. Otherwise it falls back to `/bin/bash`.
+
+**To install modern bash:**
+```bash
+brew install bash
+```
+
+The harness constant `BASH_PATH` in `tests/bash/harness.py` controls which bash is used.
+
 ## Component Documentation
 
 Component-specific patterns and debugging utilities:

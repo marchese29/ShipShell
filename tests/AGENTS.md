@@ -106,6 +106,23 @@ class TestExpandBraces:
         assert _expand_braces('{a,b,c}') == ['a', 'b', 'c']
 ```
 
+## Bash Version
+
+The test harness uses `BASH_PATH` (defined in `tests/bash/harness.py`) to locate bash:
+- Prefers `/opt/homebrew/bin/bash` (bash 5.x via Homebrew)
+- Falls back to `/bin/bash` (macOS ships with bash 3.2)
+
+**Install modern bash for full feature testing:**
+```bash
+brew install bash
+```
+
+Features requiring bash 4.0+:
+- Associative arrays (`declare -A`)
+- Coproc (`coproc`)
+- `mapfile` / `readarray`
+- `${var,,}` / `${var^^}` case modification
+
 ## Architecture Notes
 
 - Fork-based isolation: Child process runs bash code, parent collects results

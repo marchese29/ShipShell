@@ -16,6 +16,10 @@ from typing import Any
 
 from shell.trap import TrapType
 
+# Prefer homebrew bash (5.x with associative array support) over macOS /bin/bash (3.2)
+_HOMEBREW_BASH = '/opt/homebrew/bin/bash'
+BASH_PATH = _HOMEBREW_BASH if os.path.exists(_HOMEBREW_BASH) else '/bin/bash'
+
 
 @dataclass
 class CapturedState:
@@ -216,7 +220,7 @@ def run_bash_reference(
 
     try:
         result = subprocess.run(
-            ['bash', '-c', f'source "{script_path}"'],
+            [BASH_PATH, '-c', f'source "{script_path}"'],
             capture_output=True,
             text=True,
             env=env,

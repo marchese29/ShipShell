@@ -1897,5 +1897,45 @@
     "name": "xargs_placeholder",
     "category": "brace_expansion",
     "code": "echo hello | xargs -I{} echo got: {}"
+  },
+  {
+    "name": "declare_assoc",
+    "category": "assoc_array",
+    "code": "declare -A m; echo ok"
+  },
+  {
+    "name": "assoc_literal",
+    "category": "assoc_array",
+    "code": "declare -A m=([a]=1 [b]=2); echo ${m[a]} ${m[b]}"
+  },
+  {
+    "name": "assoc_assign",
+    "category": "assoc_array",
+    "code": "declare -A m; m[foo]=bar; echo ${m[foo]}"
+  },
+  {
+    "name": "assoc_all_values",
+    "category": "assoc_array",
+    "code": "declare -A m; m[a]=1; m[b]=2; for v in ${m[@]}; do echo $v; done | sort"
+  },
+  {
+    "name": "assoc_all_keys",
+    "category": "assoc_array",
+    "code": "declare -A m; m[x]=1; m[y]=2; for k in ${!m[@]}; do echo $k; done | sort"
+  },
+  {
+    "name": "assoc_count",
+    "category": "assoc_array",
+    "code": "declare -A m; m[a]=1; m[b]=2; m[c]=3; echo ${#m[@]}"
+  },
+  {
+    "name": "assoc_unset_key",
+    "category": "assoc_array",
+    "code": "declare -A m; m[a]=1; echo \"${m[nonexistent]}\""
+  },
+  {
+    "name": "assoc_overwrite",
+    "category": "assoc_array",
+    "code": "declare -A m; m[k]=old; m[k]=new; echo ${m[k]}"
   }
 ]

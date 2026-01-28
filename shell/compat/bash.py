@@ -43,7 +43,11 @@ def _expect[T](thing: T | None) -> T:
     return thing
 
 
-BashValue = str | int | list[str]
+# Associative arrays stored as dict[str, str]
+BashValue = str | int | list[str] | dict[str, str]
+
+# Regex to match [key]=value in associative array literals
+_ASSOC_ELEMENT_RE = re.compile(r'^\[([^\]]+)\]=(.*)$')
 
 
 @dataclass
@@ -74,6 +78,8 @@ def _bash_to_str(value: BashValue | None) -> str:
             if len(val) == 0:
                 return ''
             return val[0]
+        case dict():
+            return ''  # Assoc array without subscript returns empty
         case None:
             return ''
 
@@ -87,6 +93,8 @@ def _bash_to_file(value: BashValue | None) -> int | str:
             return val  # File path
         case list() as val:
             return val[0] if val else ''
+        case dict():
+            return ''  # Assoc array without subscript returns empty
         case None:
             return ''
 
@@ -100,7 +108,7 @@ def _bash_to_int(value: BashValue | None) -> int:
                 return int(val)
             except Exception:
                 return 0
-        case list() as val:
+        case list() | dict():
             return 0
         case None:
             return 0
@@ -835,6 +843,25 @@ class BashInterpreter(BashCSTVisitor):
     def _get_text(self, node: ts.Node) -> str:
         return self._source[node.start_byte : node.end_byte]
 
+    def _parse_assoc_literal(self, array_node: ts.Node) -> dict[str, str]:
+        """Parse associative array literal: ([key]=val [key2]=val2)
+
+        Each element is a separate concatenation node like '[key]=value'.
+        """
+        result: dict[str, str] = {}
+
+        for child in array_node.named_children:
+            if child.type != 'concatenation':
+                continue
+
+            text = self._get_text(child)
+            match = _ASSOC_ELEMENT_RE.match(text)
+            if match:
+                key, value = match.groups()
+                result[key] = value
+
+        return result
+
     def _glob_pattern_to_regex(
         self,
         pattern: str,
@@ -1317,8 +1344,17 @@ class BashInterpreter(BashCSTVisitor):
                 index_text = self._get_text(index_node) if index_node else ''
                 var_value = self._get_variable(var_name, check_unset=False)
 
-                # For non-array variables or unset, return empty
-                if var_value is None or not isinstance(var_value, list):
+                # For unset variables, return empty
+                if var_value is None:
+                    return [] if index_text == '@' else ''
+
+                # For associative arrays, return keys
+                if isinstance(var_value, dict):
+                    keys = list(var_value.keys())
+                    return keys if index_text == '@' else ' '.join(keys)
+
+                # For non-array variables, return empty
+                if not isinstance(var_value, list):
                     return [] if index_text == '@' else ''
 
                 indices = [str(i) for i in range(len(var_value))]
@@ -1368,7 +1404,7 @@ class BashInterpreter(BashCSTVisitor):
             value = self.evaluate(value_node)
 
         if prefix_operator == '#':
-            if isinstance(value, list):
+            if isinstance(value, (list, dict)):
                 return len(value)
             else:
                 return len(_bash_to_str(value))
@@ -1495,6 +1531,12 @@ class BashInterpreter(BashCSTVisitor):
         if var_value is None:
             self._check_nounset(var_name)
             return ''
+
+        # Handle dict (associative array)
+        if isinstance(var_value, dict):
+            if index_text in ('@', '*'):
+                return list(var_value.values())
+            return var_value.get(index_text, '')
 
         # Handle special subscripts @ and * for arrays
         if index_text in ('@', '*'):
@@ -2588,6 +2630,16 @@ class BashInterpreter(BashCSTVisitor):
         keyword = self._get_text(keyword_node)
 
         def do_declare():
+            # Check for -A flag (associative array)
+            is_assoc = False
+            for child in node.children:
+                if child == keyword_node:
+                    continue
+                text = self._get_text(child)
+                if text == '-A':
+                    is_assoc = True
+                    break
+
             # Handle 'export -f' for function export
             if keyword == 'export':
                 export_functions = False
@@ -2646,11 +2698,20 @@ class BashInterpreter(BashCSTVisitor):
                         continue
 
                     name = _bash_to_str(self.evaluate(name_node))
-                    value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
+
+                    # Handle associative array declaration
+                    if is_assoc:
+                        if value_node and value_node.type == 'array':
+                            value: BashValue = self._parse_assoc_literal(value_node)
+                        else:
+                            value = {}
+                    else:
+                        value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
 
                     # Trace the assignment (bash traces each assignment inside export/declare)
                     if self._shell_options['xtrace']:
-                        print(f'{self._get_ps4()}{name}={value}', file=sys.stderr)
+                        display = str(value) if isinstance(value, dict) else value
+                        print(f'{self._get_ps4()}{name}={display}', file=sys.stderr)
                         sys.stderr.flush()
 
                     self._env[name] = value
@@ -2658,10 +2719,19 @@ class BashInterpreter(BashCSTVisitor):
                     if keyword == 'export':
                         self._env.export(name)
                 elif child.type in ('word', 'string', 'raw_string', 'variable_name'):
+                    text = self._get_text(child)
+                    # Skip flags like -A
+                    if text.startswith('-'):
+                        continue
                     if keyword == 'export':
-                        var_name = _bash_to_str(self._get_text(child))
+                        var_name = _bash_to_str(text)
                         if var_name in self._env:
                             self._env.export(var_name)
+                    elif is_assoc:
+                        # declare -A varname (without assignment) - init as empty dict
+                        var_name = _bash_to_str(text)
+                        if var_name not in self._env:
+                            self._env[var_name] = {}
             return 0
 
         runnable: ShellRunnable = InProcessCallable(do_declare, name=keyword)
@@ -3148,9 +3218,44 @@ class BashInterpreter(BashCSTVisitor):
         return InProcessCallable(do_unset, name='unset')
 
     def visit_variable_assignment(self, node: ts.Node) -> ShellRunnable:
-        """Build variable assignment runnable: var=value"""
+        """Build variable assignment runnable: var=value or arr[idx]=value"""
         name_node = _expect(node.child_by_field_name('name'))
         value_node = node.child_by_field_name('value')
+
+        # Handle subscript assignment: map[key]=value
+        if name_node.type == 'subscript':
+            var_name_node = _expect(name_node.child_by_field_name('name'))
+            index_node = _expect(name_node.child_by_field_name('index'))
+            var_name = self._get_text(var_name_node)
+            key = _bash_to_str(self.evaluate(index_node))
+            new_value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
+
+            def do_subscript_assign():
+                current = self._get_variable(var_name, check_unset=False)
+                if isinstance(current, dict):
+                    # Associative array - use string key
+                    current[key] = new_value
+                elif isinstance(current, list):
+                    # Indexed array - convert key to int
+                    idx = _bash_to_int(key)
+                    if 0 <= idx < len(current):
+                        current[idx] = new_value
+                    # TODO: extend list if needed for sparse arrays
+                else:
+                    # Not an array - error (bash requires declare -A first)
+                    raise BashScriptError(f'{var_name}: cannot assign to non-array variable', 1)
+                return 0
+
+            runnable: ShellRunnable = InProcessCallable(
+                do_subscript_assign, name=f'{var_name}[{key}]=...'
+            )
+
+            if self._shell_options['xtrace']:
+                runnable = runnable.trace(f'{var_name}[{key}]={new_value}', self._get_ps4())
+
+            return runnable
+
+        # Simple assignment: var=value
         name = self._get_text(name_node)
 
         # Evaluate value now for both execution and xtrace display
@@ -3165,7 +3270,7 @@ class BashInterpreter(BashCSTVisitor):
             self._set_variable(name, value)
             return 0
 
-        runnable: ShellRunnable = InProcessCallable(do_assign, name=f'{name}=...')
+        runnable = InProcessCallable(do_assign, name=f'{name}=...')
 
         if self._shell_options['xtrace']:
             display_value = ' '.join(value) if isinstance(value, list) else value
