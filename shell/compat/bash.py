@@ -15,6 +15,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from enum import IntFlag, auto
 from pathlib import Path
 from typing import Literal, cast
 
@@ -36,6 +37,17 @@ from shell.model import (
     prog,
 )
 from shell.trap import TrapType
+
+
+class VarAttr(IntFlag):
+    """Variable attributes for declare/typeset flags."""
+
+    NONE = 0
+    READONLY = auto()  # -r
+    ASSOC = auto()  # -A (associative array)
+    INTEGER = auto()  # -i
+    LOWERCASE = auto()  # -l
+    UPPERCASE = auto()  # -u
 
 
 def _expect[T](thing: T | None) -> T:
@@ -463,17 +475,9 @@ class BashInterpreter(BashCSTVisitor):
         self._local_vars: dict[str, BashValue | None] = {}  # None = declared but unset
 
         # Variable attributes (inherited from parent)
-        self._readonly_vars: set[str] = set()
-        self._assoc_vars: set[str] = set()  # Variables declared with -A (associative arrays)
-        self._lowercase_vars: set[str] = set()  # Variables declared with -l (lowercase)
-        self._uppercase_vars: set[str] = set()  # Variables declared with -u (uppercase)
-        self._integer_vars: set[str] = set()  # Variables declared with -i (integer)
+        self._var_attrs: dict[str, VarAttr] = {}
         if parent is not None:
-            self._readonly_vars = parent._readonly_vars  # Share with parent
-            self._assoc_vars = parent._assoc_vars  # Share with parent
-            self._lowercase_vars = parent._lowercase_vars  # Share with parent
-            self._uppercase_vars = parent._uppercase_vars  # Share with parent
-            self._integer_vars = parent._integer_vars  # Share with parent
+            self._var_attrs = parent._var_attrs  # Share with parent
 
         # Internal state (not inherited)
         self._temp_files: list[str] = []  # Temp files to clean up (e.g., heredocs)
@@ -828,19 +832,20 @@ class BashInterpreter(BashCSTVisitor):
         If variable is declared local in this interpreter or parent chain, set it there.
         Otherwise, set in environment (global).
         """
-        # Check readonly
-        if name in self._readonly_vars:
+        # Check variable attributes
+        attr = self._var_attrs.get(name, VarAttr.NONE)
+        if attr & VarAttr.READONLY:
             raise BashScriptError(f'{name}: readonly variable', 1)
 
         # Apply integer evaluation for -i declared variables
-        if name in self._integer_vars and isinstance(value, str):
+        if attr & VarAttr.INTEGER and isinstance(value, str):
             value = str(self._evaluate_as_arithmetic(value))
 
         # Apply case transformation for -l/-u declared variables (only for strings)
         if isinstance(value, str):
-            if name in self._lowercase_vars:
+            if attr & VarAttr.LOWERCASE:
                 value = value.lower()
-            elif name in self._uppercase_vars:
+            elif attr & VarAttr.UPPERCASE:
                 value = value.upper()
 
         # Check this interpreter's local scope
@@ -1417,7 +1422,7 @@ class BashInterpreter(BashCSTVisitor):
 
                 # For dict arrays, return keys (sorted numerically for indexed, as-is for assoc)
                 if isinstance(var_value, dict):
-                    if var_name in self._assoc_vars:
+                    if self._var_attrs.get(var_name, VarAttr.NONE) & VarAttr.ASSOC:
                         # Associative array: return keys in natural order
                         keys = list(var_value.keys())
                     else:
@@ -1609,7 +1614,7 @@ class BashInterpreter(BashCSTVisitor):
         # Handle dict (associative array or sparse indexed array)
         if isinstance(var_value, dict):
             if index_text in ('@', '*'):
-                if var_name in self._assoc_vars:
+                if self._var_attrs.get(var_name, VarAttr.NONE) & VarAttr.ASSOC:
                     # Associative array: return values in natural order
                     return list(var_value.values())
                 else:
@@ -2833,7 +2838,8 @@ class BashInterpreter(BashCSTVisitor):
                             value: BashValue = self._parse_assoc_literal(value_node)
                         else:
                             value = {}
-                        self._assoc_vars.add(name)  # Track as associative
+                        attrs = self._var_attrs.get(name, VarAttr.NONE)
+                        self._var_attrs[name] = attrs | VarAttr.ASSOC
                     elif is_indexed:
                         # Indexed array: declare -a
                         if value_node and value_node.type == 'array':
@@ -2846,19 +2852,20 @@ class BashInterpreter(BashCSTVisitor):
 
                     # Apply integer attribute (must set before evaluation)
                     if is_integer:
-                        self._integer_vars.add(name)
+                        attrs = self._var_attrs.get(name, VarAttr.NONE)
+                        self._var_attrs[name] = attrs | VarAttr.INTEGER
 
                     # Apply integer evaluation for scalar values
                     if is_integer and isinstance(value, str):
                         value = str(self._evaluate_as_arithmetic(value))
 
-                    # Apply case attributes (must set before transformation)
+                    # Apply case attributes (must set before transformation, mutually exclusive)
                     if is_lowercase:
-                        self._lowercase_vars.add(name)
-                        self._uppercase_vars.discard(name)  # Can't be both
+                        attrs = self._var_attrs.get(name, VarAttr.NONE)
+                        self._var_attrs[name] = (attrs | VarAttr.LOWERCASE) & ~VarAttr.UPPERCASE
                     elif is_uppercase:
-                        self._uppercase_vars.add(name)
-                        self._lowercase_vars.discard(name)  # Can't be both
+                        attrs = self._var_attrs.get(name, VarAttr.NONE)
+                        self._var_attrs[name] = (attrs | VarAttr.UPPERCASE) & ~VarAttr.LOWERCASE
 
                     # Apply case transformation for scalar values
                     if isinstance(value, str):
@@ -2878,7 +2885,8 @@ class BashInterpreter(BashCSTVisitor):
                     if is_export:
                         self._env.export(name)
                     if is_readonly:
-                        self._readonly_vars.add(name)
+                        attrs = self._var_attrs.get(name, VarAttr.NONE)
+                        self._var_attrs[name] = attrs | VarAttr.READONLY
                 elif child.type in ('word', 'string', 'raw_string', 'variable_name'):
                     text = self._get_text(child)
                     # Skip flags like -A, -a, -r, -l, -u, -i, -x
@@ -2892,23 +2900,26 @@ class BashInterpreter(BashCSTVisitor):
                         # declare -A varname (without assignment) - init as empty dict
                         if var_name not in self._env:
                             self._env[var_name] = {}
-                        self._assoc_vars.add(var_name)  # Track as associative
+                        attrs = self._var_attrs.get(var_name, VarAttr.NONE)
+                        self._var_attrs[var_name] = attrs | VarAttr.ASSOC
                     elif is_indexed:
                         # declare -a varname (without assignment) - init as empty sparse
                         if var_name not in self._env:
                             self._env[var_name] = {}
                     if is_readonly:
-                        self._readonly_vars.add(var_name)
+                        attrs = self._var_attrs.get(var_name, VarAttr.NONE)
+                        self._var_attrs[var_name] = attrs | VarAttr.READONLY
                     # Track integer attribute
                     if is_integer:
-                        self._integer_vars.add(var_name)
-                    # Track case conversion attributes
+                        attrs = self._var_attrs.get(var_name, VarAttr.NONE)
+                        self._var_attrs[var_name] = attrs | VarAttr.INTEGER
+                    # Track case conversion attributes (mutually exclusive)
                     if is_lowercase:
-                        self._lowercase_vars.add(var_name)
-                        self._uppercase_vars.discard(var_name)
+                        attrs = self._var_attrs.get(var_name, VarAttr.NONE)
+                        self._var_attrs[var_name] = (attrs | VarAttr.LOWERCASE) & ~VarAttr.UPPERCASE
                     elif is_uppercase:
-                        self._uppercase_vars.add(var_name)
-                        self._lowercase_vars.discard(var_name)
+                        attrs = self._var_attrs.get(var_name, VarAttr.NONE)
+                        self._var_attrs[var_name] = (attrs | VarAttr.UPPERCASE) & ~VarAttr.LOWERCASE
             return 0
 
         runnable: ShellRunnable = InProcessCallable(do_declare, name=keyword)
@@ -3388,7 +3399,7 @@ class BashInterpreter(BashCSTVisitor):
             for child in node.children:
                 if child.type in ('word', 'variable_name'):
                     var_name = self._get_text(child)
-                    if var_name in self._readonly_vars:
+                    if self._var_attrs.get(var_name, VarAttr.NONE) & VarAttr.READONLY:
                         msg = f'bash: unset: {var_name}: cannot unset: readonly variable'
                         print(msg, file=sys.stderr)
                         return 1

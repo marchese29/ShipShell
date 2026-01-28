@@ -129,23 +129,35 @@ The interpreter tracks shell options in `self._shell_options`. Key options:
 
 ### Variable Attributes
 
-Variable attributes are tracked in interpreter-level sets, shared with parent interpreters:
+Variable attributes are tracked using `VarAttr` IntFlag in a single dict, shared with parent interpreters:
 
-| Set | Flag | Effect |
-|-----|------|--------|
-| `_readonly_vars` | `-r` | Reject assignments, error on unset |
-| `_assoc_vars` | `-A` | Treat as associative array (dict) |
-| `_integer_vars` | `-i` | Evaluate values as arithmetic on assignment |
-| `_lowercase_vars` | `-l` | Lowercase values on assignment |
-| `_uppercase_vars` | `-u` | Uppercase values on assignment |
+```python
+class VarAttr(IntFlag):
+    NONE = 0
+    READONLY = auto()   # -r
+    ASSOC = auto()      # -A
+    INTEGER = auto()    # -i
+    LOWERCASE = auto()  # -l
+    UPPERCASE = auto()  # -u
+
+self._var_attrs: dict[str, VarAttr] = {}
+```
+
+| Flag | `VarAttr` | Effect |
+|------|-----------|--------|
+| `-r` | `READONLY` | Reject assignments, error on unset |
+| `-A` | `ASSOC` | Treat as associative array (dict) |
+| `-i` | `INTEGER` | Evaluate values as arithmetic on assignment |
+| `-l` | `LOWERCASE` | Lowercase values on assignment |
+| `-u` | `UPPERCASE` | Uppercase values on assignment |
 
 **Adding a new attribute:**
-1. Add `_foo_vars: set[str]` in `__init__` (share with parent if inherited)
+1. Add value to `VarAttr` enum (e.g., `TRACE = auto()`)
 2. Parse the flag in `visit_declaration_command` flag loop
 3. Apply the effect in `_set_variable` (for assignment-time behavior)
-4. Handle in declaration command's assignment and declaration-only branches
+4. Use bitwise ops: `self._var_attrs[name] = attrs | VarAttr.NEW_FLAG`
 
-Case conversion (`-l`/`-u`) are mutually exclusive—setting one discards the other.
+Case conversion (`-l`/`-u`) are mutually exclusive—use `(attrs | VarAttr.LOWERCASE) & ~VarAttr.UPPERCASE`.
 
 ### Process Substitution
 
