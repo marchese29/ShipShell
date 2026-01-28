@@ -63,7 +63,7 @@ Test organization:
 - `tests/test_function_wiring.py` - Shell function wiring tests
 - `tests/test_harness_smoke.py` - Harness smoke tests
 
-See `tests/AGENTS.md` for detailed testing patterns and the test harness API.
+See `tests/CLAUDE.md` for detailed testing patterns and the test harness API.
 
 ### Bash Version Requirements
 
@@ -83,10 +83,10 @@ The harness constant `BASH_PATH` in `tests/bash/harness.py` controls which bash 
 ## Component Documentation
 
 Component-specific patterns and debugging utilities:
-- `tests/AGENTS.md` - Test harness API and testing patterns
-- `shell/compat/AGENTS.md` - Bash interpreter debugging and visitor patterns
+- `tests/CLAUDE.md` - Test harness API and testing patterns
+- `shell/compat/CLAUDE.md` - Bash interpreter debugging and visitor patterns
 
-**⚠️ Keep documentation current**: Before committing code changes, ALWAYS consider if AGENTS.md files need updates. New features, API changes, and architectural insights should be reflected here. These files are the primary onboarding path for agents - stale docs waste context and cause confusion.
+**⚠️ Keep documentation current**: Before committing code changes, ALWAYS consider if CLAUDE.md files need updates. New features, API changes, and architectural insights should be reflected here. These files are the primary onboarding path for agents - stale docs waste context and cause confusion.
 
 ## Architecture
 
