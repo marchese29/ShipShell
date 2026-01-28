@@ -459,12 +459,14 @@ class BashInterpreter(BashCSTVisitor):
         self._line_offset = line_offset
         self._func_name = func_name
         self._call_lineno = call_lineno
-        self._local_vars: dict[str, BashValue] = {}
+        self._local_vars: dict[str, BashValue | None] = {}  # None = declared but unset
 
         # Variable attributes (inherited from parent)
         self._readonly_vars: set[str] = set()
+        self._assoc_vars: set[str] = set()  # Variables declared with -A (associative arrays)
         if parent is not None:
             self._readonly_vars = parent._readonly_vars  # Share with parent
+            self._assoc_vars = parent._assoc_vars  # Share with parent
 
         # Internal state (not inherited)
         self._temp_files: list[str] = []  # Temp files to clean up (e.g., heredocs)
@@ -793,8 +795,8 @@ class BashInterpreter(BashCSTVisitor):
         if self._parent and self._parent._has_local_var(name):
             self._parent._set_variable(name, value)
             return
-        # Global scope
-        self._env[name] = value if isinstance(value, list) else _bash_to_str(value)
+        # Global scope - preserve arrays (list and dict), stringify scalars
+        self._env[name] = value if isinstance(value, (list, dict)) else _bash_to_str(value)
         # Auto-export if allexport (-a) is enabled
         if self._shell_options['allexport']:
             self._env.export(name)
@@ -1357,15 +1359,21 @@ class BashInterpreter(BashCSTVisitor):
                 if var_value is None:
                     return [] if index_text == '@' else ''
 
-                # For associative arrays, return keys
+                # For dict arrays, return keys (sorted numerically for indexed, as-is for assoc)
                 if isinstance(var_value, dict):
-                    keys = list(var_value.keys())
+                    if var_name in self._assoc_vars:
+                        # Associative array: return keys in natural order
+                        keys = list(var_value.keys())
+                    else:
+                        # Sparse indexed array: return indices sorted numerically
+                        keys = [str(i) for i in sorted(int(k) for k in var_value.keys())]
                     return keys if index_text == '@' else ' '.join(keys)
 
                 # For non-array variables, return empty
                 if not isinstance(var_value, list):
                     return [] if index_text == '@' else ''
 
+                # Dense list: return indices 0..len-1
                 indices = [str(i) for i in range(len(var_value))]
                 if index_text == '@':
                     return indices
@@ -1535,16 +1543,23 @@ class BashInterpreter(BashCSTVisitor):
         index_text = self._get_text(index_node)
         var_name = self._get_text(var_name_node)
 
-        var_value = self._env.get(var_name)
+        # Use _get_variable to respect local scope
+        var_value = self._get_variable(var_name, check_unset=False)
 
         if var_value is None:
             self._check_nounset(var_name)
             return ''
 
-        # Handle dict (associative array)
+        # Handle dict (associative array or sparse indexed array)
         if isinstance(var_value, dict):
             if index_text in ('@', '*'):
-                return list(var_value.values())
+                if var_name in self._assoc_vars:
+                    # Associative array: return values in natural order
+                    return list(var_value.values())
+                else:
+                    # Sparse indexed array: return values in numeric index order
+                    sorted_keys = sorted(var_value.keys(), key=lambda k: int(k))
+                    return [var_value[k] for k in sorted_keys]
             return var_value.get(index_text, '')
 
         # Handle special subscripts @ and * for arrays
@@ -2661,8 +2676,9 @@ class BashInterpreter(BashCSTVisitor):
         keyword = self._get_text(keyword_node)
 
         def do_declare():
-            # Check for flags: -A (associative array), -r (readonly)
+            # Check for flags: -A (associative array), -a (indexed array), -r (readonly)
             is_assoc = False
+            is_indexed = False
             is_readonly = keyword == 'readonly'  # readonly command implies -r
             for child in node.children:
                 if child == keyword_node:
@@ -2670,6 +2686,8 @@ class BashInterpreter(BashCSTVisitor):
                 text = self._get_text(child)
                 if text == '-A':
                     is_assoc = True
+                elif text == '-a':
+                    is_indexed = True
                 elif text == '-r':
                     is_readonly = True
 
@@ -2718,7 +2736,8 @@ class BashInterpreter(BashCSTVisitor):
                     elif child.type in ('word', 'variable_name') and child != keyword_node:
                         var_name = self._get_text(child)
                         if var_name not in self._local_vars:
-                            self._local_vars[var_name] = ''
+                            # Declared but unset - use None (not '' which means empty)
+                            self._local_vars[var_name] = None
                 return 0
 
             # Handle variable assignments in the command
@@ -2732,18 +2751,27 @@ class BashInterpreter(BashCSTVisitor):
 
                     name = _bash_to_str(self.evaluate(name_node))
 
-                    # Handle associative array declaration
+                    # Handle array declarations
                     if is_assoc:
+                        # Associative array: declare -A
                         if value_node and value_node.type == 'array':
                             value: BashValue = self._parse_assoc_literal(value_node)
                         else:
                             value = {}
+                        self._assoc_vars.add(name)  # Track as associative
+                    elif is_indexed:
+                        # Indexed array: declare -a
+                        if value_node and value_node.type == 'array':
+                            # Parse as list for dense initialization: arr=(a b c)
+                            value = self.evaluate_array(value_node)
+                        else:
+                            value = {}  # Empty sparse array
                     else:
                         value = _bash_to_str(self.evaluate(value_node)) if value_node else ''
 
                     # Trace the assignment (bash traces each assignment inside export/declare)
                     if self._shell_options['xtrace']:
-                        display = str(value) if isinstance(value, dict) else value
+                        display = str(value) if isinstance(value, (list, dict)) else value
                         print(f'{self._get_ps4()}{name}={display}', file=sys.stderr)
                         sys.stderr.flush()
 
@@ -2755,7 +2783,7 @@ class BashInterpreter(BashCSTVisitor):
                         self._readonly_vars.add(name)
                 elif child.type in ('word', 'string', 'raw_string', 'variable_name'):
                     text = self._get_text(child)
-                    # Skip flags like -A, -r
+                    # Skip flags like -A, -a, -r
                     if text.startswith('-'):
                         continue
                     var_name = _bash_to_str(text)
@@ -2764,6 +2792,11 @@ class BashInterpreter(BashCSTVisitor):
                             self._env.export(var_name)
                     elif is_assoc:
                         # declare -A varname (without assignment) - init as empty dict
+                        if var_name not in self._env:
+                            self._env[var_name] = {}
+                        self._assoc_vars.add(var_name)  # Track as associative
+                    elif is_indexed:
+                        # declare -a varname (without assignment) - init as empty sparse
                         if var_name not in self._env:
                             self._env[var_name] = {}
                     if is_readonly:
@@ -3273,17 +3306,21 @@ class BashInterpreter(BashCSTVisitor):
             def do_subscript_assign():
                 current = self._get_variable(var_name, check_unset=False)
                 if isinstance(current, dict):
-                    # Associative array - use string key
+                    # Existing dict (associative or sparse indexed) - mutate in place
                     current[key] = new_value
                 elif isinstance(current, list):
-                    # Indexed array - convert key to int
+                    # Dense indexed array - may need to convert to sparse
                     idx = _bash_to_int(key)
                     if 0 <= idx < len(current):
-                        current[idx] = new_value
-                    # TODO: extend list if needed for sparse arrays
+                        current[idx] = new_value  # In-place mutation
+                    else:
+                        # Convert to sparse dict, use _set_variable for scope
+                        sparse: dict[str, str] = {str(i): v for i, v in enumerate(current)}
+                        sparse[str(idx)] = new_value
+                        self._set_variable(var_name, sparse)
                 else:
-                    # Not an array - error (bash requires declare -A first)
-                    raise BashScriptError(f'{var_name}: cannot assign to non-array variable', 1)
+                    # Create new sparse indexed array (implicit creation, bash allows this)
+                    self._set_variable(var_name, {key: new_value})
                 return 0
 
             runnable: ShellRunnable = InProcessCallable(

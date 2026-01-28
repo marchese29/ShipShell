@@ -1966,5 +1966,50 @@
     "name": "assign_with_redirect",
     "category": "variable",
     "code": "x=hello >/dev/null;echo $x"
+  },
+  {
+    "name": "declare_indexed",
+    "category": "sparse_array",
+    "code": "declare -a arr; echo ok"
+  },
+  {
+    "name": "sparse_assign",
+    "category": "sparse_array",
+    "code": "arr[100]=foo; echo ${arr[100]}"
+  },
+  {
+    "name": "sparse_indices",
+    "category": "sparse_array",
+    "code": "arr[5]=a; arr[2]=b; arr[10]=c; echo ${!arr[@]}"
+  },
+  {
+    "name": "sparse_values",
+    "category": "sparse_array",
+    "code": "arr[5]=a; arr[2]=b; arr[10]=c; echo ${arr[@]}"
+  },
+  {
+    "name": "sparse_count",
+    "category": "sparse_array",
+    "code": "arr[100]=a; arr[200]=b; echo ${#arr[@]}"
+  },
+  {
+    "name": "dense_to_sparse",
+    "category": "sparse_array",
+    "code": "arr=(a b c); arr[100]=d; echo ${!arr[@]}"
+  },
+  {
+    "name": "indexed_literal",
+    "category": "sparse_array",
+    "code": "declare -a arr=(x y z); echo ${arr[1]}"
+  },
+  {
+    "name": "mixed_indices",
+    "category": "sparse_array",
+    "code": "arr[0]=first; arr[1000]=last; echo ${arr[0]} ${arr[1000]}"
+  },
+  {
+    "name": "local_sparse_scope",
+    "category": "sparse_array",
+    "code": "f() { local arr; arr[5]=local; echo ${arr[5]}; }; f; echo ${arr[5]:-unset}"
   }
 ]
