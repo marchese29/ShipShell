@@ -40,9 +40,7 @@ def exec_in_scope(code: str | IO[str], scope: str | None = None) -> None:
         if hasattr(__main__, scope):
             module = getattr(__main__, scope)
             if not isinstance(module, types.ModuleType):
-                raise ValueError(
-                    f"'{scope}' already exists in __main__ but is not a module"
-                )
+                raise ValueError(f"'{scope}' already exists in __main__ but is not a module")
         else:
             module = types.ModuleType(scope)
             setattr(__main__, scope, module)

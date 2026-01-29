@@ -22,9 +22,7 @@ class REPLHooks:
         self.before_execute: list[Callable[[str], None]] = []
         self.after_execute: list[Callable[[str], None]] = []
 
-    def on_before_execute(
-        self, callback: Callable[[str], None]
-    ) -> Callable[[str], None]:
+    def on_before_execute(self, callback: Callable[[str], None]) -> Callable[[str], None]:
         """Register a callback to run before executing code.
 
         Callback receives the code string.
@@ -33,9 +31,7 @@ class REPLHooks:
         self.before_execute.append(callback)
         return callback
 
-    def on_after_execute(
-        self, callback: Callable[[str], None]
-    ) -> Callable[[str], None]:
+    def on_after_execute(self, callback: Callable[[str], None]) -> Callable[[str], None]:
         """Register a callback to run after executing code.
 
         Callback receives the code string that was executed.

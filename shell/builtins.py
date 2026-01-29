@@ -62,8 +62,6 @@ def _is_variadic_tuple(hint) -> bool:
     return False
 
 
-
-
 def builtin_command[**P](f: Callable[P, None]) -> Callable[..., InProcessCallable]:
     """Decorator that wraps a function to behave as a shell builtin.
 
@@ -83,9 +81,7 @@ def builtin_command[**P](f: Callable[P, None]) -> Callable[..., InProcessCallabl
     - 1: General errors (e.g., file not found)
     - 2: Misuse of builtin (e.g., invalid flag, wrong argument type)
     """
-    validated: Callable[..., None] = validate_call(
-        config=ConfigDict(validate_default=True)
-    )(f)
+    validated: Callable[..., None] = validate_call(config=ConfigDict(validate_default=True))(f)
 
     hints = get_type_hints(f, include_extras=True)
     sig = inspect.signature(f)
@@ -131,18 +127,14 @@ def builtin_command[**P](f: Callable[P, None]) -> Callable[..., InProcessCallabl
             print(f'{f.__name__}: {e}', file=sys.stderr)
             return 1
         except Exception as e:
-            print(
-                f"{f.__name__}: unexpected exception '{type(e)}: {e}'", file=sys.stderr
-            )
+            print(f"{f.__name__}: unexpected exception '{type(e)}: {e}'", file=sys.stderr)
             return 1
 
     @wraps(f)
     def factory(*args, **kwargs) -> InProcessCallable:
         """Parse arguments and return an InProcessCallable runnable."""
         if args and kwargs:
-            raise ShellError(
-                'cannot mix positional and keyword arguments', exit_code=2
-            )
+            raise ShellError('cannot mix positional and keyword arguments', exit_code=2)
 
         # Keyword style: pass through directly
         if kwargs:
@@ -165,12 +157,7 @@ def builtin_command[**P](f: Callable[P, None]) -> Callable[..., InProcessCallabl
                 continue
             # Check if this looks like a flag (starts with - and isn't a number like -5)
             is_flag = False
-            if (
-                not end_of_flags
-                and isinstance(arg, str)
-                and arg.startswith('-')
-                and len(arg) > 1
-            ):
+            if not end_of_flags and isinstance(arg, str) and arg.startswith('-') and len(arg) > 1:
                 # Not a flag if it looks like a negative number (e.g., -5, -3.14)
                 after_dash = arg[1:].lstrip('-').replace('.', '', 1)
                 is_flag = not (after_dash.isdigit() if after_dash else False)
@@ -187,15 +174,13 @@ def builtin_command[**P](f: Callable[P, None]) -> Callable[..., InProcessCallabl
                         # Non-boolean flag consumes next value
                         if j + 1 < len(flags):
                             # Remaining chars in this flag group are the value
-                            parsed_kwargs[param_name] = flags[j + 1:]
+                            parsed_kwargs[param_name] = flags[j + 1 :]
                             break
                         elif i + 1 < len(args_list):
                             i += 1
                             parsed_kwargs[param_name] = args_list[i]
                         else:
-                            raise ShellError(
-                                f'flag -{flag_char} requires a value', exit_code=2
-                            )
+                            raise ShellError(f'flag -{flag_char} requires a value', exit_code=2)
             else:
                 positional_args.append(arg)
             i += 1
@@ -213,9 +198,7 @@ def builtin_command[**P](f: Callable[P, None]) -> Callable[..., InProcessCallabl
                 for i, name in enumerate(non_variadic_params):
                     parsed_kwargs[name] = positional_args[i]
                 # Collect remaining into variadic param as tuple
-                parsed_kwargs[variadic_param] = tuple(
-                    positional_args[len(non_variadic_params):]
-                )
+                parsed_kwargs[variadic_param] = tuple(positional_args[len(non_variadic_params) :])
         else:
             # No variadic parameter - strict positional count
             if len(positional_args) > len(positional_params):
@@ -228,9 +211,7 @@ def builtin_command[**P](f: Callable[P, None]) -> Callable[..., InProcessCallabl
             for i, value in enumerate(positional_args):
                 parsed_kwargs[positional_params[i]] = value
 
-        return InProcessCallable(
-            lambda kw=parsed_kwargs: impl(**kw), name=builtin_name
-        )
+        return InProcessCallable(lambda kw=parsed_kwargs: impl(**kw), name=builtin_name)
 
     # Register this builtin
     # Strip trailing underscore (used to avoid Python keyword conflicts like exit_)

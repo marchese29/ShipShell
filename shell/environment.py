@@ -328,8 +328,15 @@ class ShellEnvironment(MutableMapping):
     def __delitem__(self, key: str):
         match key:
             case (
-                '?' | '$' | 'HOME' | 'OLDPWD' | 'PATH' | 'PPID'
-                | 'PWD' | 'PYSH_CONFIG_DIR' | 'SHLVL'
+                '?'
+                | '$'
+                | 'HOME'
+                | 'OLDPWD'
+                | 'PATH'
+                | 'PPID'
+                | 'PWD'
+                | 'PYSH_CONFIG_DIR'
+                | 'SHLVL'
             ):
                 raise ValueError('Cannot delete built-in environment variables')
             case _:
@@ -342,8 +349,15 @@ class ShellEnvironment(MutableMapping):
     def __contains__(self, key: object) -> bool:
         match key:
             case (
-                '?' | '$' | 'HOME' | 'OLDPWD' | 'PATH' | 'PPID'
-                | 'PWD' | 'PYSH_CONFIG_DIR' | 'SHLVL'
+                '?'
+                | '$'
+                | 'HOME'
+                | 'OLDPWD'
+                | 'PATH'
+                | 'PPID'
+                | 'PWD'
+                | 'PYSH_CONFIG_DIR'
+                | 'SHLVL'
             ):
                 return True
             case _:

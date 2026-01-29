@@ -52,6 +52,7 @@ def _get_shell_dependencies() -> list[str]:
     deps = data.get('project', {}).get('dependencies', [])
     return [_strip_version(dep) for dep in deps]
 
+
 # Initial pyproject.toml content for new config directories
 _INITIAL_PYPROJECT = """\
 [project]
@@ -65,8 +66,6 @@ dependencies = []
 def get_venv_path() -> Path:
     """Get the path to the user's venv."""
     return env.config_dir / '.venv'
-
-
 
 
 def _get_python_version_from_venv(venv_path: Path) -> tuple[int, int] | None:

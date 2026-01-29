@@ -158,15 +158,9 @@ def _expand_range(content: str) -> list[str] | None:
             pad_width = max(pad_width, len(end))
 
         if start_num <= end_num:
-            return [
-                str(n).zfill(pad_width)
-                for n in range(start_num, end_num + 1, abs(increment))
-            ]
+            return [str(n).zfill(pad_width) for n in range(start_num, end_num + 1, abs(increment))]
         else:
-            return [
-                str(n).zfill(pad_width)
-                for n in range(start_num, end_num - 1, -abs(increment))
-            ]
+            return [str(n).zfill(pad_width) for n in range(start_num, end_num - 1, -abs(increment))]
     except ValueError:
         pass
 
@@ -181,11 +175,7 @@ def _split_commas(string: str) -> list[str]:
         char = string[i]
 
         # Deal with escaped characters
-        if (
-            char == '\\'
-            and i + 1 < len(string)
-            and string[i + 1] in ('{', '}', ',', '\\')
-        ):
+        if char == '\\' and i + 1 < len(string) and string[i + 1] in ('{', '}', ',', '\\'):
             current += char + string[i + 1]
             i += 2
             continue
@@ -237,11 +227,7 @@ def _expand_braces(string: str) -> list[str]:
             # Find the closing bracket
             while j < len(string) and depth > 0:
                 # Deal with escaped characters
-                if (
-                    string[j] == '\\'
-                    and j + 1 < len(string)
-                    and string[j + 1] in ('{', '}', '\\')
-                ):
+                if string[j] == '\\' and j + 1 < len(string) and string[j + 1] in ('{', '}', '\\'):
                     j += 2
                     continue
 
@@ -352,12 +338,10 @@ class SyntheticNode:
 
 class BashCSTVisitor(ABC):
     @abstractmethod
-    def execute(self, node: ts.Node):
-        ...
+    def execute(self, node: ts.Node): ...
 
     @abstractmethod
-    def visit_children(self, node: ts.Node) -> ShellRunnable:
-        ...
+    def visit_children(self, node: ts.Node) -> ShellRunnable: ...
 
     def visit(self, node: ts.Node) -> ShellRunnable:
         method_name = f'visit_{node.type}'
@@ -422,12 +406,12 @@ class BashInterpreter(BashCSTVisitor):
         'allexport': False,
         'verbose': False,
         'noexec': False,
-        'braceexpand': True,    # ON by default
+        'braceexpand': True,  # ON by default
         'noclobber': False,
         'errtrace': False,
         'functrace': False,
         'physical': False,
-        'hashall': True,        # ON by default
+        'hashall': True,  # ON by default
         'keyword': False,
         'onecmd': False,
         'privileged': False,
@@ -875,9 +859,15 @@ class BashInterpreter(BashCSTVisitor):
 
         # Verbose (-v): Print input lines as they are read (before expansion)
         if self._shell_options['verbose'] and node.type in (
-            'command', 'pipeline', 'list', 'compound_statement',
-            'if_statement', 'while_statement', 'for_statement',
-            'case_statement', 'function_definition',
+            'command',
+            'pipeline',
+            'list',
+            'compound_statement',
+            'if_statement',
+            'while_statement',
+            'for_statement',
+            'case_statement',
+            'function_definition',
         ):
             print(self._get_text(node), file=sys.stderr)
 
@@ -1022,9 +1012,7 @@ class BashInterpreter(BashCSTVisitor):
                 # Remove shortest prefix match
                 if arg1_str is None:
                     return value_str
-                regex = self._glob_pattern_to_regex(
-                    arg1_str, anchor_start=True, greedy=False
-                )
+                regex = self._glob_pattern_to_regex(arg1_str, anchor_start=True, greedy=False)
                 match = regex.match(value_str)
                 if match:
                     return value_str[match.end() :]
@@ -1034,9 +1022,7 @@ class BashInterpreter(BashCSTVisitor):
                 # Remove longest prefix match
                 if arg1_str is None:
                     return value_str
-                regex = self._glob_pattern_to_regex(
-                    arg1_str, anchor_start=True, greedy=True
-                )
+                regex = self._glob_pattern_to_regex(arg1_str, anchor_start=True, greedy=True)
                 match = regex.match(value_str)
                 if match:
                     return value_str[match.end() :]
@@ -1056,9 +1042,7 @@ class BashInterpreter(BashCSTVisitor):
                 # Remove longest suffix match
                 if arg1_str is None:
                     return value_str
-                regex = self._glob_pattern_to_regex(
-                    arg1_str, anchor_end=True, greedy=True
-                )
+                regex = self._glob_pattern_to_regex(arg1_str, anchor_end=True, greedy=True)
                 match = regex.search(value_str)
                 if match:
                     return value_str[: match.start()]
@@ -1317,11 +1301,7 @@ class BashInterpreter(BashCSTVisitor):
 
         # Find the command node (skip the $( and ) tokens)
         command_node = next(
-            (
-                c
-                for c in node.children
-                if c.is_named and c.type != 'command_substitution'
-            ),
+            (c for c in node.children if c.is_named and c.type != 'command_substitution'),
             None,
         )
 
@@ -1526,9 +1506,7 @@ class BashInterpreter(BashCSTVisitor):
                 if value is None:
                     var_name = self._get_text(value_node)
                     error_msg = (
-                        self._get_text(_expect(arg1))
-                        if arg1
-                        else 'parameter null or not set'
+                        self._get_text(_expect(arg1)) if arg1 else 'parameter null or not set'
                     )
                     raise BashScriptError(f'{var_name}: {error_msg}')
                 return _bash_to_str(value)
@@ -1537,9 +1515,7 @@ class BashInterpreter(BashCSTVisitor):
                 if value is None or value == '':
                     var_name = self._get_text(value_node)
                     error_msg = (
-                        self._get_text(_expect(arg1))
-                        if arg1
-                        else 'parameter null or not set'
+                        self._get_text(_expect(arg1)) if arg1 else 'parameter null or not set'
                     )
                     raise BashScriptError(f'{var_name}: {error_msg}')
                 return _bash_to_str(value)
@@ -1748,7 +1724,7 @@ class BashInterpreter(BashCSTVisitor):
         for child in node.children:
             # Capture literal text before this child
             if child.start_byte > current_pos:
-                result.append(self._source[current_pos:child.start_byte])
+                result.append(self._source[current_pos : child.start_byte])
 
             # Evaluate the child
             # In heredoc context, $@ and $* expand to all elements joined by space
@@ -1761,7 +1737,7 @@ class BashInterpreter(BashCSTVisitor):
 
         # Capture trailing literal text (or all text if no children)
         if node.end_byte > current_pos:
-            result.append(self._source[current_pos:node.end_byte])
+            result.append(self._source[current_pos : node.end_byte])
 
         return ''.join(result)
 
@@ -1938,10 +1914,7 @@ class BashInterpreter(BashCSTVisitor):
         elif op_text == '=~':
             # Regex match - use raw string values
             try:
-                result = (
-                    re.search(_bash_to_str(right_val_raw), _bash_to_str(left_val))
-                    is not None
-                )
+                result = re.search(_bash_to_str(right_val_raw), _bash_to_str(left_val)) is not None
                 return 1 if result else 0
             except re.error:
                 return 0
@@ -1980,20 +1953,12 @@ class BashInterpreter(BashCSTVisitor):
                     # Newer than (compare modification times)
                     if not left_path.exists() or not right_path.exists():
                         return 0
-                    return (
-                        1
-                        if left_path.stat().st_mtime > right_path.stat().st_mtime
-                        else 0
-                    )
+                    return 1 if left_path.stat().st_mtime > right_path.stat().st_mtime else 0
                 elif op_text == '-ot':
                     # Older than (compare modification times)
                     if not left_path.exists() or not right_path.exists():
                         return 0
-                    return (
-                        1
-                        if left_path.stat().st_mtime < right_path.stat().st_mtime
-                        else 0
-                    )
+                    return 1 if left_path.stat().st_mtime < right_path.stat().st_mtime else 0
                 elif op_text == '-ef':
                     # Same file (compare device and inode)
                     if not left_path.exists() or not right_path.exists():
@@ -2199,14 +2164,10 @@ class BashInterpreter(BashCSTVisitor):
                     return 1 if path.exists() and path.stat().st_size > 0 else 0
                 elif op_text == '-b':
                     # Block device
-                    return (
-                        1 if path.exists() and stat.S_ISBLK(path.stat().st_mode) else 0
-                    )
+                    return 1 if path.exists() and stat.S_ISBLK(path.stat().st_mode) else 0
                 elif op_text == '-c':
                     # Character device
-                    return (
-                        1 if path.exists() and stat.S_ISCHR(path.stat().st_mode) else 0
-                    )
+                    return 1 if path.exists() and stat.S_ISCHR(path.stat().st_mode) else 0
                 elif op_text == '-p':
                     # Named pipe (FIFO)
                     return 1 if path.is_fifo() else 0
@@ -2215,35 +2176,19 @@ class BashInterpreter(BashCSTVisitor):
                     return 1 if path.is_socket() else 0
                 elif op_text == '-u':
                     # Setuid bit set
-                    return (
-                        1
-                        if path.exists() and (path.stat().st_mode & stat.S_ISUID)
-                        else 0
-                    )
+                    return 1 if path.exists() and (path.stat().st_mode & stat.S_ISUID) else 0
                 elif op_text == '-g':
                     # Setgid bit set
-                    return (
-                        1
-                        if path.exists() and (path.stat().st_mode & stat.S_ISGID)
-                        else 0
-                    )
+                    return 1 if path.exists() and (path.stat().st_mode & stat.S_ISGID) else 0
                 elif op_text == '-k':
                     # Sticky bit set
-                    return (
-                        1
-                        if path.exists() and (path.stat().st_mode & stat.S_ISVTX)
-                        else 0
-                    )
+                    return 1 if path.exists() and (path.stat().st_mode & stat.S_ISVTX) else 0
                 elif op_text == '-G':
                     # Owned by effective group ID
-                    return (
-                        1 if path.exists() and path.stat().st_gid == os.getegid() else 0
-                    )
+                    return 1 if path.exists() and path.stat().st_gid == os.getegid() else 0
                 elif op_text == '-O':
                     # Owned by effective user ID
-                    return (
-                        1 if path.exists() and path.stat().st_uid == os.geteuid() else 0
-                    )
+                    return 1 if path.exists() and path.stat().st_uid == os.geteuid() else 0
                 elif op_text == '-N':
                     # Modified since last read
                     st = path.stat()
@@ -2276,9 +2221,7 @@ class BashInterpreter(BashCSTVisitor):
             case _:
                 return 0
 
-    def _apply_redirects(
-        self, runnable: ShellRunnable, node: ts.Node
-    ) -> ShellRunnable:
+    def _apply_redirects(self, runnable: ShellRunnable, node: ts.Node) -> ShellRunnable:
         """Apply all redirect nodes to a runnable and return the modified runnable.
 
         Temp files (e.g., for heredocs) are tracked in self._temp_files for cleanup.
@@ -2375,14 +2318,10 @@ class BashInterpreter(BashCSTVisitor):
 
                 # Strip leading tabs from each line if <<- was used
                 if strip_tabs:
-                    body_content = '\n'.join(
-                        line.lstrip('\t') for line in body_content.split('\n')
-                    )
+                    body_content = '\n'.join(line.lstrip('\t') for line in body_content.split('\n'))
 
                 # Write to temp file and track for cleanup
-                with tempfile.NamedTemporaryFile(
-                    mode='w', delete=False, suffix='.heredoc'
-                ) as f:
+                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.heredoc') as f:
                     f.write(body_content)
                     self._temp_files.append(f.name)
 
@@ -2397,9 +2336,7 @@ class BashInterpreter(BashCSTVisitor):
                         break
 
                 # Write to temp file (same approach as heredoc)
-                with tempfile.NamedTemporaryFile(
-                    mode='w', delete=False, suffix='.herestring'
-                ) as f:
+                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.herestring') as f:
                     f.write(string_content + '\n')  # Here strings add trailing newline
                     self._temp_files.append(f.name)
 
@@ -2427,6 +2364,7 @@ class BashInterpreter(BashCSTVisitor):
 
     def visit_case_statement(self, node: ts.Node) -> ShellRunnable:
         """Build case statement runnable with proper glob pattern matching."""
+
         def do_case():
             value_node = _expect(node.child_by_field_name('value'))
 
@@ -2545,9 +2483,11 @@ class BashInterpreter(BashCSTVisitor):
             # Build args for tracing (evaluated but not used by set handler)
             arg_nodes = node.children_by_field_name('argument')
             set_args = [_bash_to_str(self.evaluate(a)) for a in arg_nodes]
+
             def do_set():
                 self._handle_set_command(node)
                 return 0
+
             runnable: ShellRunnable = InProcessCallable(do_set, name='set')
             if self._shell_options['xtrace']:
                 display = 'set' if not set_args else f'set {" ".join(set_args)}'
@@ -2558,9 +2498,11 @@ class BashInterpreter(BashCSTVisitor):
             # Get optional return code for tracing
             arg_nodes = node.children_by_field_name('argument')
             return_args = [_bash_to_str(self.evaluate(a)) for a in arg_nodes]
+
             def do_return():
                 self._handle_return_command(node)
                 return 0
+
             runnable: ShellRunnable = InProcessCallable(do_return, name='return')
             if self._shell_options['xtrace']:
                 display = 'return' if not return_args else f'return {" ".join(return_args)}'
@@ -2617,8 +2559,9 @@ class BashInterpreter(BashCSTVisitor):
         """Handle the return builtin - exits from a function with an exit code."""
         if not self._is_in_function():
             # Not inside a function - bash prints error and continues
-            print('bash: return: can only `return` from a function or sourced script',
-                  file=sys.stderr)
+            print(
+                'bash: return: can only `return` from a function or sourced script', file=sys.stderr
+            )
             self._env.last_exit = 1
             return
 
@@ -2696,9 +2639,7 @@ class BashInterpreter(BashCSTVisitor):
                 self._env.traps.set(trap_type, None)
             elif handler_str == '':
                 # Ignore signal (empty handler)
-                self._env.traps.set(
-                    trap_type, InProcessCallable(lambda: 0, name='trap:noop')
-                )
+                self._env.traps.set(trap_type, InProcessCallable(lambda: 0, name='trap:noop'))
             else:
                 # Handler can be bash code OR a function name - both work!
                 handler = self._create_trap_handler(handler_str)
@@ -3165,11 +3106,7 @@ class BashInterpreter(BashCSTVisitor):
         return InProcessCallable(do_negated, name='!')
 
     def visit_pipeline(self, node: ts.Node) -> ShellRunnable:
-        commands = [
-            self.visit(child)
-            for child in node.children
-            if child.is_named
-        ]
+        commands = [self.visit(child) for child in node.children if child.is_named]
         if not commands:
             raise ValueError('Empty pipeline')
         if len(commands) == 1:
@@ -3219,16 +3156,51 @@ class BashInterpreter(BashCSTVisitor):
     #   4. primaries: comparisons (-eq, =), unary tests (-f, -z)
 
     _TEST_LOGICAL_OPS = frozenset({'-a', '-o', '!'})
-    _TEST_UNARY_OPS = frozenset({
-        '-e', '-f', '-d', '-r', '-w', '-x', '-s', '-L', '-h',
-        '-b', '-c', '-p', '-S', '-G', '-O', '-N', '-k', '-t', '-u', '-g',
-        '-z', '-n',
-    })
-    _TEST_BINARY_OPS = frozenset({
-        '-eq', '-ne', '-lt', '-le', '-gt', '-ge',
-        '=', '==', '!=', '<', '>',
-        '-nt', '-ot', '-ef', '=~',
-    })
+    _TEST_UNARY_OPS = frozenset(
+        {
+            '-e',
+            '-f',
+            '-d',
+            '-r',
+            '-w',
+            '-x',
+            '-s',
+            '-L',
+            '-h',
+            '-b',
+            '-c',
+            '-p',
+            '-S',
+            '-G',
+            '-O',
+            '-N',
+            '-k',
+            '-t',
+            '-u',
+            '-g',
+            '-z',
+            '-n',
+        }
+    )
+    _TEST_BINARY_OPS = frozenset(
+        {
+            '-eq',
+            '-ne',
+            '-lt',
+            '-le',
+            '-gt',
+            '-ge',
+            '=',
+            '==',
+            '!=',
+            '<',
+            '>',
+            '-nt',
+            '-ot',
+            '-ef',
+            '=~',
+        }
+    )
 
     # Expression structure nodes we recurse into; everything else is a leaf
     _TEST_EXPR_NODES = frozenset({'binary_expression', 'unary_expression'})
@@ -3249,10 +3221,12 @@ class BashInterpreter(BashCSTVisitor):
 
     def _test_needs_restructuring(self, node: ts.Node) -> bool:
         """Check if test expression contains -a, -o, or ! needing precedence fix."""
+
         def has_logical_op(n: ts.Node) -> bool:
             if n.child_count == 0:
                 return self._get_text(n) in self._TEST_LOGICAL_OPS
             return any(has_logical_op(c) for c in n.children)
+
         return has_logical_op(node)
 
     def _build_test_tree(self, leaves: list[ts.Node]) -> ts.Node | SyntheticNode:
@@ -3269,9 +3243,9 @@ class BashInterpreter(BashCSTVisitor):
             op = leaves[pos]
             pos += 1
             right, pos = self._build_test_and(leaves, pos)
-            left = SyntheticNode('binary_expression', {
-                'left': left, 'operator': op, 'right': [right]
-            })
+            left = SyntheticNode(
+                'binary_expression', {'left': left, 'operator': op, 'right': [right]}
+            )
         return left, pos
 
     def _build_test_and(
@@ -3283,9 +3257,9 @@ class BashInterpreter(BashCSTVisitor):
             op = leaves[pos]
             pos += 1
             right, pos = self._build_test_not(leaves, pos)
-            left = SyntheticNode('binary_expression', {
-                'left': left, 'operator': op, 'right': [right]
-            })
+            left = SyntheticNode(
+                'binary_expression', {'left': left, 'operator': op, 'right': [right]}
+            )
         return left, pos
 
     def _build_test_not(
@@ -3330,13 +3304,13 @@ class BashInterpreter(BashCSTVisitor):
             if pos < len(leaves) and self._get_text(leaves[pos]) not in self._TEST_LOGICAL_OPS:
                 right = leaves[pos]
                 pos += 1
-                return SyntheticNode('binary_expression', {
-                    'left': left, 'operator': op, 'right': [right]
-                }), pos
+                return SyntheticNode(
+                    'binary_expression', {'left': left, 'operator': op, 'right': [right]}
+                ), pos
             # Missing right operand
-            return SyntheticNode('binary_expression', {
-                'left': left, 'operator': op, 'right': []
-            }), pos
+            return SyntheticNode(
+                'binary_expression', {'left': left, 'operator': op, 'right': []}
+            ), pos
 
         # Single value (true if non-empty, like -n)
         return left, pos
@@ -3395,6 +3369,7 @@ class BashInterpreter(BashCSTVisitor):
 
     def visit_unset_command(self, node: ts.Node) -> ShellRunnable:
         """Build unset command runnable to remove variables"""
+
         def do_unset():
             for child in node.children:
                 if child.type in ('word', 'variable_name'):
@@ -3582,7 +3557,7 @@ def _wire_functions(
         if not py_name.isidentifier():
             warnings.warn(
                 f"Bash function '{func_name}' cannot be converted to valid Python "
-                f"identifier; skipping wiring",
+                f'identifier; skipping wiring',
                 stacklevel=3,
             )
             continue

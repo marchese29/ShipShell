@@ -19,7 +19,6 @@ Use this to:
     - Set basic environment variables (EDITOR, etc.)
 """
 
-
 from shell.environment import env
 
 # Uncomment to customize config directory location:

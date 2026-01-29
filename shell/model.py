@@ -64,10 +64,7 @@ class IOConfig:
     def merge_over(self, base: IOConfig | None) -> IOConfig:
         """Return new IOConfig merging self over base (self takes precedence)."""
         if base is None:
-            return IOConfig(
-                self.stdin, self.stdout, self.stderr,
-                self.append_out, self.append_err
-            )
+            return IOConfig(self.stdin, self.stdout, self.stderr, self.append_out, self.append_err)
         return IOConfig(
             stdin=self.stdin if self.stdin is not None else base.stdin,
             stdout=self.stdout if self.stdout is not None else base.stdout,
@@ -95,9 +92,7 @@ class ShellResult:
         return f'ShellResult(exit_code={self.exit_code})'
 
 
-def _resolve_fd(
-    target: FileLike | None, flags: int, default_fd: int | None = None
-) -> int | None:
+def _resolve_fd(target: FileLike | None, flags: int, default_fd: int | None = None) -> int | None:
     """
     Convert a FileLike to an actual file descriptor.
 
@@ -271,9 +266,7 @@ class ShellRunnable(ABC):
         ...
 
     @contextmanager
-    def _redirected(
-        self, io: IOConfig | None = None
-    ) -> Generator[None, None, None]:
+    def _redirected(self, io: IOConfig | None = None) -> Generator[None, None, None]:
         """Context manager for FD redirection, merging instance config with passed config.
 
         Handles:
@@ -511,9 +504,7 @@ class ShellRunnable(ABC):
     def neg(self) -> Negated:
         return Negated(self)
 
-    def if_success(
-        self, other: ShellRunnable | Program | Callable[[], Any]
-    ) -> ConditionalChain:
+    def if_success(self, other: ShellRunnable | Program | Callable[[], Any]) -> ConditionalChain:
         """Execute other only if this command succeeds (exit code 0).
 
         Equivalent to bash's && operator. Accepts ShellRunnable, Program, or callable.
@@ -529,9 +520,7 @@ class ShellRunnable(ABC):
             other = InProcessCallable(other)
         return ConditionalChain(self, other, on_success=True)
 
-    def if_fail(
-        self, other: ShellRunnable | Program | Callable[[], Any]
-    ) -> ConditionalChain:
+    def if_fail(self, other: ShellRunnable | Program | Callable[[], Any]) -> ConditionalChain:
         """Execute other only if this command fails (non-zero exit code).
 
         Equivalent to bash's || operator. Accepts ShellRunnable, Program, or callable.
@@ -547,9 +536,7 @@ class ShellRunnable(ABC):
             other = InProcessCallable(other)
         return ConditionalChain(self, other, on_success=False)
 
-    def __add__(
-        self, other: ShellRunnable | Program | Callable[[], Any]
-    ) -> ConditionalChain:
+    def __add__(self, other: ShellRunnable | Program | Callable[[], Any]) -> ConditionalChain:
         """Execute other only if this command succeeds. Alias for if_success().
 
         Example:
@@ -566,9 +553,7 @@ class ShellRunnable(ABC):
             return left + self
         return NotImplemented
 
-    def __sub__(
-        self, other: ShellRunnable | Program | Callable[[], Any]
-    ) -> ConditionalChain:
+    def __sub__(self, other: ShellRunnable | Program | Callable[[], Any]) -> ConditionalChain:
         """Execute other only if this command fails. Alias for if_fail().
 
         Example:
@@ -652,13 +637,9 @@ class Command(ShellRunnable):
 
         # Resolve redirections to file descriptors
         stdin_fd = _resolve_fd(actual.stdin, os.O_RDONLY, None)
-        stdout_flags = (
-            os.O_WRONLY | os.O_CREAT | (os.O_APPEND if actual.append_out else os.O_TRUNC)
-        )
+        stdout_flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if actual.append_out else os.O_TRUNC)
         stdout_fd = _resolve_fd(actual.stdout, stdout_flags, None)
-        stderr_flags = (
-            os.O_WRONLY | os.O_CREAT | (os.O_APPEND if actual.append_err else os.O_TRUNC)
-        )
+        stderr_flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if actual.append_err else os.O_TRUNC)
         stderr_fd = _resolve_fd(actual.stderr, stderr_flags, None)
 
         # Apply redirections (no save/restore needed - execve replaces process)
@@ -1144,15 +1125,11 @@ class Program:
         """Stdin redirect from file. Auto-calls with no args."""
         return self().with_stdin(source)
 
-    def with_stdout(
-        self, target: FileLike, append: bool = False
-    ) -> Command | InProcessCallable:
+    def with_stdout(self, target: FileLike, append: bool = False) -> Command | InProcessCallable:
         """Stdout redirect to file. Auto-calls with no args."""
         return self().with_stdout(target, append)
 
-    def with_stderr(
-        self, target: FileLike, append: bool = False
-    ) -> Command | InProcessCallable:
+    def with_stderr(self, target: FileLike, append: bool = False) -> Command | InProcessCallable:
         """Stderr redirect to file. Auto-calls with no args."""
         return self().with_stderr(target, append)
 
@@ -1168,15 +1145,11 @@ class Program:
         """Negate exit code. Auto-calls with no args."""
         return self().neg()
 
-    def if_success(
-        self, other: ShellRunnable | Program | Callable[[], Any]
-    ) -> ConditionalChain:
+    def if_success(self, other: ShellRunnable | Program | Callable[[], Any]) -> ConditionalChain:
         """Execute other only if this succeeds. Auto-calls with no args."""
         return self().if_success(other)
 
-    def if_fail(
-        self, other: ShellRunnable | Program | Callable[[], Any]
-    ) -> ConditionalChain:
+    def if_fail(self, other: ShellRunnable | Program | Callable[[], Any]) -> ConditionalChain:
         """Execute other only if this fails. Auto-calls with no args."""
         return self().if_fail(other)
 
