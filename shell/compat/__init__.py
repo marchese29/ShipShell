@@ -1,7 +1,7 @@
 """
-Compatibility layer for running non-Python shell scripts.
+Compatibility layer for running bash code with state synchronization.
 """
 
-from .bash import BashInterpreter, run_bash_code
+from .bash import BASH_PATH, BashSource, source_bash
 
-__all__ = ['BashInterpreter', 'run_bash_code']
+__all__ = ['BASH_PATH', 'BashSource', 'source_bash']

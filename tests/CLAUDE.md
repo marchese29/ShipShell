@@ -4,128 +4,85 @@
 
 Tests are organized by type:
 
-- `test_bash_compat.py` - Integration tests comparing bash interpreter against real bash
-- `test_bash_pure.py` - Unit tests for pure functions (no side effects)
+- `test_bash_subprocess.py` - Tests for bash subprocess runner (`source_bash`)
+- `test_io_extra_fds.py` - Tests for `IOConfig.extra_fds` and `capture()` with extra fds
 - `test_callable_pipeline.py` - Python API tests (pipelines, callables, process substitution)
 - `test_trap.py` - Trap system tests (DEBUG, ERR, EXIT, signals)
-- `test_function_wiring.py` - Shell function wiring tests
-- `test_harness_smoke.py` - Smoke tests for the test harness itself
 
-## Test Harness (`tests/bash/`)
+## Running Tests
 
-The harness provides fork-based isolation for running bash code:
+```bash
+# All tests
+uv run pytest tests/ -v
 
-### Key Functions
+# Specific test file
+uv run pytest tests/test_bash_subprocess.py -v
+
+# Single test
+uv run pytest tests/test_bash_subprocess.py::TestSourceBashBasic::test_simple_echo -v
+```
+
+## Bash Subprocess Tests (`test_bash_subprocess.py`)
+
+Tests for `source_bash()` which runs real bash with state synchronization:
 
 ```python
-from tests.bash import run_isolated, run_bash_reference, BashTest
+from shell.compat.bash import source_bash
+from shell.model import capture
 
-# Run code with our interpreter (isolated via fork)
-result = run_isolated('echo hello', setup_env={'FOO': 'bar'})
-# Returns: CapturedState(stdout, stderr, exit_code, env)
+# Basic execution
+result = capture(source_bash('echo hello'))
+assert result.read_stdout() == 'hello'
 
-# Run code with real bash for comparison
-bash_result = run_bash_reference('echo hello', setup_env={'FOO': 'bar'})
+# State sync
+source_bash('export FOO=bar')()
+assert env['FOO'] == 'bar'
 
-# Probe environment variables after execution
-result = run_isolated('export FOO=bar', probe_env_vars=['FOO'])
-print(result.env)  # {'FOO': 'bar'}
+# Function wiring
+source_bash('greet() { echo "hi $1"; }')()
+result = capture(greet('world'))
+assert result.read_stdout() == 'hi world'
 ```
 
-### BashTest Dataclass
+Key test classes:
+- `TestSourceBashBasic` - echo, exit codes, stdout
+- `TestSourceBashStateSync` - env vars, pwd, roundtrips
+- `TestSourceBashFunctions` - function wiring and calling
+- `TestSourceBashComposability` - pipelines, redirects
+
+## Extra FDs Tests (`test_io_extra_fds.py`)
+
+Tests for redirecting and capturing arbitrary file descriptors:
 
 ```python
-BashTest(
-    code='echo $FOO',           # Bash code to run
-    name='var_expansion',       # Test name (optional)
-    category='variable',        # Category for grouping (optional)
-    setup_env={'FOO': 'bar'},   # Environment setup
-    skip='reason',              # Skip with reason (optional)
-    check_stdout=True,          # Whether to compare stdout (default True)
-)
-```
+from shell.model import IOConfig, capture, InProcessCallable
+import os
 
-### Check Types (for explicit expectations)
+# Redirect fd 3 to file
+io = IOConfig().with_fd(3, '/tmp/log.txt')
 
-```python
-from tests.bash import Exact, Contains, Regex, LinesUnordered, Ignore, check
+# Capture fd 3 output
+def write_to_fd3():
+    os.write(3, b'hello from fd 3')
 
-assert check(result.stdout, Exact('hello\n'))
-assert check(result.stdout, Contains(['hello', 'world']))
-assert check(result.stdout, Regex(r'hello.*'))
-assert check(result.stdout, LinesUnordered(['line1', 'line2']))
-assert check(result.stderr, Ignore())  # Don't check
-```
-
-## Adding Bash Compatibility Tests
-
-Tests are defined in `bash_compat_tests.json` for easy maintenance. To add a new test:
-
-```json
-{"name": "my_test", "category": "echo", "code": "echo hello"}
-```
-
-With environment setup:
-```json
-{"name": "var_test", "category": "variable", "code": "echo $FOO", "setup_env": {"FOO": "bar"}}
-```
-
-Exit-code-only test (don't compare stdout):
-```json
-{"name": "exit_test", "category": "exit_code", "code": "exit 42", "check_stdout": false}
-```
-
-Categories help organize test output: `echo/my_test`, `variable/var_test`, etc.
-
-## Writing Custom Integration Tests
-
-Pattern for comparing against real bash:
-
-```python
-@pytest.mark.parametrize('test', TEST_CASES, ids=make_test_id)
-def test_feature(test: BashTest):
-    if test.skip:
-        pytest.skip(test.skip)
-
-    ours = run_isolated(test.code, test.setup_env)
-    bash = run_bash_reference(test.code, test.setup_env)
-
-    assert ours.stdout == bash.stdout
-    assert ours.exit_code == bash.exit_code
-```
-
-## Writing Unit Tests
-
-For pure functions with no side effects:
-
-```python
-from shell.compat.bash import _expand_braces, _bash_to_str
-
-class TestExpandBraces:
-    def test_simple_expansion(self):
-        assert _expand_braces('{a,b,c}') == ['a', 'b', 'c']
+result = capture(InProcessCallable(write_to_fd3), 3)
+assert result.read_fd(3) == 'hello from fd 3'
 ```
 
 ## Bash Version
 
-The test harness uses `BASH_PATH` (defined in `tests/bash/harness.py`) to locate bash:
+The bash runner uses `BASH_PATH` (defined in `shell/compat/bash.py`):
 - Prefers `/opt/homebrew/bin/bash` (bash 5.x via Homebrew)
 - Falls back to `/bin/bash` (macOS ships with bash 3.2)
 
-**Install modern bash for full feature testing:**
+**Install modern bash for full feature support:**
 ```bash
 brew install bash
 ```
 
-Features requiring bash 4.0+:
-- Associative arrays (`declare -A`)
-- Coproc (`coproc`)
-- `mapfile` / `readarray`
-- `${var,,}` / `${var^^}` case modification
-
 ## Architecture Notes
 
-- Fork-based isolation: Child process runs bash code, parent collects results
-- Exit codes come from `waitpid` status (not piped)
-- Probed env vars are written to a pipe as JSON
-- The global `env` singleton is used for command resolution (PATH lookup)
+- Fork-based isolation: Child process runs bash, parent collects state
+- State sync via dedicated pipe (fd 62) to avoid stdout/stderr interference
+- Exit codes come from `waitpid` status
+- Functions are wired as Python callables that return `BashSource` runnables

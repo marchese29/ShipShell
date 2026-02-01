@@ -23,11 +23,15 @@ class ShellEscapingException(Exception):
 
 
 class IOConfig:
-    """Encapsulates stdin/stdout/stderr configuration with mutable builder pattern.
+    """Encapsulates I/O redirection configuration with mutable builder pattern.
+
+    This is for REDIRECTING fds to targets (files, other fds, etc.).
+    For CAPTURING output, use capture(cmd, 3) with varargs.
 
     Usage:
         io = IOConfig().with_stdin(pipe_fd).with_stdout('/tmp/out.txt')
         io = IOConfig(stdin=pipe_fd, stdout='/tmp/out.txt')
+        io = IOConfig().with_fd(3, '/tmp/log.txt')  # Redirect fd 3 to file
     """
 
     def __init__(
@@ -37,12 +41,14 @@ class IOConfig:
         stderr: FileLike | None = None,
         append_out: bool = False,
         append_err: bool = False,
+        extra_fds: dict[int, FileLike] | None = None,
     ):
         self.stdin = stdin
         self.stdout = stdout
         self.stderr = stderr
         self.append_out = append_out
         self.append_err = append_err
+        self.extra_fds: dict[int, FileLike] = extra_fds or {}
 
     def with_stdin(self, source: FileLike) -> Self:
         """Set stdin source. Returns self for chaining."""
@@ -61,16 +67,34 @@ class IOConfig:
         self.append_err = append
         return self
 
+    def with_fd(self, fd: int, target: FileLike) -> Self:
+        """Redirect fd to target (file path or fd number). Returns self for chaining.
+
+        Example: IOConfig().with_fd(3, '/tmp/log.txt')  # Redirect fd 3 to file
+        Example: IOConfig().with_fd(3, 1)               # Redirect fd 3 to stdout
+        """
+        self.extra_fds[fd] = target
+        return self
+
     def merge_over(self, base: IOConfig | None) -> IOConfig:
         """Return new IOConfig merging self over base (self takes precedence)."""
         if base is None:
-            return IOConfig(self.stdin, self.stdout, self.stderr, self.append_out, self.append_err)
+            return IOConfig(
+                self.stdin,
+                self.stdout,
+                self.stderr,
+                self.append_out,
+                self.append_err,
+                dict(self.extra_fds),
+            )
+        merged_extra = {**base.extra_fds, **self.extra_fds}  # self wins
         return IOConfig(
             stdin=self.stdin if self.stdin is not None else base.stdin,
             stdout=self.stdout if self.stdout is not None else base.stdout,
             stderr=self.stderr if self.stderr is not None else base.stderr,
             append_out=self.append_out or base.append_out,
             append_err=self.append_err or base.append_err,
+            extra_fds=merged_extra,
         )
 
 
@@ -274,6 +298,7 @@ class ShellRunnable(ABC):
         - Saving original FDs and Python file objects
         - Resolving FileLike (path/int) to actual FDs
         - Applying dup2 redirections + reassigning sys.stdin/stdout/stderr
+        - Handling extra_fds for arbitrary fd redirections
         - Restoring everything on exit
         - Cleaning up on allocation failure (no FD leaks)
         """
@@ -290,6 +315,7 @@ class ShellRunnable(ABC):
         saved_sys_stdin = sys.stdin
         saved_sys_stdout = sys.stdout
         saved_sys_stderr = sys.stderr
+        saved_extra_fds: dict[int, int] = {}  # fd num -> saved dup
 
         try:
             # Track which FDs we're opening from paths (vs received as int)
@@ -316,6 +342,19 @@ class ShellRunnable(ABC):
             if stderr_is_path and stderr_fd is not None:
                 fds_to_cleanup.append(stderr_fd)
 
+            # Resolve extra fds (for redirecting arbitrary fds like 3, 4, etc.)
+            extra_fd_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            resolved_extra_fds: dict[int, int] = {}  # target fd -> source fd
+            extra_is_path: dict[int, bool] = {}
+            for target_fd, source in actual.extra_fds.items():
+                is_path = not isinstance(source, int)
+                extra_is_path[target_fd] = is_path
+                resolved = _resolve_fd(source, extra_fd_flags, None)
+                if resolved is not None:
+                    resolved_extra_fds[target_fd] = resolved
+                    if is_path:
+                        fds_to_cleanup.append(resolved)
+
             # Save current state (only if we're actually going to redirect)
             if stdin_fd is not None and stdin_fd != 0:
                 saved_stdin_fd = os.dup(0)
@@ -326,6 +365,15 @@ class ShellRunnable(ABC):
             if stderr_fd is not None and stderr_fd != 2:
                 saved_stderr_fd = os.dup(2)
                 fds_to_cleanup.append(saved_stderr_fd)
+
+            # Save extra fds if they exist
+            for target_fd in resolved_extra_fds:
+                try:
+                    saved_extra_fds[target_fd] = os.dup(target_fd)
+                    fds_to_cleanup.append(saved_extra_fds[target_fd])
+                except OSError:
+                    # FD doesn't exist yet, nothing to save
+                    pass
 
             # Flush before redirecting
             sys.stdout.flush()
@@ -353,10 +401,21 @@ class ShellRunnable(ABC):
                     fds_to_cleanup.remove(stderr_fd)
                 sys.stderr = os.fdopen(2, 'w', closefd=False)
 
+            # Apply extra fd redirections
+            for target_fd, source_fd in resolved_extra_fds.items():
+                os.dup2(source_fd, target_fd)
+                if extra_is_path[target_fd] and source_fd > 2 and source_fd not in {0, 1, 2}:
+                    os.close(source_fd)
+                    if source_fd in fds_to_cleanup:
+                        fds_to_cleanup.remove(source_fd)
+
             # Transfer saved fds out of cleanup list (they're managed by finally now)
             for fd in [saved_stdin_fd, saved_stdout_fd, saved_stderr_fd]:
                 if fd is not None and fd in fds_to_cleanup:
                     fds_to_cleanup.remove(fd)
+            for saved_fd in saved_extra_fds.values():
+                if saved_fd in fds_to_cleanup:
+                    fds_to_cleanup.remove(saved_fd)
 
             yield  # Run the caller's code with redirected FDs
 
@@ -383,6 +442,10 @@ class ShellRunnable(ABC):
                 os.dup2(saved_stderr_fd, 2)
                 os.close(saved_stderr_fd)
                 sys.stderr = saved_sys_stderr
+            # Restore extra fds
+            for target_fd, saved_fd in saved_extra_fds.items():
+                os.dup2(saved_fd, target_fd)
+                os.close(saved_fd)
 
     def __call__(self) -> ShellResult:
         return run(self)
@@ -404,10 +467,10 @@ class ShellRunnable(ABC):
         if isinstance(self, Pipeline):
             raise RuntimeError('Pipeline should override | operator')
 
-        self = cast(NotPipeline, self)
+        self = cast(ShellRunnable, self)
         if isinstance(pipeline := value, Pipeline):
             return Pipeline([self, *pipeline.predecessors], pipeline.final_cmd)
-        value = cast(NotPipeline, value)
+        value = cast(ShellRunnable, value)
         return Pipeline([self], value)
 
     def __ror__(self, value: Program | Callable[[], Any]) -> Pipeline:
@@ -754,8 +817,8 @@ class Pipeline(ShellRunnable):
 
     def __init__(
         self,
-        predecessors: list[NotPipeline],
-        final_cmd: NotPipeline,
+        predecessors: list[ShellRunnable],
+        final_cmd: ShellRunnable,
         pipefail: bool = False,
         inherit_traps: bool = False,
     ):
@@ -771,12 +834,12 @@ class Pipeline(ShellRunnable):
         actual = self._io.merge_over(io)
 
         # Print all traces in order BEFORE forking to ensure deterministic output
-        all_stages: list[NotPipeline] = [*self.predecessors, self.final_cmd]
-        unwrapped: list[NotPipeline] = []
+        all_stages: list[ShellRunnable] = [*self.predecessors, self.final_cmd]
+        unwrapped: list[ShellRunnable] = []
         for stage in all_stages:
             if isinstance(stage, TracedRunnable):
                 print(f'{stage._prefix}{stage._display_text}', file=sys.stderr)
-                unwrapped.append(cast(NotPipeline, stage._inner))
+                unwrapped.append(cast(ShellRunnable, stage._inner))
             else:
                 unwrapped.append(stage)
 
@@ -916,7 +979,7 @@ class Pipeline(ShellRunnable):
                 pipeline.final_cmd,
                 pipefail=self.pipefail or pipeline.pipefail,
             )
-        value = cast(NotPipeline, value)
+        value = cast(ShellRunnable, value)
         return Pipeline([*self.predecessors, self.final_cmd], value, pipefail=self.pipefail)
 
 
@@ -1048,9 +1111,6 @@ class TracedRunnable(ShellRunnable):
         # Merge our IO config with passed io so redirects propagate to inner
         actual = self._io.merge_over(io)
         return run(self._inner, actual)
-
-
-NotPipeline = Command | InProcessCallable | Subshell | Negated | ConditionalChain | TracedRunnable
 
 
 class Program:
@@ -1195,14 +1255,22 @@ def sub(runnable: ShellRunnable) -> Subshell:
 
 
 class CapturedResult:
-    """Result of a captured command execution with access to stdout/stderr."""
+    """Result of a captured command execution with access to stdout/stderr and extra fds."""
 
-    def __init__(self, exit_code: int, stdout_fd: int, stderr_fd: int):
+    def __init__(
+        self,
+        exit_code: int,
+        stdout_fd: int,
+        stderr_fd: int,
+        extra_fds: dict[int, int] | None = None,
+    ):
         self.exit_code = exit_code
         self._stdout_fd: int | None = stdout_fd
         self._stderr_fd: int | None = stderr_fd
         self._stdout_cache: str | None = None
         self._stderr_cache: str | None = None
+        self._extra_fds: dict[int, int] = extra_fds or {}  # fd num -> pipe read fd
+        self._extra_cache: dict[int, str] = {}
 
     def __bool__(self) -> bool:
         """True if command succeeded (exit code 0)."""
@@ -1234,6 +1302,19 @@ class CapturedResult:
             self._stderr_fd = None
         return self._stderr_cache
 
+    def read_fd(self, fd: int) -> str:
+        """Read captured output from arbitrary fd (trailing whitespace stripped)."""
+        if fd in self._extra_cache:
+            return self._extra_cache[fd]
+        if fd not in self._extra_fds:
+            return ''
+        try:
+            with os.fdopen(self._extra_fds[fd], 'r') as f:
+                self._extra_cache[fd] = f.read().rstrip()
+        finally:
+            del self._extra_fds[fd]
+        return self._extra_cache[fd]
+
     def __del__(self):
         """Clean up any unclosed file descriptors."""
         if self._stdout_fd is not None:
@@ -1246,38 +1327,59 @@ class CapturedResult:
                 os.close(self._stderr_fd)
             except OSError:
                 pass
+        # Clean up any unclosed extra fds
+        for pipe_fd in list(self._extra_fds.values()):
+            try:
+                os.close(pipe_fd)
+            except OSError:
+                pass
 
     def __repr__(self) -> str:
         return f'CapturedResult(exit_code={self.exit_code})'
 
 
-def capture(runnable: ShellRunnable) -> CapturedResult:
+def capture(runnable: ShellRunnable, *extra_fds: int) -> CapturedResult:
     """
-    Execute a runnable and capture its stdout and stderr.
+    Execute a runnable and capture stdout, stderr, and optionally extra fds.
+
+    Args:
+        runnable: The command to run
+        *extra_fds: Additional file descriptors to capture (e.g., 3 to capture fd 3)
 
     Returns a CapturedResult with the exit code and methods to read
     the captured output.
 
-    Example:
+    Examples:
         result = capture(prog("ls")("-la"))
         print(result.read_stdout())
         if not result:
             print("Error:", result.read_stderr())
+
+        # Capture fd 3 as well
+        result = capture(cmd, 3)
+        state = result.read_fd(3)
     """
     # Flush before forking to avoid duplicated output
     sys.stdout.flush()
     sys.stderr.flush()
 
-    # Create pipes for stdout and stderr
+    # Create pipes for stdout and stderr (always captured)
     stdout_r, stdout_w = os.pipe()
     stderr_r, stderr_w = os.pipe()
+
+    # Create pipes for explicitly requested extra fds
+    extra_pipes = {fd: os.pipe() for fd in extra_fds}
 
     # Fork to run the command
     pid = os.fork()
     if pid == 0:
-        # Child process
+        # Child process: close read ends
         os.close(stdout_r)
         os.close(stderr_r)
+        for fd, (r, w) in extra_pipes.items():
+            os.close(r)
+            os.dup2(w, fd)  # Make fd point to pipe write end
+            os.close(w)
 
         # Execute with redirected stdout/stderr
         result = runnable._exec(IOConfig(stdout=stdout_w, stderr=stderr_w))
@@ -1286,11 +1388,15 @@ def capture(runnable: ShellRunnable) -> CapturedResult:
         os.close(stderr_w)
         os._exit(result.exit_code)
     else:
-        # Parent process
+        # Parent process: close write ends, collect read ends
         os.close(stdout_w)
         os.close(stderr_w)
+        extra_read_fds = {}
+        for fd, (r, w) in extra_pipes.items():
+            os.close(w)
+            extra_read_fds[fd] = r
 
-        return CapturedResult(_wait_child(pid), stdout_r, stderr_r)
+        return CapturedResult(_wait_child(pid), stdout_r, stderr_r, extra_read_fds)
 
 
 class ProcessSubstitution:

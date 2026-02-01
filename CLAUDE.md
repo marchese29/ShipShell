@@ -43,10 +43,9 @@ uv run python main.py
 uv run python demo.py
 
 # Testing
-uv run pytest tests/ -v                    # All tests
-uv run pytest tests/test_bash_compat.py -v # Integration tests vs real bash
-uv run pytest tests/test_bash_pure.py -v   # Unit tests for pure functions
-uv run pytest tests/test_bash_compat.py::test_bash_compat[category/name] -v  # Single test
+uv run pytest tests/ -v                              # All tests
+uv run pytest tests/test_bash_subprocess.py -v       # Bash subprocess tests
+uv run pytest tests/test_callable_pipeline.py -v     # Python API tests
 
 # Quality gates (run before committing)
 uv run ruff check shell/
@@ -56,35 +55,26 @@ uv run pyright shell/
 ## Testing
 
 Test organization:
-- `tests/test_bash_compat.py` - Integration tests comparing against real bash
-- `tests/test_bash_pure.py` - Unit tests for pure functions
+- `tests/test_bash_subprocess.py` - Bash subprocess runner tests (`source_bash`)
+- `tests/test_io_extra_fds.py` - Extra file descriptor redirection/capture tests
 - `tests/test_callable_pipeline.py` - Python API tests (pipelines, process substitution, conditional chaining)
 - `tests/test_trap.py` - Trap system tests
-- `tests/test_function_wiring.py` - Shell function wiring tests
-- `tests/test_harness_smoke.py` - Harness smoke tests
 
-See `tests/CLAUDE.md` for detailed testing patterns and the test harness API.
+See `tests/CLAUDE.md` for detailed testing patterns.
 
-### Bash Version Requirements
+### Bash Version
 
-The test harness compares our bash interpreter against real bash. **macOS ships with bash 3.2**, which lacks modern features:
-- Associative arrays (`declare -A`) - requires bash 4.0+
-- Many other features added in bash 4.x/5.x
+The bash runner prefers `/opt/homebrew/bin/bash` (bash 5.x via Homebrew) over `/bin/bash` (macOS ships with bash 3.2). Install modern bash for full feature support:
 
-The harness prefers `/opt/homebrew/bin/bash` if available (install via `brew install bash`). This gives you bash 5.x with full feature support. Otherwise it falls back to `/bin/bash`.
-
-**To install modern bash:**
 ```bash
 brew install bash
 ```
 
-The harness constant `BASH_PATH` in `tests/bash/harness.py` controls which bash is used.
-
 ## Component Documentation
 
 Component-specific patterns and debugging utilities:
-- `tests/CLAUDE.md` - Test harness API and testing patterns
-- `shell/compat/CLAUDE.md` - Bash interpreter debugging and visitor patterns
+- `tests/CLAUDE.md` - Testing patterns
+- `shell/compat/CLAUDE.md` - Bash subprocess runner and state synchronization
 
 **⚠️ Keep documentation current**: Before committing code changes, ALWAYS consider if CLAUDE.md files need updates. New features, API changes, and architectural insights should be reflected here. These files are the primary onboarding path for agents - stale docs waste context and cause confusion.
 
@@ -98,7 +88,7 @@ Component-specific patterns and debugging utilities:
 - **`shell/builtins.py`** - Shell builtins (cd, pwd, echo, test, source, trap, set, etc.)
 - **`shell/trap.py`** - Trap system for shell events and signals
 - **`shell/repl/`** - Interactive REPL using prompt_toolkit
-- **`shell/compat/bash.py`** - Bash syntax interpreter using tree-sitter (3300+ lines)
+- **`shell/compat/bash.py`** - Bash subprocess runner with state synchronization (~400 lines)
 
 ### Python Shell API (`shell/model.py`)
 
@@ -159,14 +149,26 @@ prog('cat')().stdin_content('hello world')()
 prog('wc')('-l').stdin_content(open('data.txt'))()  # File-like objects too
 ```
 
-### Bash Interpreter Pattern
+### Bash Compatibility (`shell/compat/bash.py`)
 
-The interpreter in `shell/compat/bash.py` uses a visitor pattern:
-- `visit_*` methods build `ShellRunnable` objects (deferred execution)
-- `evaluate_*` methods return `BashValue` (expansions, expressions)
-- `execute()` dispatches to `visit_*` and runs the returned runnable
+The bash compatibility layer runs **real bash** as a subprocess and synchronizes state back to Python:
 
-Pure functions (tested in `test_bash_pure.py`): `_bash_to_str()`, `_expand_braces()`, `_split_commas()`, etc.
+```python
+from shell.compat.bash import source_bash
+
+# Source bash code - modifies environment, wires functions
+source_bash('export FOO=bar')()
+source_bash('greet() { echo "hi $1"; }')()
+
+# Composable with pipelines
+source_bash('ls -la') | grep('txt')
+
+# Wired functions return runnables
+greet('world')()              # Execute
+greet('world') | prog('cat')  # Compose
+```
+
+State synchronized: environment variables, working directory, bash functions (wired as Python callables).
 
 ### Process Substitution (`shell/model.py`)
 
@@ -226,33 +228,6 @@ prog('true')() + lambda: print('done!')
 - Uncalled `Program` objects auto-call with no args: `prog('true') + prog('echo')` works
 - Plain callables auto-wrapped in `InProcessCallable`
 - Exit code comes from last command that actually ran
-
-### Shell Options
-
-The interpreter supports bash shell options via `set -o` / `set +o`:
-
-| Option | Flag | Description |
-|--------|------|-------------|
-| `errexit` | `-e` | Exit on command failure |
-| `nounset` | `-u` | Error on unset variables |
-| `xtrace` | `-x` | Print commands before execution |
-| `pipefail` | | Pipeline fails if any stage fails |
-| `errtrace` | `-E` | ERR trap inherited by functions/subshells |
-| `functrace` | `-T` | DEBUG/RETURN traps inherited by functions |
-| `noclobber` | `-C` | Prevent `>` from overwriting files |
-| `noglob` | `-f` | Disable pathname expansion |
-| `allexport` | `-a` | Export all variables |
-| `braceexpand` | `-B` | Enable brace expansion (default on) |
-
-### Special Variables
-
-| Variable | Description |
-|----------|-------------|
-| `LINENO` | Current line number in script |
-| `FUNCNAME` | Array of function call stack names |
-| `BASH_LINENO` | Array of line numbers in call stack |
-| `BASH_SOURCE` | Array of source file names in call stack |
-| `BASH_SUBSHELL` | Subshell nesting depth (0 = main shell) |
 
 ### Trap System (`shell/trap.py`)
 

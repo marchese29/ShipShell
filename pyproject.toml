@@ -8,8 +8,6 @@ dependencies = [
     "prompt-toolkit>=3.0.52",
     "pydantic>=2.12.5",
     "pygments>=2.19.2",
-    "tree-sitter>=0.25.2",
-    "tree-sitter-bash>=0.25.1",
 ]
 
 [dependency-groups]
