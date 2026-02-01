@@ -1,5 +1,5 @@
 #!/bin/bash
-# Pre-commit hook: runs linting, formatting, and type checking
+# Pre-commit hook: runs linting, formatting, type checking, and tests
 
 set -e
 
@@ -11,5 +11,8 @@ uv run ruff format --check shell/
 
 echo "Running pyright..."
 uv run pyright shell/
+
+echo "Running tests..."
+uv run pytest tests/ -q
 
 echo "All checks passed!"
