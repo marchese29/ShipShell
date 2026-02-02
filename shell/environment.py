@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import os
 import platform
 from collections.abc import Iterator, MutableMapping
@@ -16,6 +17,13 @@ class ColonDelimitedPath(list[Path]):
 
     Used for PATH-like environment variables. Constructor only accepts
     a colon-separated string for parsing (so type coercion works via type(value)).
+
+    Note: Environment access returns copies of this object. To modify PATH,
+    mutate the copy and assign it back:
+
+        path = env.path
+        path.append(Path('/new/dir'))
+        env.path = path
     """
 
     def __init__(self, colon_string: str = ''):
@@ -31,6 +39,16 @@ class ColonDelimitedPath(list[Path]):
 
     def __repr__(self) -> str:
         return f'ColonDelimitedPath({list.__repr__(self)})'
+
+    def __copy__(self) -> ColonDelimitedPath:
+        """Return a copy as ColonDelimitedPath (not a plain list)."""
+        result = ColonDelimitedPath()
+        result.extend(self)
+        return result
+
+    def __deepcopy__(self, memo: dict) -> ColonDelimitedPath:
+        """Deep copy. Paths are immutable so shallow copy suffices."""
+        return self.__copy__()
 
 
 def env_to_str(e: Any) -> str:
@@ -247,7 +265,8 @@ class ShellEnvironment(MutableMapping):
 
     @property
     def path(self) -> ColonDelimitedPath:
-        return self._path
+        """Return a copy of PATH. Mutate and reassign to modify."""
+        return copy.copy(self._path)
 
     @path.setter
     def path(self, value: str | list[str] | list[Path] | ColonDelimitedPath):
@@ -280,13 +299,21 @@ class ShellEnvironment(MutableMapping):
         os.environ['PYSH_CONFIG_DIR'] = str(value)
 
     def __getitem__(self, key: str) -> Any | None:
+        """Get an environment variable. Returns a copy for mutable values.
+
+        To modify a mutable value, mutate the copy and assign it back:
+
+            path = env['PATH']
+            path.append('/new/dir')
+            env['PATH'] = path  # Assigns back
+        """
         match key:
             case 'HOME':
                 return self._home
             case 'OLDPWD':
                 return self._old_pwd
             case 'PATH':
-                return self._path
+                return copy.copy(self._path)
             case 'PPID':
                 return self._ppid
             case 'PWD':
@@ -300,7 +327,11 @@ class ShellEnvironment(MutableMapping):
             case '$':
                 return self._pid
             case _:
-                return self._env[key]
+                value = self._env[key]
+                # Return copies for mutable values; strings are immutable
+                if isinstance(value, str):
+                    return value
+                return copy.deepcopy(value)
 
     def get_type_hint(self, key: str) -> type | None:
         """Get the type hint for a variable (for bash sync-back)."""
@@ -312,11 +343,18 @@ class ShellEnvironment(MutableMapping):
 
     def __setitem__(self, key: str, value: Any):
         match key:
-            case '?' | '$' | 'HOME' | 'OLDPWD' | 'PATH' | 'PPID' | 'PWD' | 'SHLVL' as k:
-                raise NotImplementedError(f'Direct manipulation of {k} in environment')
+            # Read-only computed variables
+            case '?' | '$' | 'HOME' | 'PPID' | 'SHLVL' as k:
+                raise ValueError(f'{k} is read-only')
+            # Settable computed variables - delegate to property setters
+            case 'PATH':
+                self.path = value
+            case 'PWD':
+                self.pwd = Path(value) if not isinstance(value, Path) else value
+            case 'OLDPWD':
+                self.old_pwd = Path(value) if value and not isinstance(value, Path) else value
             case 'PYSH_CONFIG_DIR':
-                self._pysh_config_dir = Path(value) if not isinstance(value, Path) else value
-                os.environ[key] = str(self._pysh_config_dir)
+                self.config_dir = Path(value) if not isinstance(value, Path) else value
             case _:
                 self._env[key] = value
                 # Record type hint for non-string values (for bash sync-back)

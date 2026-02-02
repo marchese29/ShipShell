@@ -11,15 +11,32 @@ from shell.environment import ColonDelimitedPath, env
 @pytest.fixture(autouse=True)
 def reset_env():
     """Reset environment state between tests."""
+    import copy
+    import os
+
     # Store original state
     original_env = dict(env._env)
     original_hints = dict(env._type_hints)
+    original_path = copy.copy(env._path)
+    original_pwd = env._pwd
+    original_old_pwd = env._old_pwd
+    original_os_environ_path = os.environ.get('PATH', '')
+    original_os_environ_pwd = os.environ.get('PWD', '')
+    original_os_environ_oldpwd = os.environ.get('OLDPWD', '')
+
     yield
+
     # Restore
     env._env.clear()
     env._env.update(original_env)
     env._type_hints.clear()
     env._type_hints.update(original_hints)
+    env._path = original_path
+    env._pwd = original_pwd
+    env._old_pwd = original_old_pwd
+    os.environ['PATH'] = original_os_environ_path
+    os.environ['PWD'] = original_os_environ_pwd
+    os.environ['OLDPWD'] = original_os_environ_oldpwd
 
 
 class TestColonDelimitedPath:
@@ -179,3 +196,144 @@ class TestInheritance:
         assert isinstance(env['PWD'], Path)
         assert isinstance(env['SHLVL'], int)
         assert isinstance(env['PPID'], int)
+
+
+class TestSetItem:
+    """Tests for __setitem__ on computed variables."""
+
+    def test_setitem_path_works(self):
+        """env['PATH'] = value should work like env.path = value."""
+        import os
+
+        env['PATH'] = ColonDelimitedPath('/test/bin:/other/bin')
+
+        assert '/test/bin' in os.environ['PATH']
+        assert Path('/test/bin') in env.path
+
+    def test_setitem_path_from_string(self):
+        """env['PATH'] can be set from a colon-separated string."""
+        import os
+
+        env['PATH'] = '/a:/b:/c'
+
+        assert os.environ['PATH'] == '/a:/b:/c'
+        assert list(env.path) == [Path('/a'), Path('/b'), Path('/c')]
+
+    def test_setitem_pwd_works(self):
+        """env['PWD'] = value should work."""
+        import os
+
+        env['PWD'] = Path('/tmp')
+
+        assert os.environ['PWD'] == '/tmp'
+        assert env.pwd == Path('/tmp')
+
+    def test_setitem_oldpwd_works(self):
+        """env['OLDPWD'] = value should work."""
+        import os
+
+        env['OLDPWD'] = Path('/previous')
+
+        assert os.environ['OLDPWD'] == '/previous'
+        assert env.old_pwd == Path('/previous')
+
+    def test_setitem_readonly_raises(self):
+        """Read-only computed variables should raise ValueError."""
+        with pytest.raises(ValueError, match='read-only'):
+            env['HOME'] = '/new/home'
+
+        with pytest.raises(ValueError, match='read-only'):
+            env['PPID'] = 12345
+
+        with pytest.raises(ValueError, match='read-only'):
+            env['SHLVL'] = 99
+
+        with pytest.raises(ValueError, match='read-only'):
+            env['$'] = 12345
+
+        with pytest.raises(ValueError, match='read-only'):
+            env['?'] = 0
+
+
+class TestCopyOnRead:
+    """Tests for copy-on-read semantics (mutations don't affect stored values)."""
+
+    def test_path_property_returns_copy(self):
+        """env.path returns a copy; mutations don't affect the original."""
+        import os
+
+        original_path_str = os.environ['PATH']
+        path = env.path
+        path.append(Path('/should/not/persist'))
+
+        # Original should be unchanged
+        assert os.environ['PATH'] == original_path_str
+        assert Path('/should/not/persist') not in env.path
+
+    def test_path_getitem_returns_copy(self):
+        """env['PATH'] returns a copy; mutations don't affect the original."""
+        import os
+
+        original_path_str = os.environ['PATH']
+        path = env['PATH']
+        path.append(Path('/should/not/persist'))
+
+        # Original should be unchanged
+        assert os.environ['PATH'] == original_path_str
+        assert Path('/should/not/persist') not in env['PATH']
+
+    def test_path_assignment_updates_environ(self):
+        """Assigning back to env.path does update os.environ."""
+        import os
+
+        path = env.path
+        path.append(Path('/new/path'))
+        env.path = path
+
+        # Now it should be updated
+        assert '/new/path' in os.environ['PATH']
+        assert Path('/new/path') in env.path
+
+    def test_mutable_user_value_returns_copy(self):
+        """User-stored mutable values return deep copies."""
+
+        class TagList(list):
+            def __str__(self):
+                return ','.join(self)
+
+        env['TAGS'] = TagList(['python', 'shell'])
+        tags = env['TAGS']
+        tags.append('mutated')
+
+        # Original should be unchanged
+        assert 'mutated' not in env['TAGS']
+        assert list(env['TAGS']) == ['python', 'shell']
+
+    def test_string_values_not_copied(self):
+        """String values are immutable, no copy needed."""
+        env['MY_STR'] = 'hello'
+        value = env['MY_STR']
+        # Strings are immutable, so identity doesn't matter
+        assert value == 'hello'
+
+    def test_colon_delimited_path_copy_preserves_type(self):
+        """copy.copy() on ColonDelimitedPath returns ColonDelimitedPath."""
+        import copy
+
+        cdp = ColonDelimitedPath('/usr/bin:/bin')
+        copied = copy.copy(cdp)
+
+        assert isinstance(copied, ColonDelimitedPath)
+        assert copied is not cdp
+        assert list(copied) == list(cdp)
+
+    def test_colon_delimited_path_deepcopy_preserves_type(self):
+        """copy.deepcopy() on ColonDelimitedPath returns ColonDelimitedPath."""
+        import copy
+
+        cdp = ColonDelimitedPath('/usr/bin:/bin')
+        copied = copy.deepcopy(cdp)
+
+        assert isinstance(copied, ColonDelimitedPath)
+        assert copied is not cdp
+        assert list(copied) == list(cdp)

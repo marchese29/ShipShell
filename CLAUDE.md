@@ -84,7 +84,7 @@ Component-specific patterns and debugging utilities:
 
 - **`main.py`** - Entry point for the interactive REPL
 - **`shell/model.py`** - **The heart of ShipShell**: Pythonic shell abstractions (`ShellRunnable`, `Command`, `Pipeline`, `Subshell`, `ProcessSubstitution`, `ConditionalChain`, `capture()`, `prog()`)
-- **`shell/environment.py`** - Shell environment state (`ShellEnvironment` singleton)
+- **`shell/environment.py`** - Shell environment state (`ShellEnvironment` singleton, copy-on-read for mutables)
 - **`shell/builtins.py`** - Shell builtins (cd, pwd, echo, test, source, trap, set, etc.)
 - **`shell/trap.py`** - Trap system for shell events and signals
 - **`shell/repl/`** - Interactive REPL using prompt_toolkit
@@ -297,6 +297,30 @@ def set_trap(handler: ShellRunnable, signal: TrapType):
 # DO expose a clean Python API instead
 env.traps.set(TrapType.EXIT, handler)
 ```
+
+### Environment (`shell/environment.py`)
+
+The shell environment uses **copy-on-read semantics** for mutable values. When you access a mutable value like `PATH`, you get a copy—mutations don't affect the stored value:
+
+```python
+# This does NOT modify PATH:
+path = env.path
+path.append(Path('/new/dir'))  # Mutates a copy
+
+# This DOES modify PATH:
+path = env.path
+path.append(Path('/new/dir'))
+env.path = path  # Explicit reassignment
+# Or equivalently:
+env['PATH'] = path
+```
+
+Both `env.path = value` and `env['PATH'] = value` work. Read-only variables (`HOME`, `PPID`, `SHLVL`, `$`, `?`) raise `ValueError` on assignment.
+
+This design:
+- Prevents silent sync failures (mutations not propagating to `os.environ`)
+- Makes the assignment intent explicit
+- Matches how `os.environ` works (strings are immutable anyway)
 
 ### User Initialization Phases
 
