@@ -317,6 +317,8 @@ env['PATH'] = path
 
 Both `env.path = value` and `env['PATH'] = value` work. Read-only variables (`HOME`, `PPID`, `SHLVL`, `$`, `?`) raise `ValueError` on assignment.
 
+Iteration (`env.items()`, `for k in env`) includes both regular variables and computed variables (`HOME`, `PATH`, `PWD`, etc.). This ensures `source_bash()` can pass all variables to the subprocess.
+
 This design:
 - Prevents silent sync failures (mutations not propagating to `os.environ`)
 - Makes the assignment intent explicit

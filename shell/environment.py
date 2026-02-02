@@ -383,7 +383,9 @@ class ShellEnvironment(MutableMapping):
                 os.environ.pop(key, None)
 
     def __iter__(self) -> Iterator:
-        return iter(self._env)
+        yield from self._env
+        # Also yield computed variable keys (except internal ? and $)
+        yield from ('HOME', 'OLDPWD', 'PATH', 'PPID', 'PWD', 'PYSH_CONFIG_DIR', 'SHLVL')
 
     def __contains__(self, key: object) -> bool:
         match key:

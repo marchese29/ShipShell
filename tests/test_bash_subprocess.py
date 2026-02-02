@@ -60,13 +60,17 @@ class TestEnvOverlay:
         assert 'MY_VAR' in sent_keys
 
     def test_overlay_excludes_skip_vars(self):
-        """Overlay excludes read-only and managed variables."""
+        """Overlay excludes bash-internal and managed variables."""
         overlay, sent_keys = _build_env_overlay()
 
-        # These should not be in the overlay
-        assert 'PWD' not in overlay
-        assert 'PPID' not in overlay
-        assert 'BASH_VERSION' not in overlay
+        # Bash-internal vars should not be in the overlay (they're managed by bash)
+        assert 'PWD' not in overlay  # Handled separately via cd
+        assert 'BASH_VERSION' not in overlay  # Bash-internal
+
+        # Read-only vars SHOULD be sent (so child has them) but not synced back
+        # PPID, HOME, SHLVL are in _READ_ONLY_VARS
+        assert 'HOME' in overlay  # Sent so child knows HOME
+        assert 'PPID' in overlay  # Sent so child knows parent PID
 
 
 class TestEpilogueParsing:

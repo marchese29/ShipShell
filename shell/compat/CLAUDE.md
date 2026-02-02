@@ -52,6 +52,18 @@ source_bash('helper() { ... }', scope=None)()
 - Shell options (`set -e`, etc.) - bash handles these internally
 - Local variables - only globals visible after function returns
 - Job control - background jobs not supported
+- Read-only variables (`HOME`, `PPID`, `SHLVL`) - sent to bash but not synced back
+
+### Variable Categories
+
+The state sync uses two variable sets:
+
+| Set | Purpose | Examples |
+|-----|---------|----------|
+| `_SKIP_VARS` | Not sent or synced (bash-internal) | `PWD`, `OLDPWD`, `BASH_VERSION`, `LINENO` |
+| `_READ_ONLY_VARS` | Sent but not synced back | `HOME`, `PPID`, `SHLVL` |
+
+`HOME` must be sent so bash scripts work correctly, but it's read-only in `ShellEnvironment`.
 
 ### Function Wiring
 
@@ -104,6 +116,21 @@ The epilogue writes to fd 62. To debug, capture it:
 from shell.model import capture
 result = capture(source_bash('export FOO=bar'), 62)
 print(result.read_fd(62))  # Shows epilogue output
+```
+
+## Implementation Notes
+
+### Pipe Deadlock Prevention
+
+The parent reads from the state pipe **before** calling `waitpid()`. This prevents deadlock when the child's output exceeds the pipe buffer (~64KB on macOS).
+
+Scripts that define many functions (like nvm.sh with 114 functions) can produce 100KB+ of `env -0` output after `export -f`. If the parent waits first, both processes block forever.
+
+```python
+# Correct order in BashSource._exec():
+with os.fdopen(state_r, 'r') as f:
+    state_output = f.read()     # Read FIRST
+_, status = os.waitpid(pid, 0)  # Wait SECOND
 ```
 
 ## Limitations

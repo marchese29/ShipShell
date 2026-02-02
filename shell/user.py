@@ -80,7 +80,7 @@ def initialize_config() -> None:
 
     if config_path is not None:
         try:
-            source(config_path)
+            source(config_path)()
         except Exception as e:
             # Log error but continue - don't crash on bad config file
             print(f'Error loading config file: {e}', file=sys.stderr)
@@ -100,7 +100,7 @@ def initialize_user() -> None:
 
     if user_path is not None:
         try:
-            source(user_path)
+            source(user_path)()
         except Exception as e:
             # Log error but continue - don't crash on bad init file
             print(f'Error loading user init file: {e}', file=sys.stderr)

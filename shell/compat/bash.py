@@ -48,14 +48,12 @@ else:
 # Bash uses FDs starting at 63 for process substitution. We use 62 for state pipe.
 _STATE_FD_BASE = 62
 
-# Variables that shouldn't be synced (read-only or managed internally)
+# Variables that shouldn't be sent or synced (bash-internal, managed by bash itself)
 _SKIP_VARS = frozenset(
     {
         '?',  # Exit code - managed by shell
         '$',  # PID - read-only
-        'PPID',  # Parent PID - read-only
-        'SHLVL',  # Shell level - managed
-        'PWD',  # Handled separately
+        'PWD',  # Handled separately via cd
         'OLDPWD',  # Handled by cd
         '_',  # Last argument - bash internal
         'BASH_VERSION',  # Bash-specific
@@ -78,6 +76,15 @@ _SKIP_VARS = frozenset(
         'COLUMNS',  # Terminal columns
         'LINES',  # Terminal lines
         'TERM',  # Terminal type
+    }
+)
+
+# Variables that should be SENT to bash but NOT synced back (read-only in ShellEnvironment)
+_READ_ONLY_VARS = frozenset(
+    {
+        'HOME',  # Home directory - read-only
+        'PPID',  # Parent PID - read-only
+        'SHLVL',  # Shell level - managed
     }
 )
 
@@ -192,7 +199,7 @@ def _update_state(
     """
     # 1. Update variables from child environment (including BASH_FUNC_* for persistence)
     for name, str_value in child_env.items():
-        if name in _SKIP_VARS:
+        if name in _SKIP_VARS or name in _READ_ONLY_VARS:
             continue
 
         # Try to restore original type using type registry
@@ -215,7 +222,7 @@ def _update_state(
     # 2. Handle unexports: keys we sent that are no longer in child env
     child_keys = {k for k in child_env if not k.startswith('BASH_FUNC_')}
     for name in sent_keys - child_keys:
-        if name in _SKIP_VARS:
+        if name in _SKIP_VARS or name in _READ_ONLY_VARS:
             continue
         # Variable was unexported or unset in bash
         try:
@@ -367,14 +374,17 @@ class BashSource(ShellRunnable):
             result = cmd._exec(merged_io)
             os._exit(result.exit_code)
         else:
-            # Parent: close write end, wait for child, read state
+            # Parent: close write end, read state, THEN wait for child
+            # (Reading before waitpid avoids pipe deadlock when output > 64KB)
             os.close(state_w)
-            _, status = os.waitpid(pid, 0)
-            exit_code = os.waitstatus_to_exitcode(status)
 
-            # Read state from pipe
+            # Read state from pipe FIRST
             with os.fdopen(state_r, 'r') as f:
                 state_output = f.read()
+
+            # Now wait for child to exit
+            _, status = os.waitpid(pid, 0)
+            exit_code = os.waitstatus_to_exitcode(status)
 
             # Parse epilogue and update state
             child_env, pwd = _parse_epilogue(state_output)
