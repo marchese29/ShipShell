@@ -191,9 +191,23 @@ def _update_state(
         pwd: Working directory from bash
     """
     # 1. Update variables from child environment (including BASH_FUNC_* for persistence)
-    for name, value in child_env.items():
+    for name, str_value in child_env.items():
         if name in _SKIP_VARS:
             continue
+
+        # Try to restore original type using type registry
+        original_type = env.get_type_hint(name)
+        if original_type is not None:
+            try:
+                # type(string_value) works for int, Path, ColonDelimitedPath, etc.
+                value = original_type(str_value)
+            except (ValueError, TypeError):
+                # Coercion failed, keep as string and clear type hint
+                value = str_value
+                env.clear_type_hint(name)
+        else:
+            value = str_value
+
         # Update both regular vars and BASH_FUNC_* entries
         # BASH_FUNC_* entries are stored in os.environ so they're inherited by future calls
         env[name] = value
@@ -206,6 +220,7 @@ def _update_state(
         # Variable was unexported or unset in bash
         try:
             env.unexport(name)
+            env.clear_type_hint(name)
         except KeyError:
             pass  # Already unexported
 

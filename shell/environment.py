@@ -11,54 +11,32 @@ if TYPE_CHECKING:
     from .trap import TrapManager
 
 
-# I'm sure I will come to regret this function some day
-def _str_to_env(s: str | None) -> Any | None:
-    # 1. Empty string -> None
-    if s is None or len(s) == 0:
-        return None
+class ColonDelimitedPath(list[Path]):
+    """List of Paths that serializes to/from colon-separated string.
 
-    # 2. Exact "True"/"False" -> bool
-    if s in ('True', 'False'):
-        return bool(s)
+    Used for PATH-like environment variables. Constructor only accepts
+    a colon-separated string for parsing (so type coercion works via type(value)).
+    """
 
-    # 3. Valid number containing decimal -> float
-    if '.' in s:
-        try:
-            return float(s)
-        except ValueError:
-            pass
-    else:
-        # 4. Valid integer -> int
-        try:
-            return int(s)
-        except ValueError:
-            pass
+    def __init__(self, colon_string: str = ''):
+        """Parse from colon-separated string."""
+        if colon_string:
+            paths = [Path(p) for p in colon_string.split(':') if p]
+        else:
+            paths = []
+        super().__init__(paths)
 
-    # 5. String with colons -> list(recurse)
-    if ':' in s:
-        return [_str_to_env(i) for i in s.split(':')]
+    def __str__(self) -> str:
+        return ':'.join(str(p) for p in self)
 
-    # 6. Looks like a path -> Path
-    if '/' in s or s.startswith('~'):
-        return Path(s)
-
-    # 7. It's a string
-    return s
+    def __repr__(self) -> str:
+        return f'ColonDelimitedPath({list.__repr__(self)})'
 
 
 def env_to_str(e: Any) -> str:
-    """
-    Convert an environment value to a string suitable for passing to execve.
-    Inverse of _str_to_env - handles lists by joining with colons.
-    """
+    """Convert an environment value to a string suitable for passing to execve."""
     if e is None:
         return ''
-
-    # List -> join with colons (e.g., PATH)
-    if isinstance(e, list):
-        return ':'.join(env_to_str(item) for item in e)
-
-    # Everything else converts via str()
     return str(e)
 
 
@@ -68,6 +46,7 @@ class ShellEnvironment(MutableMapping):
     def __init__(self):
         self._env: dict[str, Any] = {}
         self._exported: set[str] = set()
+        self._type_hints: dict[str, type] = {}  # For bash sync-back type restoration
 
         # Special Variables
         self._dir_stack: list[Path] = [Path.home()]
@@ -78,7 +57,7 @@ class ShellEnvironment(MutableMapping):
         self._old_pwd: Path | None = None
         self._pid: int = os.getpid()
         self._ppid: int = os.getppid()
-        self._path: list[Path] = []
+        self._path: ColonDelimitedPath = ColonDelimitedPath()
         self._path_cache: dict[str, Path] = {}
         self._pwd: Path = Path.cwd()
         self._pysh_config_dir: Path = Path.home() / '.config' / 'pysh'
@@ -146,14 +125,14 @@ class ShellEnvironment(MutableMapping):
     _COMPUTED_VARS = frozenset({'?', '$', 'HOME', 'OLDPWD', 'PATH', 'PPID', 'PWD', 'SHLVL'})
 
     def initialize(self) -> ShellEnvironment:
-        # Inherit from the parent environment, inputs are exported
-        # Skip computed variables - they're handled specially
+        # Inherit regular variables as STRINGS (no implicit type coercion)
+        # Skip computed variables - they're handled specially with explicit typing
         for key in os.environ.keys():
             if key not in self._COMPUTED_VARS:
-                self[key] = _str_to_env(os.environ.get(key))
+                self._env[key] = os.environ[key]  # Store as string
                 self._exported.add(key)
 
-        # Initialize computed variables from parent environment
+        # Computed variables with explicit typed inheritance
         if home := os.environ.get('HOME'):
             self._home = Path(home)
 
@@ -163,21 +142,23 @@ class ShellEnvironment(MutableMapping):
 
         # Inherit PATH from parent environment, or use default
         if parent_path := os.environ.get('PATH'):
-            self._path = [Path(p) for p in parent_path.split(':') if p]
+            self._path = ColonDelimitedPath(parent_path)
         else:
             # Fallback default PATH
-            paths = [Path('/usr/bin'), Path('/bin')]
+            self._path = ColonDelimitedPath('/usr/bin:/bin')
             if platform.system() == 'Darwin':
-                paths.extend([Path('/usr/sbin'), Path('/sbin')])
-            self._path = paths
+                self._path.extend([Path('/usr/sbin'), Path('/sbin')])
 
-        if 'SHLVL' in self._env and isinstance(old_shlvl := self._env['SHLVL'], int):
-            self._shlvl = old_shlvl + 1
-            del self._env['SHLVL']
+        # SHLVL: parse from parent string, increment
+        parent_shlvl = os.environ.get('SHLVL', '0')
+        try:
+            self._shlvl = int(parent_shlvl) + 1
+        except ValueError:
+            self._shlvl = 1
 
         # Sync computed variables to os.environ
         os.environ['HOME'] = str(self._home)
-        os.environ['PATH'] = ':'.join(str(p) for p in self._path)
+        os.environ['PATH'] = str(self._path)
         os.environ['PWD'] = str(self._pwd)
         os.environ['OLDPWD'] = str(self._old_pwd) if self._old_pwd else ''
         os.environ['PPID'] = str(self._ppid)
@@ -265,13 +246,20 @@ class ShellEnvironment(MutableMapping):
         os.environ['OLDPWD'] = str(value) if value is not None else ''
 
     @property
-    def path(self) -> list[Path]:
-        return self._path.copy()
+    def path(self) -> ColonDelimitedPath:
+        return self._path
 
     @path.setter
-    def path(self, value: list[Path]):
-        self._path = value
-        os.environ['PATH'] = ':'.join(str(p) for p in value)
+    def path(self, value: str | list[str] | list[Path] | ColonDelimitedPath):
+        if isinstance(value, ColonDelimitedPath):
+            self._path = value
+        elif isinstance(value, str):
+            self._path = ColonDelimitedPath(value)
+        else:
+            # list of strings or Paths
+            self._path = ColonDelimitedPath()
+            self._path.extend(Path(p) if isinstance(p, str) else p for p in value)
+        os.environ['PATH'] = str(self._path)
 
     @property
     def pwd(self) -> Path:
@@ -314,6 +302,14 @@ class ShellEnvironment(MutableMapping):
             case _:
                 return self._env[key]
 
+    def get_type_hint(self, key: str) -> type | None:
+        """Get the type hint for a variable (for bash sync-back)."""
+        return self._type_hints.get(key)
+
+    def clear_type_hint(self, key: str) -> None:
+        """Clear the type hint for a variable."""
+        self._type_hints.pop(key, None)
+
     def __setitem__(self, key: str, value: Any):
         match key:
             case '?' | '$' | 'HOME' | 'OLDPWD' | 'PATH' | 'PPID' | 'PWD' | 'SHLVL' as k:
@@ -323,6 +319,11 @@ class ShellEnvironment(MutableMapping):
                 os.environ[key] = str(self._pysh_config_dir)
             case _:
                 self._env[key] = value
+                # Record type hint for non-string values (for bash sync-back)
+                if not isinstance(value, str):
+                    self._type_hints[key] = type(value)
+                elif key in self._type_hints:
+                    del self._type_hints[key]
                 os.environ[key] = env_to_str(value)
 
     def __delitem__(self, key: str):
