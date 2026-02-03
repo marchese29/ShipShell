@@ -16,12 +16,6 @@ from .trap import TrapType
 FileLike = int | str | Path
 
 
-class ShellEscapingException(Exception):
-    """Base for exceptions that escape InProcessCallable instead of becoming exit codes."""
-
-    pass
-
-
 class IOConfig:
     """Encapsulates I/O redirection configuration with mutable builder pattern.
 
@@ -792,9 +786,6 @@ class InProcessCallable(ShellRunnable):
                 else:
                     # Non-int return value treated as success
                     exit_code = 0
-            except ShellEscapingException:
-                # Let control flow exceptions propagate (return, errexit, etc.)
-                raise
             except Exception:
                 # Other exceptions during execution = failure
                 exit_code = 1
@@ -875,8 +866,6 @@ class Pipeline(ShellRunnable):
                 exit_code = result.exit_code
             except SystemExit as e:
                 exit_code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
-            except ShellEscapingException as e:
-                exit_code = getattr(e, 'exit_code', 1)
             except Exception:
                 exit_code = 1
             finally:
@@ -919,8 +908,6 @@ class Pipeline(ShellRunnable):
                     exit_code = result.exit_code
                 except SystemExit as e:
                     exit_code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
-                except ShellEscapingException as e:
-                    exit_code = getattr(e, 'exit_code', 1)
                 except Exception:
                     exit_code = 1
                 finally:
@@ -1023,8 +1010,6 @@ class Subshell(ShellRunnable):
                 exit_code = result.exit_code
             except SystemExit as e:
                 exit_code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
-            except ShellEscapingException as e:
-                exit_code = getattr(e, 'exit_code', 1)
             except Exception:
                 exit_code = 1
             finally:

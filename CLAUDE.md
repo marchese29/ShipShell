@@ -331,6 +331,36 @@ This design:
 3. `py_env.initialize_shell_venv()` - Bootstrap venv at `~/.config/pysh/.venv`
 4. `user.initialize_user()` - `~/.config/pysh/user.py` (Phase 2, full functionality)
 
+### Error Handling Philosophy
+
+ShipShell bridges two error paradigms: **Python exceptions** and **shell exit codes**. The design principle is simple:
+
+> **Above `run()` = Python exceptions. Inside `run()` and below = shell exit codes.**
+
+**User experience goal:** Running normal Python produces exceptions; running anything through the shell abstraction (even pure Python via `InProcessCallable`) returns exit codes.
+
+**The boundary points** where exceptions convert to exit codes:
+
+| Location | What Happens |
+|----------|--------------|
+| **`builtins.py`** | `ShellError` → its `.exit_code`; `TypeError`/`ValidationError` → 2; `OSError` → 1; other → 1 |
+| **`InProcessCallable._exec()`** | Any exception → exit code 1. Return values: `None`→0, `bool`→0/1, `int`→int |
+| **Forked children** (Pipeline, Subshell) | `SystemExit` → extracted code; other exceptions → 1; then `os._exit()` |
+| **Bash subprocess** | `os.waitstatus_to_exitcode()` directly from child process |
+
+**Key type:** `ShellError` (`shell/types.py`) is the domain exception for builtins. It carries both a message and an exit code:
+
+```python
+class ShellError(Exception):
+    def __init__(self, message: str, exit_code: int = 1):
+        self.message = message
+        self.exit_code = exit_code
+```
+
+**Central tracking:** `env.last_exit` is set exactly once, at the end of every `run()` call (`model.py:246`). This is the single source of truth for `$?`.
+
+**REPL boundary:** If an exception escapes the shell abstraction entirely (bubbles up through `run()`), the REPL catches it with `traceback.print_exc()` but does NOT set `env.last_exit`. This is intentional—exceptions that escape are "pure Python" and shouldn't pollute shell state.
+
 ## Code Style
 
 - Python 3.12+, line length 100
