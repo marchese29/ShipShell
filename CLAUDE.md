@@ -87,8 +87,19 @@ Component-specific patterns and debugging utilities:
 - **`shell/environment.py`** - Shell environment state (`ShellEnvironment` singleton, copy-on-read for mutables)
 - **`shell/builtins.py`** - Shell builtins (cd, pwd, echo, test, source, trap, set, etc.)
 - **`shell/trap.py`** - Trap system for shell events and signals
-- **`shell/repl/`** - Interactive REPL using prompt_toolkit
+- **`shell/repl.py`** - Interactive REPL with hooks and execution logic
+- **`shell/rl.py`** - GNU readline ctypes bindings (callback interface for event-loop-friendly input)
 - **`shell/compat/bash.py`** - Bash subprocess runner with state synchronization (~400 lines)
+
+### GNU Readline Requirement
+
+The REPL uses GNU readline's callback interface via ctypes. On macOS, this requires Homebrew's readline (the system `libreadline` is actually libedit):
+
+```bash
+brew install readline
+```
+
+History is saved to `~/.pysh_history` by default. Override with `PYSH_HISTFILE` environment variable.
 
 ### Python Shell API (`shell/model.py`)
 

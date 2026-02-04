@@ -4,10 +4,7 @@ version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.12"
 dependencies = [
-    "jedi>=0.19.2",
-    "prompt-toolkit>=3.0.52",
     "pydantic>=2.12.5",
-    "pygments>=2.19.2",
 ]
 
 [dependency-groups]
