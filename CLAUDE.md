@@ -75,6 +75,7 @@ brew install bash
 Component-specific patterns and debugging utilities:
 - `tests/CLAUDE.md` - Testing patterns
 - `shell/compat/CLAUDE.md` - Bash subprocess runner and state synchronization
+- `designs/job-control.md` - Job control design (PTY-based, file-backed output capture)
 
 **⚠️ Keep documentation current**: Before committing code changes, ALWAYS consider if CLAUDE.md files need updates. New features, API changes, and architectural insights should be reflected here. These files are the primary onboarding path for agents - stale docs waste context and cause confusion.
 
@@ -90,6 +91,16 @@ Component-specific patterns and debugging utilities:
 - **`shell/repl.py`** - Interactive REPL with hooks and execution logic
 - **`shell/rl.py`** - GNU readline ctypes bindings (callback interface for event-loop-friendly input)
 - **`shell/compat/bash.py`** - Bash subprocess runner with state synchronization (~400 lines)
+
+### Job Control (Planned)
+
+See `designs/job-control.md` for the full design. The plan: every forked process gets
+dual PTYs (stdout/stderr) with file-backed output capture. Background jobs use forked
+drain processes to shuttle PTY output to files. Foreground jobs use a `select()`-based
+proxy loop in the parent. Jobs are first-class Python objects (`bg()`, `fg()`,
+`on_exit()`, `send_input()`, late piping). The architecture is fork-safe (no threads),
+portable (POSIX `select()` + self-pipe trick), and enables seamless fg/bg transitions
+with full terminal fidelity.
 
 ### GNU Readline Requirement
 
