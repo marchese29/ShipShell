@@ -85,7 +85,15 @@ Component-specific patterns and debugging utilities:
 ### Core Components
 
 - **`main.py`** - Entry point for the interactive REPL
-- **`shell/model.py`** - **The heart of ShipShell**: Pythonic shell abstractions (`ShellRunnable`, `Command`, `Pipeline`, `Subshell`, `ProcessSubstitution`, `ConditionalChain`, `run()`, `prog()`)
+- **`shell/model/`** - **The heart of ShipShell**: Pythonic shell abstractions, split into submodules:
+  - `_types.py` - Data types: `IOConfig`, `ShellResult`, `FileLike`
+  - `_base.py` - Core: `ShellRunnable` ABC, `NoopRunnable`, `run()`, fork/exec helpers
+  - `_command.py` - Atomic runnables: `Command`, `InProcessCallable`, `BUILTIN_REGISTRY`
+  - `_compound.py` - Compound runnables: `Subshell`, `Negated`, `ConditionalChain`, `TracedRunnable`
+  - `_pipeline.py` - `Pipeline` (fork-all-stages pipe execution)
+  - `_program.py` - `Program` builder, `cmd()`, `prog()`, `sub()`
+  - `_process_sub.py` - Process substitution: `ProcessInput`, `ProcessOutput`, `pyshexec()`
+  - `__init__.py` re-exports all public names, so `from shell.model import X` still works
 - **`shell/terminal.py`** - Dual-PTY allocation and proxy loop for output capture (`create_context()`, `PtyContext`)
 - **`shell/util.py`** - Shared low-level utilities (`try_close()`, `exit_code_from_status()`)
 - **`shell/environment.py`** - Shell environment state (`ShellEnvironment` singleton, copy-on-read for mutables)
