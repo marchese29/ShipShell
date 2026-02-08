@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import io
 import os
 import sys
 import warnings
@@ -8,10 +9,12 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import IO, Any, Literal, Self, cast, override
+from typing import IO, Any, Literal, NoReturn, Self, cast, override
 
+from . import terminal
 from .environment import env, env_to_str
 from .trap import TrapType
+from .util import exit_code_from_status, try_close
 
 FileLike = int | str | Path
 
@@ -20,7 +23,7 @@ class IOConfig:
     """Encapsulates I/O redirection configuration with mutable builder pattern.
 
     This is for REDIRECTING fds to targets (files, other fds, etc.).
-    For CAPTURING output, use capture(cmd, 3) with varargs.
+    For CAPTURING output, use run(cmd, silent=True).
 
     Usage:
         io = IOConfig().with_stdin(pipe_fd).with_stdout('/tmp/out.txt')
@@ -93,10 +96,40 @@ class IOConfig:
 
 
 class ShellResult:
-    """Result of running a shell command."""
+    """Result of running a shell command.
 
-    def __init__(self, exit_code: int):
+    When a command runs through the PTY layer, stdout_path and stderr_path
+    point to files containing the captured output. Use read_stdout() and
+    read_stderr() to access captured content.
+    """
+
+    def __init__(
+        self,
+        exit_code: int,
+        stdout_path: Path | None = None,
+        stderr_path: Path | None = None,
+    ):
         self.exit_code = exit_code
+        self.stdout_path = stdout_path
+        self.stderr_path = stderr_path
+
+    def read_stdout(self) -> str:
+        """Read captured stdout (trailing whitespace stripped). Returns '' if no capture."""
+        if self.stdout_path is None:
+            return ''
+        try:
+            return self.stdout_path.read_text().rstrip()
+        except OSError:
+            return ''
+
+    def read_stderr(self) -> str:
+        """Read captured stderr (trailing whitespace stripped). Returns '' if no capture."""
+        if self.stderr_path is None:
+            return ''
+        try:
+            return self.stderr_path.read_text().rstrip()
+        except OSError:
+            return ''
 
     def __bool__(self) -> bool:
         """True if command succeeded (exit code 0), False otherwise."""
@@ -134,18 +167,13 @@ def _resolve_fd(target: FileLike | None, flags: int, default_fd: int | None = No
 
 
 def _wait_child(pid: int) -> int:
-    """Wait for child process and return its exit code.
+    """Wait for child process and return its exit code (bash convention).
 
-    Handles normal exit, signal termination, unexpected status, and
-    ChildProcessError (returns 0 if child was already reaped).
+    Returns 0 on ChildProcessError (child was already reaped).
     """
     try:
         _, status = os.waitpid(pid, 0)
-        if os.WIFEXITED(status):
-            return os.WEXITSTATUS(status)
-        elif os.WIFSIGNALED(status):
-            return 128 + os.WTERMSIG(status)
-        return 1
+        return exit_code_from_status(status)
     except ChildProcessError:
         return 0
 
@@ -201,15 +229,64 @@ def resolve_cmd(name: str) -> Path | None:
     return None
 
 
-def run(runnable: ShellRunnable, io: IOConfig | None = None) -> ShellResult:
+def _stdout_is_tty() -> bool:
+    """Check if real stdout is a terminal, safely handling non-fd streams.
+
+    Returns False when sys.stdout has been replaced with a non-fd object
+    (e.g., pytest's capture fixtures use StringIO which has no fileno()).
     """
-    Execute a runnable, applying the given IO configuration.
+    try:
+        return os.isatty(sys.stdout.fileno())
+    except (io.UnsupportedOperation, OSError):
+        return False
+
+
+def _fork_exec(
+    exec_fn: Callable[[], ShellResult],
+    *,
+    fire_exit_trap: bool = False,
+) -> NoReturn:
+    """Run exec_fn in a forked child process and os._exit() with its exit code.
+
+    Handles the SystemExit/Exception → exit code conversion that every fork
+    site needs. Optionally fires the EXIT trap before exiting.
+
+    This function never returns — it always calls os._exit().
+    """
+    exit_code = 0
+    try:
+        result = exec_fn()
+        exit_code = result.exit_code
+    except SystemExit as e:
+        exit_code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
+    except Exception:
+        exit_code = 1
+    finally:
+        if fire_exit_trap:
+            try:
+                env.traps.fire(TrapType.EXIT)
+            except Exception:
+                pass
+            env.traps.cleanup()
+
+    os._exit(exit_code)
+
+
+def run(
+    runnable: ShellRunnable,
+    io: IOConfig | None = None,
+    *,
+    silent: bool = False,
+) -> ShellResult:
+    """Execute a runnable, applying the given IO configuration.
 
     Args:
         runnable: The ShellRunnable to execute
         io: Optional IOConfig with stdin/stdout/stderr redirections.
             If raw fds are passed, they are the caller's responsibility to close.
             If paths are passed, they will be opened/closed by the runnable.
+        silent: If True, suppress terminal output and capture to files.
+            The result will have stdout_path/stderr_path for reading captured output.
     """
     # Process any pending signals first
     env.traps.process_pending_signals()
@@ -224,14 +301,48 @@ def run(runnable: ShellRunnable, io: IOConfig | None = None) -> ShellResult:
         env.current_runnable = runnable  # Set BEFORE DEBUG fires
         env.traps.fire(TrapType.DEBUG)
 
-    if isinstance(command := runnable, Command):
-        # Commands need to fork before _exec
+    # PTY branch: for non-builtins when output goes to real terminal,
+    # or when silent=True (capture needed — PTY works without a real terminal)
+    use_pty = (
+        not isinstance(runnable, InProcessCallable)
+        and not runnable.is_output_redirected(io)
+        and (silent or _stdout_is_tty())
+        and not env.in_pty
+    )
+
+    if use_pty:
+        with terminal.create_context(silent) as ctx:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            if (pid := os.fork()) == 0:
+                env.in_pty = True
+                ctx.setup_child()
+                # After setup_child(), fds 0/1/2 are PTY slaves.
+                # Pass the caller's original io — setup_child() already placed
+                # PTY slaves on 0/1/2, so _exec() just inherits them naturally.
+                _fork_exec(lambda: runnable._exec(io))
+            else:
+                ctx.close_slaves()
+                exit_code = ctx.proxy_and_wait(pid)
+                result = ShellResult(exit_code, ctx.stdout_path, ctx.stderr_path)
+    elif silent and isinstance(runnable, InProcessCallable):
+        # InProcessCallable with silent=True: capture via file redirection.
+        # Can't use PTY (builtins need to run in parent for side effects),
+        # so redirect fds 1/2 to output files and let _redirected() handle it.
+        files = terminal.create_output_files()
+        capture_io = IOConfig(stdout=files.stdout_file, stderr=files.stderr_file)
+        if io is not None:
+            capture_io.extra_fds = dict(io.extra_fds)
+        result = runnable._exec(capture_io)
+        os.close(files.stdout_file)
+        os.close(files.stderr_file)
+        result = ShellResult(result.exit_code, files.stdout_path, files.stderr_path)
+    elif isinstance(command := runnable, Command):
+        # Non-PTY Command path (redirected output or non-terminal)
         if (pid := os.fork()) == 0:
-            # Child - _exec will resolve FileLike and replace this process
             command._exec(io)
             os._exit(127)  # Should never reach here
         else:
-            # Parent - wait for child
             result = ShellResult(_wait_child(pid))
     else:
         # Everything else handles its own execution model
@@ -272,7 +383,7 @@ class ShellRunnable(ABC):
         """
         warnings.warn(
             'ShellRunnable used in boolean context does not execute the command. '
-            'Use cmd() to execute, or capture(cmd) to run and check the result.',
+            'Use cmd() to execute, or cmd(silent=True) to run and capture output.',
             UserWarning,
             stacklevel=2,
         )
@@ -416,10 +527,7 @@ class ShellRunnable(ABC):
         except BaseException:
             # Cleanup all FDs we allocated before re-raising
             for fd in fds_to_cleanup:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+                try_close(fd)
             raise
 
         finally:
@@ -441,8 +549,17 @@ class ShellRunnable(ABC):
                 os.dup2(saved_fd, target_fd)
                 os.close(saved_fd)
 
-    def __call__(self) -> ShellResult:
-        return run(self)
+    def __call__(self, *, silent: bool = False) -> ShellResult:
+        return run(self, silent=silent)
+
+    def is_output_redirected(self, io: IOConfig | None = None) -> bool:
+        """Whether stdout is redirected away from the terminal.
+
+        Only checks stdout — stderr redirects (2>&1, 2>/dev/null) don't
+        affect whether we need a PTY for the primary output stream.
+        """
+        actual = self._io.merge_over(io)
+        return actual.stdout is not None
 
     def __or__(self, value: ShellRunnable | Program | Callable[[], Any]) -> Pipeline:
         """
@@ -463,9 +580,9 @@ class ShellRunnable(ABC):
 
         self = cast(ShellRunnable, self)
         if isinstance(pipeline := value, Pipeline):
-            return Pipeline([self, *pipeline.predecessors], pipeline.final_cmd)
+            return Pipeline([self, *pipeline.stages])
         value = cast(ShellRunnable, value)
-        return Pipeline([self], value)
+        return Pipeline([self, value])
 
     def __ror__(self, value: Program | Callable[[], Any]) -> Pipeline:
         """
@@ -535,9 +652,9 @@ class ShellRunnable(ABC):
 
             return InProcessCallable(write_str) | self
 
-        # Bytes content
-        if isinstance(content, bytes):
-            data = content
+        # Binary content
+        if isinstance(content, (bytes, bytearray, memoryview)):
+            data = bytes(content)
 
             def write_bytes() -> None:
                 sys.stdout.buffer.write(data)
@@ -798,9 +915,10 @@ class InProcessCallable(ShellRunnable):
 class Pipeline(ShellRunnable):
     """Execute commands connected by pipes.
 
+    All stages are forked — the parent creates pipes, forks children, and waits.
+
     Args:
-        predecessors: Commands before the final stage (each runs in a forked process).
-        final_cmd: The last command (runs in current process).
+        stages: All commands in the pipeline. Each runs in a forked process.
         pipefail: If True, pipeline fails if any stage fails (not just last).
         inherit_traps: If True, synthetic traps (DEBUG, ERR, RETURN, TRACE) are
             inherited by forked pipeline stages. EXIT is never inherited.
@@ -808,14 +926,12 @@ class Pipeline(ShellRunnable):
 
     def __init__(
         self,
-        predecessors: list[ShellRunnable],
-        final_cmd: ShellRunnable,
+        stages: list[ShellRunnable],
         pipefail: bool = False,
         inherit_traps: bool = False,
     ):
         super().__init__()
-        self.predecessors = predecessors
-        self.final_cmd = final_cmd
+        self.stages = stages
         self.pipefail = pipefail
         self._inherit_traps = inherit_traps
 
@@ -825,9 +941,8 @@ class Pipeline(ShellRunnable):
         actual = self._io.merge_over(io)
 
         # Print all traces in order BEFORE forking to ensure deterministic output
-        all_stages: list[ShellRunnable] = [*self.predecessors, self.final_cmd]
         unwrapped: list[ShellRunnable] = []
-        for stage in all_stages:
+        for stage in self.stages:
             if isinstance(stage, TracedRunnable):
                 print(f'{stage._prefix}{stage._display_text}', file=sys.stderr)
                 unwrapped.append(cast(ShellRunnable, stage._inner))
@@ -838,58 +953,26 @@ class Pipeline(ShellRunnable):
         sys.stdout.flush()
         sys.stderr.flush()
 
-        predecessors = unwrapped[:-1]
-        final_cmd = unwrapped[-1]
+        child_pids: list[int] = []
+        current_pipe_read: int | None = None
 
-        child_pids = []
+        for i, stage in enumerate(unwrapped):
+            is_first = i == 0
+            is_last = i == len(unwrapped) - 1
 
-        # Handle first predecessor - it gets stdin from pipeline
-        first_stage = predecessors[0]
-        pipe_r, pipe_w = os.pipe()
-        os.set_inheritable(pipe_r, False)
-        os.set_inheritable(pipe_w, False)
+            # Determine stdin for this stage
+            stdin_fd = actual.stdin if is_first else current_pipe_read
 
-        if (pid := os.fork()) == 0:
-            # Child process - handle trap inheritance
-            if self._inherit_traps:
-                env.traps.set(TrapType.EXIT, None)
+            # Determine stdout for this stage
+            pipe_r: int | None = None
+            pipe_w: int | None = None
+            if is_last:
+                stdout_fd = actual.stdout
             else:
-                env.traps.reset_for_child()
-            os.close(pipe_r)
-
-            exit_code = 0
-            try:
-                # First stage gets actual.stdin
-                result = first_stage._exec(
-                    IOConfig(stdin=actual.stdin, stdout=pipe_w, stderr=actual.stderr)
-                )
-                exit_code = result.exit_code
-            except SystemExit as e:
-                exit_code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
-            except Exception:
-                exit_code = 1
-            finally:
-                os.close(pipe_w)
-                try:
-                    env.traps.fire(TrapType.EXIT)
-                except Exception:
-                    pass
-                env.traps.cleanup()
-
-            os._exit(exit_code)
-        else:
-            # Parent process
-            child_pids.append(pid)
-            os.close(pipe_w)
-
-        # current_pipe_read starts as output from first stage
-        current_pipe_read = pipe_r
-
-        # Handle remaining predecessors - they get int pipe fds
-        for stage in predecessors[1:]:
-            pipe_r, pipe_w = os.pipe()
-            os.set_inheritable(pipe_r, False)
-            os.set_inheritable(pipe_w, False)
+                pipe_r, pipe_w = os.pipe()
+                os.set_inheritable(pipe_r, False)
+                os.set_inheritable(pipe_w, False)
+                stdout_fd = pipe_w
 
             if (pid := os.fork()) == 0:
                 # Child process - handle trap inheritance
@@ -897,51 +980,35 @@ class Pipeline(ShellRunnable):
                     env.traps.set(TrapType.EXIT, None)
                 else:
                     env.traps.reset_for_child()
-                os.close(pipe_r)
 
-                exit_code = 0
-                try:
-                    # Middle stages get int fd from previous pipe
-                    result = stage._exec(
-                        IOConfig(stdin=current_pipe_read, stdout=pipe_w, stderr=actual.stderr)
-                    )
-                    exit_code = result.exit_code
-                except SystemExit as e:
-                    exit_code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
-                except Exception:
-                    exit_code = 1
-                finally:
-                    os.close(pipe_w)
-                    os.close(current_pipe_read)
-                    try:
-                        env.traps.fire(TrapType.EXIT)
-                    except Exception:
-                        pass
-                    env.traps.cleanup()
+                # Close read end of output pipe (parent uses it)
+                if pipe_r is not None:
+                    os.close(pipe_r)
 
-                os._exit(exit_code)
+                stage_io = IOConfig(stdin=stdin_fd, stdout=stdout_fd, stderr=actual.stderr)
+                _fork_exec(lambda s=stage, sio=stage_io: s._exec(sio), fire_exit_trap=True)
             else:
                 # Parent process
                 child_pids.append(pid)
-                os.close(pipe_w)
-                os.close(current_pipe_read)
 
+                # Close write end of output pipe (child uses it)
+                if pipe_w is not None:
+                    os.close(pipe_w)
+
+                # Close previous pipe read (child inherited it)
+                if current_pipe_read is not None:
+                    os.close(current_pipe_read)
+
+                # Advance to next pipe
                 current_pipe_read = pipe_r
 
-        # Execute final command in current process
-        # Use run() so Commands fork and InProcessCallables run in current process
-        result = run(
-            final_cmd,
-            IOConfig(stdin=current_pipe_read, stdout=actual.stdout, stderr=actual.stderr),
-        )
-
-        # Close the final input pipe
-        os.close(current_pipe_read)
-
-        # Wait for all children and collect exit codes
+        # Wait for ALL children and collect exit codes
         exit_codes = [_wait_child(pid) for pid in child_pids]
 
-        # If pipefail, use first non-zero exit code from pipeline stages
+        # Exit code is from last stage by default
+        result = ShellResult(exit_codes[-1] if exit_codes else 0)
+
+        # If pipefail, use first non-zero exit code
         if self.pipefail:
             for code in exit_codes:
                 if code != 0:
@@ -962,12 +1029,11 @@ class Pipeline(ShellRunnable):
         # Pipelines flatten into one another
         if isinstance(pipeline := value, Pipeline):
             return Pipeline(
-                [*self.predecessors, self.final_cmd, *pipeline.predecessors],
-                pipeline.final_cmd,
+                [*self.stages, *pipeline.stages],
                 pipefail=self.pipefail or pipeline.pipefail,
             )
         value = cast(ShellRunnable, value)
-        return Pipeline([*self.predecessors, self.final_cmd], value, pipefail=self.pipefail)
+        return Pipeline([*self.stages, value], pipefail=self.pipefail)
 
 
 class Subshell(ShellRunnable):
@@ -1003,23 +1069,7 @@ class Subshell(ShellRunnable):
                 # Default: clear all synthetic traps (bash default behavior)
                 env.traps.reset_for_child()
             env.update(self._env_overlay)
-
-            exit_code = 0
-            try:
-                result = run(self._runnable, actual)
-                exit_code = result.exit_code
-            except SystemExit as e:
-                exit_code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
-            except Exception:
-                exit_code = 1
-            finally:
-                try:
-                    env.traps.fire(TrapType.EXIT)
-                except Exception:
-                    pass
-                env.traps.cleanup()
-
-            os._exit(exit_code)
+            _fork_exec(lambda: self._runnable._exec(actual), fire_exit_trap=True)
         else:
             # Parent process
             return ShellResult(_wait_child(pid))
@@ -1239,151 +1289,6 @@ def sub(runnable: ShellRunnable) -> Subshell:
     return Subshell(runnable)
 
 
-class CapturedResult:
-    """Result of a captured command execution with access to stdout/stderr and extra fds."""
-
-    def __init__(
-        self,
-        exit_code: int,
-        stdout_fd: int,
-        stderr_fd: int,
-        extra_fds: dict[int, int] | None = None,
-    ):
-        self.exit_code = exit_code
-        self._stdout_fd: int | None = stdout_fd
-        self._stderr_fd: int | None = stderr_fd
-        self._stdout_cache: str | None = None
-        self._stderr_cache: str | None = None
-        self._extra_fds: dict[int, int] = extra_fds or {}  # fd num -> pipe read fd
-        self._extra_cache: dict[int, str] = {}
-
-    def __bool__(self) -> bool:
-        """True if command succeeded (exit code 0)."""
-        return self.exit_code == 0
-
-    def read_stdout(self) -> str:
-        """Read and return captured stdout as a string (trailing whitespace stripped)."""
-        if self._stdout_cache is not None:
-            return self._stdout_cache
-        if self._stdout_fd is None:
-            return ''
-        try:
-            with os.fdopen(self._stdout_fd, 'r') as f:
-                self._stdout_cache = f.read().rstrip()
-        finally:
-            self._stdout_fd = None
-        return self._stdout_cache
-
-    def read_stderr(self) -> str:
-        """Read and return captured stderr as a string (trailing whitespace stripped)."""
-        if self._stderr_cache is not None:
-            return self._stderr_cache
-        if self._stderr_fd is None:
-            return ''
-        try:
-            with os.fdopen(self._stderr_fd, 'r') as f:
-                self._stderr_cache = f.read().rstrip()
-        finally:
-            self._stderr_fd = None
-        return self._stderr_cache
-
-    def read_fd(self, fd: int) -> str:
-        """Read captured output from arbitrary fd (trailing whitespace stripped)."""
-        if fd in self._extra_cache:
-            return self._extra_cache[fd]
-        if fd not in self._extra_fds:
-            return ''
-        try:
-            with os.fdopen(self._extra_fds[fd], 'r') as f:
-                self._extra_cache[fd] = f.read().rstrip()
-        finally:
-            del self._extra_fds[fd]
-        return self._extra_cache[fd]
-
-    def __del__(self):
-        """Clean up any unclosed file descriptors."""
-        if self._stdout_fd is not None:
-            try:
-                os.close(self._stdout_fd)
-            except OSError:
-                pass
-        if self._stderr_fd is not None:
-            try:
-                os.close(self._stderr_fd)
-            except OSError:
-                pass
-        # Clean up any unclosed extra fds
-        for pipe_fd in list(self._extra_fds.values()):
-            try:
-                os.close(pipe_fd)
-            except OSError:
-                pass
-
-    def __repr__(self) -> str:
-        return f'CapturedResult(exit_code={self.exit_code})'
-
-
-def capture(runnable: ShellRunnable, *extra_fds: int) -> CapturedResult:
-    """
-    Execute a runnable and capture stdout, stderr, and optionally extra fds.
-
-    Args:
-        runnable: The command to run
-        *extra_fds: Additional file descriptors to capture (e.g., 3 to capture fd 3)
-
-    Returns a CapturedResult with the exit code and methods to read
-    the captured output.
-
-    Examples:
-        result = capture(prog("ls")("-la"))
-        print(result.read_stdout())
-        if not result:
-            print("Error:", result.read_stderr())
-
-        # Capture fd 3 as well
-        result = capture(cmd, 3)
-        state = result.read_fd(3)
-    """
-    # Flush before forking to avoid duplicated output
-    sys.stdout.flush()
-    sys.stderr.flush()
-
-    # Create pipes for stdout and stderr (always captured)
-    stdout_r, stdout_w = os.pipe()
-    stderr_r, stderr_w = os.pipe()
-
-    # Create pipes for explicitly requested extra fds
-    extra_pipes = {fd: os.pipe() for fd in extra_fds}
-
-    # Fork to run the command
-    pid = os.fork()
-    if pid == 0:
-        # Child process: close read ends
-        os.close(stdout_r)
-        os.close(stderr_r)
-        for fd, (r, w) in extra_pipes.items():
-            os.close(r)
-            os.dup2(w, fd)  # Make fd point to pipe write end
-            os.close(w)
-
-        # Execute with redirected stdout/stderr
-        result = runnable._exec(IOConfig(stdout=stdout_w, stderr=stderr_w))
-
-        os.close(stdout_w)
-        os.close(stderr_w)
-        os._exit(result.exit_code)
-    else:
-        # Parent process: close write ends, collect read ends
-        os.close(stdout_w)
-        os.close(stderr_w)
-        extra_read_fds = {}
-        for fd, (r, w) in extra_pipes.items():
-            os.close(w)
-            extra_read_fds[fd] = r
-
-        return CapturedResult(_wait_child(pid), stdout_r, stderr_r, extra_read_fds)
-
-
 class ProcessSubstitution:
     """Exposes a runnable's I/O as a /dev/fd/N path.
 
@@ -1417,29 +1322,14 @@ class ProcessSubstitution:
         if (pid := os.fork()) == 0:
             # Child process
             env.traps.reset_for_child()
-            exit_code = 1
-
-            try:
-                if mode == 'r':
-                    # <(cmd): child writes to pipe, parent reads
-                    os.close(pipe_r)
-                    # Use _exec() directly - avoids double-fork for Commands
-                    # Command._exec() does execve() which replaces this process
-                    # Other runnables handle their own execution model
-                    result = runnable._exec(IOConfig(stdout=pipe_w))
-                    exit_code = result.exit_code
-                else:
-                    # >(cmd): child reads from pipe, parent writes
-                    os.close(pipe_w)
-                    result = runnable._exec(IOConfig(stdin=pipe_r))
-                    exit_code = result.exit_code
-            except SystemExit as e:
-                exit_code = e.code if isinstance(e.code, int) else 1
-            except Exception:
-                exit_code = 1
-
-            # Only reached if _exec() returned (not for Command which does execve)
-            os._exit(exit_code)
+            if mode == 'r':
+                # <(cmd): child writes to pipe, parent reads
+                os.close(pipe_r)
+                _fork_exec(lambda: runnable._exec(IOConfig(stdout=pipe_w)))
+            else:
+                # >(cmd): child reads from pipe, parent writes
+                os.close(pipe_w)
+                _fork_exec(lambda: runnable._exec(IOConfig(stdin=pipe_r)))
         else:
             # Parent process - dup to high FD for macOS /dev/fd compatibility
             self._pid = pid
@@ -1473,10 +1363,7 @@ class ProcessSubstitution:
             return 0
 
         # Close the FD first (signals EOF to child if mode='w')
-        try:
-            os.close(self._fd)
-        except OSError:
-            pass
+        try_close(self._fd)
 
         exit_code = _wait_child(self._pid)
         self._waited = True
@@ -1570,9 +1457,9 @@ def pyshexec(file: str | Path, *args: Any) -> Subshell:
 
     Example:
         pyshexec("~/scripts/process.py", "input.txt", "--verbose")()
-        result = capture(pyshexec("script.py", "arg1"))
+        result = pyshexec("script.py", "arg1")(silent=True)
     """
-    # Avoid circular: model.py ← builtins.py
+    # Circular: builtins → model (BUILTIN_REGISTRY) → builtins (source)
     from .builtins import source  # noqa: PLC0415
 
     return Subshell(source(str(file), *[str(a) for a in args]))

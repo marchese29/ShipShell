@@ -110,13 +110,9 @@ print(BASH_PATH)  # /opt/homebrew/bin/bash or /bin/bash
 
 ### Trace State Sync
 
-The epilogue writes to fd 62. To debug, capture it:
-
-```python
-from shell.model import capture
-result = capture(source_bash('export FOO=bar'), 62)
-print(result.read_fd(62))  # Shows epilogue output
-```
+The epilogue writes to a dedicated pipe (fd 62 by default). State is transferred
+as `<<<SECTION>>>` markers with `env -0` output and `pwd`. To debug, add a print
+in `_parse_epilogue()` or inspect `state_output` in `BashSource._exec()`.
 
 ## Implementation Notes
 

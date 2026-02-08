@@ -9,7 +9,7 @@ logic with shell operations through the | operator.
 """
 
 from shell.environment import env
-from shell.model import prog, capture
+from shell.model import prog, run
 import sys
 
 env.initialize()
@@ -57,7 +57,7 @@ INFO  Retrying connection
 ERROR Authentication failed for user 'admin'
 INFO  Connection established"""
 
-errors = capture(grep('ERROR').stdin_content(logs))
+errors = run(grep('ERROR').stdin_content(logs), silent=True)
 print(f"  Errors found:\n{errors.read_stdout()}")
 
 # -----------------------------------------------------------------------------

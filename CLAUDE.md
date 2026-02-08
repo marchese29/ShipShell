@@ -56,9 +56,10 @@ uv run pyright shell/
 
 Test organization:
 - `tests/test_bash_subprocess.py` - Bash subprocess runner tests (`source_bash`)
-- `tests/test_io_extra_fds.py` - Extra file descriptor redirection/capture tests
+- `tests/test_io_extra_fds.py` - Extra file descriptor redirection tests
 - `tests/test_callable_pipeline.py` - Python API tests (pipelines, process substitution, conditional chaining)
 - `tests/test_trap.py` - Trap system tests
+- `tests/test_pty.py` - PTY-based output capture tests
 
 See `tests/CLAUDE.md` for detailed testing patterns.
 
@@ -84,7 +85,9 @@ Component-specific patterns and debugging utilities:
 ### Core Components
 
 - **`main.py`** - Entry point for the interactive REPL
-- **`shell/model.py`** - **The heart of ShipShell**: Pythonic shell abstractions (`ShellRunnable`, `Command`, `Pipeline`, `Subshell`, `ProcessSubstitution`, `ConditionalChain`, `capture()`, `prog()`)
+- **`shell/model.py`** - **The heart of ShipShell**: Pythonic shell abstractions (`ShellRunnable`, `Command`, `Pipeline`, `Subshell`, `ProcessSubstitution`, `ConditionalChain`, `run()`, `prog()`)
+- **`shell/terminal.py`** - Dual-PTY allocation and proxy loop for output capture (`create_context()`, `PtyContext`)
+- **`shell/util.py`** - Shared low-level utilities (`try_close()`, `exit_code_from_status()`)
 - **`shell/environment.py`** - Shell environment state (`ShellEnvironment` singleton, copy-on-read for mutables)
 - **`shell/builtins.py`** - Shell builtins (cd, pwd, echo, test, source, trap, set, etc.)
 - **`shell/trap.py`** - Trap system for shell events and signals
@@ -117,7 +120,7 @@ History is saved to `~/.pysh_history` by default. Override with `PYSH_HISTFILE` 
 The primary interface - ergonomic Python for shell operations:
 
 ```python
-from shell.model import prog, capture, sub
+from shell.model import prog, run, sub
 from shell.wiring import wire_path_programs
 from pathlib import Path
 
@@ -142,7 +145,7 @@ def add_timestamp():
 cat('server.log') | grep('ERROR') | upper | add_timestamp > 'errors.txt'
 
 # Capture output for further Python processing
-result = capture(ls('-la') | grep('.py'))
+result = run(ls('-la') | grep('.py'), silent=True)
 for line in result.read_stdout().splitlines():
     print(f'Found: {line}')
 
@@ -225,7 +228,7 @@ with (
 Short-circuit conditional execution, equivalent to bash's `&&` and `||`:
 
 ```python
-from shell.model import prog, capture
+from shell.model import prog, run
 
 # if_success() - run second only if first succeeds (bash &&)
 prog('make')().if_success(prog('make')('install'))()
@@ -368,7 +371,7 @@ ShipShell bridges two error paradigms: **Python exceptions** and **shell exit co
 | **`builtins.py`** | `ShellError` → its `.exit_code`; `TypeError`/`ValidationError` → 2; `OSError` → 1; other → 1 |
 | **`InProcessCallable._exec()`** | Any exception → exit code 1. Return values: `None`→0, `bool`→0/1, `int`→int |
 | **Forked children** (Pipeline, Subshell) | `SystemExit` → extracted code; other exceptions → 1; then `os._exit()` |
-| **Bash subprocess** | `os.waitstatus_to_exitcode()` directly from child process |
+| **Bash subprocess** | `exit_code_from_status()` from child process (bash 128+signal convention) |
 
 **Key type:** `ShellError` (`shell/types.py`) is the domain exception for builtins. It carries both a message and an exit code:
 
@@ -379,7 +382,7 @@ class ShellError(Exception):
         self.exit_code = exit_code
 ```
 
-**Central tracking:** `env.last_exit` is set exactly once, at the end of every `run()` call (`model.py:246`). This is the single source of truth for `$?`.
+**Central tracking:** `env.last_exit` is set exactly once, at the end of every `run()` call. This is the single source of truth for `$?`.
 
 **REPL boundary:** If an exception escapes the shell abstraction entirely (bubbles up through `run()`), the REPL catches it with `traceback.print_exc()` but does NOT set `env.last_exit`. This is intentional—exceptions that escape are "pure Python" and shouldn't pollute shell state.
 

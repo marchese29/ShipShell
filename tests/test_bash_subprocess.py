@@ -20,7 +20,7 @@ from shell.compat.bash import (
     source_bash,
 )
 from shell.environment import env
-from shell.model import IOConfig, capture, prog
+from shell.model import IOConfig, prog, run
 
 
 @pytest.fixture(autouse=True)
@@ -147,7 +147,7 @@ class TestSourceBashBasic:
 
     def test_simple_echo(self):
         """source_bash can run simple echo."""
-        result = capture(source_bash('echo hello'))
+        result = run(source_bash('echo hello'), silent=True)
         assert result.read_stdout() == 'hello'
         assert result.exit_code == 0
 
@@ -158,8 +158,8 @@ class TestSourceBashBasic:
         assert env.last_exit == 42
 
     def test_stdout_passthrough(self):
-        """stdout passes through (captured when using capture())."""
-        result = capture(source_bash('echo line1; echo line2'))
+        """stdout passes through (captured when using silent=True)."""
+        result = run(source_bash('echo line1; echo line2'), silent=True)
         assert 'line1' in result.read_stdout()
         assert 'line2' in result.read_stdout()
 
@@ -175,7 +175,7 @@ class TestSourceBashStateSync:
     def test_python_var_available_in_bash(self):
         """Variables set in Python are available in bash."""
         env['FROM_PYTHON'] = 'python_value'
-        result = capture(source_bash('echo $FROM_PYTHON'))
+        result = run(source_bash('echo $FROM_PYTHON'), silent=True)
         assert result.read_stdout() == 'python_value'
 
     def test_cd_syncs_to_python(self):
@@ -221,7 +221,7 @@ class TestSourceBashFunctions:
         assert hasattr(runnable, '_exec')
 
         # Execute and verify output
-        result = capture(runnable)
+        result = run(runnable, silent=True)
         assert result.read_stdout() == 'hello world'
 
     def test_function_persists_across_calls(self):
@@ -229,7 +229,7 @@ class TestSourceBashFunctions:
         source_bash('persist_func() { echo persisted; }')()
 
         # Should be callable in next source_bash
-        result = capture(source_bash('persist_func'))
+        result = run(source_bash('persist_func'), silent=True)
         assert result.read_stdout() == 'persisted'
 
     def test_function_rename_warning(self):
@@ -253,7 +253,7 @@ class TestSourceBashFunctions:
         assert not hasattr(__main__, 'no_wire_func')
 
         # But function should still be callable via bash
-        result = capture(source_bash('no_wire_func'))
+        result = run(source_bash('no_wire_func'), silent=True)
         assert result.read_stdout() == 'hi'
 
     def test_scope_module(self):
@@ -265,7 +265,7 @@ class TestSourceBashFunctions:
         assert hasattr(__main__, 'myfuncs')
         assert hasattr(__main__.myfuncs, 'module_func')
 
-        result = capture(__main__.myfuncs.module_func())
+        result = run(__main__.myfuncs.module_func(), silent=True)
         assert result.read_stdout() == 'from module'
 
     def test_function_with_multiple_args(self):
@@ -274,7 +274,7 @@ class TestSourceBashFunctions:
 
         import __main__
 
-        result = capture(__main__.add(1, 2, 3))
+        result = run(__main__.add(1, 2, 3), silent=True)
         assert result.read_stdout() == '6'
 
     def test_function_returns_exit_code(self):
@@ -293,7 +293,7 @@ class TestSourceBashFunctions:
 
         import __main__
 
-        result = capture(__main__.show_greeting())
+        result = run(__main__.show_greeting(), silent=True)
         assert result.read_stdout() == 'Hello from Python'
 
     def test_function_modifies_env(self):
@@ -311,7 +311,7 @@ class TestSourceBashComposability:
 
     def test_pipeline_with_grep(self):
         """source_bash can be piped to other commands."""
-        result = capture(source_bash('echo -e "foo\\nbar\\nbaz"') | prog('grep')('ba'))
+        result = run(source_bash('echo -e "foo\\nbar\\nbaz"') | prog('grep')('ba'), silent=True)
         lines = result.read_stdout().strip().split('\n')
         assert 'bar' in lines
         assert 'baz' in lines
@@ -337,7 +337,7 @@ class TestSourceBashComposability:
 
         import __main__
 
-        result = capture(prog('echo')('hello') | __main__.loud())
+        result = run(prog('echo')('hello') | __main__.loud(), silent=True)
         assert result.read_stdout() == 'HELLO'
 
 
@@ -346,12 +346,12 @@ class TestSourceBashArgs:
 
     def test_args_available_as_positional(self):
         """args parameter sets $1, $2, etc."""
-        result = capture(source_bash('echo "$1 $2"', args=['first', 'second']))
+        result = run(source_bash('echo "$1 $2"', args=['first', 'second']), silent=True)
         assert result.read_stdout() == 'first second'
 
     def test_args_with_spaces(self):
         """Arguments with spaces are handled correctly."""
-        result = capture(source_bash('echo "$1"', args=['hello world']))
+        result = run(source_bash('echo "$1"', args=['hello world']), silent=True)
         assert result.read_stdout() == 'hello world'
 
 

@@ -5,9 +5,10 @@
 Tests are organized by type:
 
 - `test_bash_subprocess.py` - Tests for bash subprocess runner (`source_bash`)
-- `test_io_extra_fds.py` - Tests for `IOConfig.extra_fds` and `capture()` with extra fds
+- `test_io_extra_fds.py` - Tests for `IOConfig.extra_fds` and fd redirection
 - `test_callable_pipeline.py` - Python API tests (pipelines, callables, process substitution)
 - `test_trap.py` - Trap system tests (DEBUG, ERR, EXIT, signals)
+- `test_pty.py` - PTY-based output capture tests (all use `silent=True`, run in CI)
 
 ## Running Tests
 
@@ -22,16 +23,34 @@ uv run pytest tests/test_bash_subprocess.py -v
 uv run pytest tests/test_bash_subprocess.py::TestSourceBashBasic::test_simple_echo -v
 ```
 
+## Capturing Output
+
+Use `run(cmd, silent=True)` to capture command output:
+
+```python
+from shell.model import run, prog
+
+# Capture stdout/stderr
+result = run(prog('echo')('hello'), silent=True)
+assert result.read_stdout() == 'hello'
+
+# Works with pipelines, conditionals, subshells
+result = run(prog('echo')('hello') | prog('cat')(), silent=True)
+assert result.read_stdout() == 'hello'
+```
+
+When a real terminal is available, `run()` uses dual PTYs for capture (programs see `isatty()=True`). In non-terminal environments (CI, pytest), `silent=True` still works — it bypasses the `isatty()` check and uses PTYs for capture without terminal echo.
+
 ## Bash Subprocess Tests (`test_bash_subprocess.py`)
 
 Tests for `source_bash()` which runs real bash with state synchronization:
 
 ```python
 from shell.compat.bash import source_bash
-from shell.model import capture
+from shell.model import run
 
 # Basic execution
-result = capture(source_bash('echo hello'))
+result = run(source_bash('echo hello'), silent=True)
 assert result.read_stdout() == 'hello'
 
 # State sync
@@ -40,7 +59,7 @@ assert env['FOO'] == 'bar'
 
 # Function wiring
 source_bash('greet() { echo "hi $1"; }')()
-result = capture(greet('world'))
+result = run(greet('world'), silent=True)
 assert result.read_stdout() == 'hi world'
 ```
 
@@ -52,22 +71,27 @@ Key test classes:
 
 ## Extra FDs Tests (`test_io_extra_fds.py`)
 
-Tests for redirecting and capturing arbitrary file descriptors:
+Tests for redirecting arbitrary file descriptors via IOConfig:
 
 ```python
-from shell.model import IOConfig, capture, InProcessCallable
+from shell.model import IOConfig, InProcessCallable
 import os
 
 # Redirect fd 3 to file
 io = IOConfig().with_fd(3, '/tmp/log.txt')
 
-# Capture fd 3 output
+# Use in a command
 def write_to_fd3():
     os.write(3, b'hello from fd 3')
 
-result = capture(InProcessCallable(write_to_fd3), 3)
-assert result.read_fd(3) == 'hello from fd 3'
+cmd = InProcessCallable(write_to_fd3)
+cmd._io = IOConfig().with_fd(3, '/tmp/log.txt')
+cmd()
 ```
+
+## PTY Tests (`test_pty.py`)
+
+Tests for PTY-based output capture. All tests use `silent=True`, which works without a real terminal — PTYs are allocated for capture regardless of `isatty()` status.
 
 ## Bash Version
 

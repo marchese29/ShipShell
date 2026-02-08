@@ -18,10 +18,8 @@ from shell.builtins import trap_list, trap_show
 from shell.environment import env
 from shell.model import (
     InProcessCallable,
-    ShellResult,
     Subshell,
-    capture,
-    prog,
+    run,
 )
 from shell.trap import TrapManager, TrapType
 
@@ -287,7 +285,7 @@ class TestTrapListBuiltin:
 
     def test_trap_list_outputs_signal_names(self):
         """trap_list() prints available signal names."""
-        result = capture(trap_list())
+        result = run(trap_list(), silent=True)
         output = result.read_stdout()
 
         # Should include both synthetic and signal traps
@@ -302,14 +300,14 @@ class TestTrapShowBuiltin:
 
     def test_trap_show_empty_when_no_traps(self):
         """trap_show() outputs nothing when no traps set."""
-        result = capture(trap_show())
+        result = run(trap_show(), silent=True)
         assert result.read_stdout() == ''
 
     def test_trap_show_lists_set_traps(self):
         """trap_show() lists currently set traps."""
         env.traps.set(TrapType.EXIT, InProcessCallable(lambda: 0))
 
-        result = capture(trap_show())
+        result = run(trap_show(), silent=True)
         output = result.read_stdout()
 
         assert 'EXIT' in output
@@ -460,7 +458,7 @@ class TestSubshellTrapInheritance:
             InProcessCallable(lambda: 1)()  # This fails
             return 0
 
-        result = capture(Subshell(InProcessCallable(fail_in_subshell)))
+        result = run(Subshell(InProcessCallable(fail_in_subshell)), silent=True)
         output = result.read_stdout()
 
         # ERR trap should NOT have fired in subshell
@@ -479,7 +477,7 @@ class TestSubshellTrapInheritance:
             InProcessCallable(lambda: 1)()  # This fails
             return 0
 
-        result = capture(Subshell(InProcessCallable(fail_in_subshell), inherit_traps=True))
+        result = run(Subshell(InProcessCallable(fail_in_subshell), inherit_traps=True), silent=True)
         output = result.read_stdout()
 
         # ERR trap SHOULD have fired in subshell
@@ -498,7 +496,7 @@ class TestSubshellTrapInheritance:
             print('SUBSHELL_RAN')
             return 0
 
-        result = capture(Subshell(InProcessCallable(subshell_body), inherit_traps=True))
+        result = run(Subshell(InProcessCallable(subshell_body), inherit_traps=True), silent=True)
         output = result.read_stdout()
 
         # Subshell ran, but parent's EXIT trap should NOT have fired
@@ -518,7 +516,7 @@ class TestSubshellTrapInheritance:
             InProcessCallable(lambda: 0)()  # DEBUG should fire before this
             return 0
 
-        result = capture(Subshell(InProcessCallable(subshell_body), inherit_traps=True))
+        result = run(Subshell(InProcessCallable(subshell_body), inherit_traps=True), silent=True)
         output = result.read_stdout()
 
         # DEBUG trap should have fired

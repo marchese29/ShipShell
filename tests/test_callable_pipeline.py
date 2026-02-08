@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from shell.environment import env
-from shell.model import InProcessCallable, capture, prog
+from shell.model import InProcessCallable, prog, run
 
 
 @pytest.fixture(autouse=True)
@@ -25,7 +25,7 @@ def test_callable_in_pipeline():
         for line in sys.stdin:
             print(line.upper(), end='')
 
-    result = capture(prog('echo')('hello') | upper)
+    result = run(prog('echo')('hello') | upper, silent=True)
     assert result.read_stdout() == 'HELLO'
 
 
@@ -36,7 +36,7 @@ def test_callable_as_source():
         print('hello')
         print('goodbye')
 
-    result = capture(greet | prog('grep')('hello'))
+    result = run(greet | prog('grep')('hello'), silent=True)
     assert result.read_stdout() == 'hello'
 
 
@@ -48,7 +48,7 @@ def test_generator_as_source():
         yield 'banana'
         yield 'cherry'
 
-    result = capture(lines | prog('grep')('a'))
+    result = run(lines | prog('grep')('a'), silent=True)
     # grep matches 'apple' and 'banana' (both contain 'a')
     assert 'apple' in result.read_stdout()
     assert 'banana' in result.read_stdout()
@@ -61,7 +61,7 @@ def test_callable_exit_code_none():
     def noop():
         pass
 
-    result = capture(noop | prog('cat')())
+    result = run(noop | prog('cat')(), silent=True)
     assert result.exit_code == 0
 
 
@@ -140,7 +140,7 @@ def test_pipeline_chain():
         for line in sys.stdin:
             print(f'{line.rstrip()} :SUFFIX')
 
-    result = capture(prog('echo')('hello') | add_prefix | add_suffix)
+    result = run(prog('echo')('hello') | add_prefix | add_suffix, silent=True)
     assert result.read_stdout() == 'PREFIX: hello :SUFFIX'
 
 
@@ -152,7 +152,7 @@ def test_callable_with_command_on_both_sides():
             print(line, end='')
             print(line, end='')
 
-    result = capture(prog('echo')('test') | double | prog('wc')('-l'))
+    result = run(prog('echo')('test') | double | prog('wc')('-l'), silent=True)
     # 'test' becomes 'test\ntest\n' which is 2 lines
     assert result.read_stdout().strip() == '2'
 
@@ -165,7 +165,7 @@ def test_callable_with_command_on_both_sides():
 def test_process_input_basic():
     """ProcessInput provides a readable path to command output."""
     with prog('echo')('hello').as_input() as inp:
-        result = capture(prog('cat')(inp.path))
+        result = run(prog('cat')(inp.path), silent=True)
         assert result.read_stdout() == 'hello'
 
 
@@ -175,7 +175,7 @@ def test_process_input_multiple():
         prog('echo')('a').as_input() as a,
         prog('echo')('b').as_input() as b,
     ):
-        result = capture(prog('diff')(a.path, b.path))
+        result = run(prog('diff')(a.path, b.path), silent=True)
         assert result.exit_code != 0  # diff exits non-zero when files differ
 
 
@@ -185,7 +185,7 @@ def test_process_output_basic():
     # We redirect echo's output to cat's stdin via the process substitution
     with prog('cat')().as_output() as out:
         # This writes "hello" to the cat process's stdin
-        result = capture(prog('echo')('hello') > out.path)
+        result = run(prog('echo')('hello') > out.path, silent=True)
         assert result.exit_code == 0
 
 
@@ -211,28 +211,28 @@ def test_process_substitution_path_is_path_object():
 
 def test_if_success_runs_on_zero_exit():
     """if_success runs second command when first succeeds."""
-    result = capture(prog('true')().if_success(prog('echo')('yes')))
+    result = run(prog('true')().if_success(prog('echo')('yes')), silent=True)
     assert result.read_stdout() == 'yes'
     assert result.exit_code == 0
 
 
 def test_if_success_skips_on_nonzero_exit():
     """if_success skips second command when first fails."""
-    result = capture(prog('false')().if_success(prog('echo')('yes')))
+    result = run(prog('false')().if_success(prog('echo')('yes')), silent=True)
     assert result.read_stdout() == ''
     assert result.exit_code == 1
 
 
 def test_if_fail_runs_on_nonzero_exit():
     """if_fail runs second command when first fails."""
-    result = capture(prog('false')().if_fail(prog('echo')('failed')))
+    result = run(prog('false')().if_fail(prog('echo')('failed')), silent=True)
     assert result.read_stdout() == 'failed'
     assert result.exit_code == 0
 
 
 def test_if_fail_skips_on_zero_exit():
     """if_fail skips second command when first succeeds."""
-    result = capture(prog('true')().if_fail(prog('echo')('failed')))
+    result = run(prog('true')().if_fail(prog('echo')('failed')), silent=True)
     assert result.read_stdout() == ''
     assert result.exit_code == 0
 
@@ -240,10 +240,11 @@ def test_if_fail_skips_on_zero_exit():
 def test_conditional_chain_multiple():
     """Multiple conditions can be chained."""
     # true && echo a && echo b -> both echoes run, both write to stdout
-    result = capture(
+    result = run(
         prog('true')()
         .if_success(prog('echo')('a'))
-        .if_success(prog('echo')('b'))
+        .if_success(prog('echo')('b')),
+        silent=True,
     )
     assert result.read_stdout() == 'a\nb'
 
@@ -253,7 +254,7 @@ def test_conditional_accepts_callable():
     def say_hello():
         print('hello')
 
-    result = capture(prog('true')().if_success(say_hello))
+    result = run(prog('true')().if_success(say_hello), silent=True)
     assert result.read_stdout() == 'hello'
 
 
@@ -262,14 +263,15 @@ def test_conditional_callable_return_false():
     def fail():
         return False
 
-    result = capture(prog('true')().if_success(fail))
+    result = run(prog('true')().if_success(fail), silent=True)
     assert result.exit_code == 1
 
 
 def test_if_success_with_pipeline():
     """Conditional can contain a pipeline."""
-    result = capture(
-        prog('true')().if_success(prog('echo')('hello') | prog('cat')())
+    result = run(
+        prog('true')().if_success(prog('echo')('hello') | prog('cat')()),
+        silent=True,
     )
     assert result.read_stdout() == 'hello'
 
@@ -281,41 +283,41 @@ def test_if_success_with_pipeline():
 
 def test_plus_operator_success():
     """+ operator runs second command when first succeeds."""
-    result = capture(prog('true')() + prog('echo')('yes'))
+    result = run(prog('true')() + prog('echo')('yes'), silent=True)
     assert result.read_stdout() == 'yes'
     assert result.exit_code == 0
 
 
 def test_plus_operator_failure():
     """+ operator skips second command when first fails."""
-    result = capture(prog('false')() + prog('echo')('yes'))
+    result = run(prog('false')() + prog('echo')('yes'), silent=True)
     assert result.read_stdout() == ''
     assert result.exit_code == 1
 
 
 def test_minus_operator_failure():
     """- operator runs second command when first fails."""
-    result = capture(prog('false')() - prog('echo')('recovered'))
+    result = run(prog('false')() - prog('echo')('recovered'), silent=True)
     assert result.read_stdout() == 'recovered'
     assert result.exit_code == 0
 
 
 def test_minus_operator_success():
     """- operator skips second command when first succeeds."""
-    result = capture(prog('true')() - prog('echo')('fallback'))
+    result = run(prog('true')() - prog('echo')('fallback'), silent=True)
     assert result.read_stdout() == ''
     assert result.exit_code == 0
 
 
 def test_operator_chain_multiple():
     """Operators can be chained: true + echo a + echo b."""
-    result = capture(prog('true')() + prog('echo')('a') + prog('echo')('b'))
+    result = run(prog('true')() + prog('echo')('a') + prog('echo')('b'), silent=True)
     assert result.read_stdout() == 'a\nb'
 
 
 def test_operator_mixed_chain():
     """Mixed operators: false - echo fallback + echo next."""
-    result = capture(prog('false')() - prog('echo')('fallback') + prog('echo')('next'))
+    result = run(prog('false')() - prog('echo')('fallback') + prog('echo')('next'), silent=True)
     assert result.read_stdout() == 'fallback\nnext'
 
 
@@ -324,7 +326,7 @@ def test_plus_with_callable():
     def greet():
         print('hello')
 
-    result = capture(prog('true')() + greet)
+    result = run(prog('true')() + greet, silent=True)
     assert result.read_stdout() == 'hello'
 
 
@@ -333,7 +335,7 @@ def test_minus_with_callable():
     def handle_error():
         print('error handled')
 
-    result = capture(prog('false')() - handle_error)
+    result = run(prog('false')() - handle_error, silent=True)
     assert result.read_stdout() == 'error handled'
 
 
@@ -345,35 +347,35 @@ def test_minus_with_callable():
 def test_uncalled_program_in_pipeline_right():
     """Uncalled Program on right side of pipe auto-invokes."""
     # prog('cat') without () should auto-invoke
-    result = capture(prog('echo')('hello') | prog('cat'))
+    result = run(prog('echo')('hello') | prog('cat'), silent=True)
     assert result.read_stdout() == 'hello'
 
 
 def test_uncalled_program_in_pipeline_left():
     """Uncalled Program on left side of pipe auto-invokes."""
     # prog('true') without () should auto-invoke
-    result = capture(prog('true') | prog('echo')('piped'))
+    result = run(prog('true') | prog('echo')('piped'), silent=True)
     assert result.read_stdout() == 'piped'
 
 
 def test_uncalled_program_in_conditional_plus():
     """Uncalled Program with + operator auto-invokes."""
     # prog('true') without () should auto-invoke
-    result = capture(prog('true') + prog('echo')('success'))
+    result = run(prog('true') + prog('echo')('success'), silent=True)
     assert result.read_stdout() == 'success'
 
 
 def test_uncalled_program_in_conditional_minus():
     """Uncalled Program with - operator auto-invokes."""
     # prog('false') without () should auto-invoke
-    result = capture(prog('false') - prog('echo')('fallback'))
+    result = run(prog('false') - prog('echo')('fallback'), silent=True)
     assert result.read_stdout() == 'fallback'
 
 
 def test_uncalled_program_chain():
     """Multiple uncalled Programs can be chained."""
     # ls without args: ls | cat | cat
-    result = capture(prog('echo')('test') | prog('cat') | prog('cat'))
+    result = run(prog('echo')('test') | prog('cat') | prog('cat'), silent=True)
     assert result.read_stdout() == 'test'
 
 
@@ -386,7 +388,7 @@ def test_uncalled_program_stdin_redirect():
         f.flush()
         inpath = Path(f.name)
     try:
-        result = capture(prog('cat') < inpath)
+        result = run(prog('cat') < inpath, silent=True)
         assert result.read_stdout() == 'redirected input'
     finally:
         inpath.unlink()
@@ -423,14 +425,14 @@ def test_uncalled_program_append_redirect():
 def test_uncalled_program_method_delegation():
     """Uncalled Program delegates method calls with auto-invoke."""
     # prog('cat').stdin_content('hello') should work without ()
-    result = capture(prog('cat').stdin_content('hello via delegation'))
+    result = run(prog('cat').stdin_content('hello via delegation'), silent=True)
     assert result.read_stdout() == 'hello via delegation'
 
 
 def test_uncalled_program_neg_method():
     """Uncalled Program.neg() delegates with auto-invoke."""
     # prog('true').neg() should auto-call true, then negate (exit 1)
-    result = capture(prog('true').neg())
+    result = run(prog('true').neg(), silent=True)
     assert result.exit_code == 1
 
 
@@ -441,19 +443,19 @@ def test_uncalled_program_neg_method():
 
 def test_stdin_content_string():
     """stdin_content() pipes string content to command."""
-    result = capture(prog('cat')().stdin_content('hello world'))
+    result = run(prog('cat')().stdin_content('hello world'), silent=True)
     assert result.read_stdout() == 'hello world'
 
 
 def test_stdin_content_multiline():
     """stdin_content() handles multiline strings."""
-    result = capture(prog('wc')('-l').stdin_content('line1\nline2\nline3\n'))
+    result = run(prog('wc')('-l').stdin_content('line1\nline2\nline3\n'), silent=True)
     assert result.read_stdout().strip() == '3'
 
 
 def test_stdin_content_bytes():
     """stdin_content() pipes bytes content to command."""
-    result = capture(prog('cat')().stdin_content(b'binary data'))
+    result = run(prog('cat')().stdin_content(b'binary data'), silent=True)
     assert result.read_stdout() == 'binary data'
 
 
@@ -462,7 +464,7 @@ def test_stdin_content_filelike():
     from io import StringIO
 
     content = StringIO('from stringio')
-    result = capture(prog('cat')().stdin_content(content))
+    result = run(prog('cat')().stdin_content(content), silent=True)
     assert result.read_stdout() == 'from stringio'
 
 
@@ -471,13 +473,13 @@ def test_stdin_content_bytesio():
     from io import BytesIO
 
     content = BytesIO(b'from bytesio')
-    result = capture(prog('cat')().stdin_content(content))
+    result = run(prog('cat')().stdin_content(content), silent=True)
     assert result.read_stdout() == 'from bytesio'
 
 
 def test_stdin_content_with_pipeline():
     """stdin_content() works in pipelines."""
-    result = capture(prog('grep')('hello').stdin_content('hello world\ngoodbye') | prog('cat')())
+    result = run(prog('grep')('hello').stdin_content('hello world\ngoodbye') | prog('cat')(), silent=True)
     assert result.read_stdout() == 'hello world'
 
 

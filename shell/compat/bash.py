@@ -35,6 +35,7 @@ from collections.abc import Callable
 from shell.builtins import cd
 from shell.environment import env, env_to_str
 from shell.model import Command, IOConfig, ShellResult, ShellRunnable
+from shell.util import exit_code_from_status
 
 # Prefer homebrew bash (5.x) over macOS /bin/bash (3.2)
 # Must both exist AND be executable
@@ -384,7 +385,7 @@ class BashSource(ShellRunnable):
 
             # Now wait for child to exit
             _, status = os.waitpid(pid, 0)
-            exit_code = os.waitstatus_to_exitcode(status)
+            exit_code = exit_code_from_status(status)
 
             # Parse epilogue and update state
             child_env, pwd = _parse_epilogue(state_output)

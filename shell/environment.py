@@ -7,9 +7,10 @@ from collections.abc import Iterator, MutableMapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .trap import TrapManager
+
 if TYPE_CHECKING:
     from .model import ShellRunnable
-    from .trap import TrapManager
 
 
 class ColonDelimitedPath(list[Path]):
@@ -84,6 +85,9 @@ class ShellEnvironment(MutableMapping):
         # Shell options
         self._physical: bool = False  # Don't follow symlinks in cd/pwd (-P)
 
+        # PTY state
+        self._in_pty: bool = False  # Set in forked child to prevent nested PTY
+
         # Trap system
         self._traps: TrapManager | None = None
         self._current_runnable: ShellRunnable | None = None
@@ -100,6 +104,15 @@ class ShellEnvironment(MutableMapping):
         self._last_exit = code
 
     @property
+    def in_pty(self) -> bool:
+        """Whether we're inside a PTY child process."""
+        return self._in_pty
+
+    @in_pty.setter
+    def in_pty(self, value: bool) -> None:
+        self._in_pty = value
+
+    @property
     def physical(self) -> bool:
         """Get the physical mode setting (-P)."""
         return self._physical
@@ -113,9 +126,6 @@ class ShellEnvironment(MutableMapping):
     def traps(self) -> TrapManager:
         """Get the trap manager (lazy initialized)."""
         if self._traps is None:
-            # Avoid circular: environment.py ← trap.py ← model.py
-            from .trap import TrapManager  # noqa: PLC0415
-
             self._traps = TrapManager()
         return self._traps
 
