@@ -4,7 +4,7 @@ from ._compound import ConditionalChain, Negated, Subshell, TracedRunnable
 from ._pipeline import Pipeline
 from ._process_sub import ProcessInput, ProcessOutput, ProcessSubstitution, pyshexec
 from ._program import Program, cmd, prog, sub
-from ._types import FileLike, IOConfig, ShellResult
+from ._types import FileLike, IOConfig, RawArg, ShellResult, raw
 
 __all__ = [
     'BUILTIN_REGISTRY',
@@ -20,6 +20,7 @@ __all__ = [
     'ProcessOutput',
     'ProcessSubstitution',
     'Program',
+    'RawArg',
     'ShellResult',
     'ShellRunnable',
     'Subshell',
@@ -27,6 +28,7 @@ __all__ = [
     'cmd',
     'prog',
     'pyshexec',
+    'raw',
     'resolve_builtin',
     'resolve_cmd',
     'run',

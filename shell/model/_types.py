@@ -6,6 +6,20 @@ from typing import Self
 FileLike = int | str | Path
 
 
+class RawArg(str):
+    """String argument that bypasses shell expansions (tilde, etc.).
+
+    Use raw() to create: prog('grep')(raw('~pattern'), 'file.txt')
+    """
+
+    pass
+
+
+def raw(s: str) -> RawArg:
+    """Mark a string argument as raw, bypassing shell expansions like tilde."""
+    return RawArg(s)
+
+
 class IOConfig:
     """Encapsulates I/O redirection configuration with mutable builder pattern.
 
