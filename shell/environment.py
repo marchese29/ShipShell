@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import os
 import platform
-from collections.abc import Iterator, MutableMapping
+from collections.abc import Callable, Iterator, MutableMapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -82,6 +82,10 @@ class ShellEnvironment(MutableMapping):
         self._pysh_config_dir: Path = Path.home() / '.config' / 'pysh'
         self._shlvl: int = 0
 
+        # Prompt variables (str or callable returning str)
+        self._ps1: str | Callable[[], str] = 'ship> '
+        self._ps2: str | Callable[[], str] = '..... '
+
         # Shell options
         self._physical: bool = False  # Don't follow symlinks in cd/pwd (-P)
 
@@ -147,10 +151,30 @@ class ShellEnvironment(MutableMapping):
     def last_runnable(self, value: ShellRunnable | None):
         self._last_runnable = value
 
+    @property
+    def ps1(self) -> str | Callable[[], str]:
+        """Primary prompt (PS1). Can be a string or zero-argument callable."""
+        return self._ps1
+
+    @ps1.setter
+    def ps1(self, value: str | Callable[[], str]) -> None:
+        self._ps1 = value
+
+    @property
+    def ps2(self) -> str | Callable[[], str]:
+        """Continuation prompt (PS2). Can be a string or zero-argument callable."""
+        return self._ps2
+
+    @ps2.setter
+    def ps2(self, value: str | Callable[[], str]) -> None:
+        self._ps2 = value
+
     # Variables with computed values that can't be set via __setitem__
     # TODO: We should be able to inherit some of these from the parent environment
     # (e.g. HOME, PATH) rather than always computing them ourselves
-    _COMPUTED_VARS = frozenset({'?', '$', 'HOME', 'OLDPWD', 'PATH', 'PPID', 'PWD', 'SHLVL'})
+    _COMPUTED_VARS = frozenset(
+        {'?', '$', 'HOME', 'OLDPWD', 'PATH', 'PPID', 'PS1', 'PS2', 'PWD', 'SHLVL'}
+    )
 
     def initialize(self) -> ShellEnvironment:
         # Inherit regular variables as STRINGS (no implicit type coercion)
@@ -326,6 +350,10 @@ class ShellEnvironment(MutableMapping):
                 return copy.copy(self._path)
             case 'PPID':
                 return self._ppid
+            case 'PS1':
+                return self._ps1
+            case 'PS2':
+                return self._ps2
             case 'PWD':
                 return self._pwd
             case 'PYSH_CONFIG_DIR':
@@ -363,6 +391,10 @@ class ShellEnvironment(MutableMapping):
                 self.pwd = Path(value) if not isinstance(value, Path) else value
             case 'OLDPWD':
                 self.old_pwd = Path(value) if value and not isinstance(value, Path) else value
+            case 'PS1':
+                self.ps1 = value
+            case 'PS2':
+                self.ps2 = value
             case 'PYSH_CONFIG_DIR':
                 self.config_dir = Path(value) if not isinstance(value, Path) else value
             case _:
@@ -383,6 +415,8 @@ class ShellEnvironment(MutableMapping):
                 | 'OLDPWD'
                 | 'PATH'
                 | 'PPID'
+                | 'PS1'
+                | 'PS2'
                 | 'PWD'
                 | 'PYSH_CONFIG_DIR'
                 | 'SHLVL'
@@ -406,6 +440,8 @@ class ShellEnvironment(MutableMapping):
                 | 'OLDPWD'
                 | 'PATH'
                 | 'PPID'
+                | 'PS1'
+                | 'PS2'
                 | 'PWD'
                 | 'PYSH_CONFIG_DIR'
                 | 'SHLVL'

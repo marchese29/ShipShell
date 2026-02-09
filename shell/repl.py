@@ -127,13 +127,7 @@ def _execute_code(code: str, globals_dict: dict) -> None:
 class REPL:
     """Event-loop-friendly REPL using readline callback interface."""
 
-    def __init__(
-        self,
-        primary_prompt: str = 'ship> ',
-        continuation_prompt: str = '..... ',
-    ):
-        self._primary_prompt = primary_prompt
-        self._continuation_prompt = continuation_prompt
+    def __init__(self):
         self._compiler = codeop.CommandCompiler()
         self._buffer = ''
         self._running = False
@@ -145,9 +139,19 @@ class REPL:
 
         self._globals = __main__.__dict__
 
+    @staticmethod
+    def _resolve_prompt(value: str | Callable[[], str], default: str) -> str:
+        """Resolve a prompt value: call if callable, use as string otherwise."""
+        try:
+            return value() if callable(value) else str(value)
+        except Exception:
+            return default
+
     @property
     def _current_prompt(self) -> str:
-        return self._continuation_prompt if self._buffer else self._primary_prompt
+        if self._buffer:
+            return self._resolve_prompt(env.ps2, '..... ')
+        return self._resolve_prompt(env.ps1, 'ship> ')
 
     def _on_line(self, line: str | None) -> None:
         """Callback invoked by readline when a complete line is entered."""

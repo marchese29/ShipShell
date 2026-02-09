@@ -124,6 +124,18 @@ brew install readline
 
 History is saved to `~/.pysh_history` by default. Override with `PYSH_HISTFILE` environment variable.
 
+### Customizable Prompts (`PS1` / `PS2`)
+
+The REPL prompts are controlled by `env.ps1` (primary) and `env.ps2` (continuation), also accessible via `env['PS1']` / `env['PS2']`. Both accept a string or a zero-argument callable:
+
+```python
+env.ps1 = 'myshell> '                              # static string
+env.ps1 = lambda: f'{Path.cwd().name}> '           # dynamic callable
+env['PS2'] = '... '                                # dict interface works too
+```
+
+Defaults: `'ship> '` (PS1) and `'..... '` (PS2). If a callable raises an exception, the default prompt is used as fallback. PS1/PS2 are **not** exported to child processes or included in `__iter__` (callables are meaningless to subprocesses).
+
 ### Tab Completion (`shell/completion.py`)
 
 Tab completion uses readline's built-in filename completer, but only activates **inside string literals**. Outside strings, completion is suppressed (future: Python identifier completion).
