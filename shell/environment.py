@@ -4,6 +4,7 @@ import copy
 import os
 import platform
 from collections.abc import Callable, Iterator, MutableMapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -11,6 +12,39 @@ from .trap import TrapManager
 
 if TYPE_CHECKING:
     from .model import ShellRunnable
+
+
+@dataclass(frozen=True)
+class _SpecialVar:
+    """Registry entry for a special shell variable.
+
+    attr:   backing attribute name on ShellEnvironment (e.g. '_home')
+    prop:   property name for writes (None = read-only)
+    export: include in __iter__ (visible to child processes)
+    copy:   return copy.copy() on read via __getitem__
+    """
+
+    attr: str
+    prop: str | None = None
+    export: bool = True
+    copy: bool = False
+
+
+_SPECIAL_VARS: dict[str, _SpecialVar] = {
+    '?': _SpecialVar('_last_exit', export=False),
+    '$': _SpecialVar('_pid', export=False),
+    'HOME': _SpecialVar('_home'),
+    'OLDPWD': _SpecialVar('_old_pwd', prop='old_pwd'),
+    'PATH': _SpecialVar('_path', prop='path', copy=True),
+    'PPID': _SpecialVar('_ppid'),
+    'PS1': _SpecialVar('_ps1', prop='ps1', export=False),
+    'PS2': _SpecialVar('_ps2', prop='ps2', export=False),
+    'PWD': _SpecialVar('_pwd', prop='pwd'),
+    'PYSH_CONFIG_DIR': _SpecialVar('_pysh_config_dir', prop='config_dir'),
+    'SHLVL': _SpecialVar('_shlvl'),
+}
+
+_EXPORTED_SPECIAL = tuple(k for k, v in _SPECIAL_VARS.items() if v.export)
 
 
 class ColonDelimitedPath(list[Path]):
@@ -169,18 +203,11 @@ class ShellEnvironment(MutableMapping):
     def ps2(self, value: str | Callable[[], str]) -> None:
         self._ps2 = value
 
-    # Variables with computed values that can't be set via __setitem__
-    # TODO: We should be able to inherit some of these from the parent environment
-    # (e.g. HOME, PATH) rather than always computing them ourselves
-    _COMPUTED_VARS = frozenset(
-        {'?', '$', 'HOME', 'OLDPWD', 'PATH', 'PPID', 'PS1', 'PS2', 'PWD', 'SHLVL'}
-    )
-
     def initialize(self) -> ShellEnvironment:
         # Inherit regular variables as STRINGS (no implicit type coercion)
-        # Skip computed variables - they're handled specially with explicit typing
+        # Skip special variables - they're handled specially with explicit typing
         for key in os.environ.keys():
-            if key not in self._COMPUTED_VARS:
+            if key not in _SPECIAL_VARS:
                 self._env[key] = os.environ[key]  # Store as string
                 self._exported.add(key)
 
@@ -293,9 +320,12 @@ class ShellEnvironment(MutableMapping):
         return self._old_pwd
 
     @old_pwd.setter
-    def old_pwd(self, value: Path | None):
-        self._old_pwd = value
-        os.environ['OLDPWD'] = str(value) if value is not None else ''
+    def old_pwd(self, value: str | Path | None):
+        if isinstance(value, str):
+            self._old_pwd = Path(value) if value else None
+        else:
+            self._old_pwd = value
+        os.environ['OLDPWD'] = str(self._old_pwd) if self._old_pwd else ''
 
     @property
     def path(self) -> ColonDelimitedPath:
@@ -319,18 +349,18 @@ class ShellEnvironment(MutableMapping):
         return self._pwd
 
     @pwd.setter
-    def pwd(self, value: Path):
-        self._pwd = value
-        os.environ['PWD'] = str(value)
+    def pwd(self, value: str | Path):
+        self._pwd = Path(value) if not isinstance(value, Path) else value
+        os.environ['PWD'] = str(self._pwd)
 
     @property
     def config_dir(self) -> Path:
         return self._pysh_config_dir
 
     @config_dir.setter
-    def config_dir(self, value: Path):
-        self._pysh_config_dir = value
-        os.environ['PYSH_CONFIG_DIR'] = str(value)
+    def config_dir(self, value: str | Path):
+        self._pysh_config_dir = Path(value) if not isinstance(value, Path) else value
+        os.environ['PYSH_CONFIG_DIR'] = str(self._pysh_config_dir)
 
     def __getitem__(self, key: str) -> Any | None:
         """Get an environment variable. Returns a copy for mutable values.
@@ -341,35 +371,14 @@ class ShellEnvironment(MutableMapping):
             path.append('/new/dir')
             env['PATH'] = path  # Assigns back
         """
-        match key:
-            case 'HOME':
-                return self._home
-            case 'OLDPWD':
-                return self._old_pwd
-            case 'PATH':
-                return copy.copy(self._path)
-            case 'PPID':
-                return self._ppid
-            case 'PS1':
-                return self._ps1
-            case 'PS2':
-                return self._ps2
-            case 'PWD':
-                return self._pwd
-            case 'PYSH_CONFIG_DIR':
-                return self._pysh_config_dir
-            case 'SHLVL':
-                return self._shlvl
-            case '?':
-                return self._last_exit
-            case '$':
-                return self._pid
-            case _:
-                value = self._env[key]
-                # Return copies for mutable values; strings are immutable
-                if isinstance(value, str):
-                    return value
-                return copy.deepcopy(value)
+        if desc := _SPECIAL_VARS.get(key):
+            val = getattr(self, desc.attr)
+            return copy.copy(val) if desc.copy else val
+        value = self._env[key]
+        # Return copies for mutable values; strings are immutable
+        if isinstance(value, str):
+            return value
+        return copy.deepcopy(value)
 
     def get_type_hint(self, key: str) -> type | None:
         """Get the type hint for a variable (for bash sync-back)."""
@@ -380,79 +389,34 @@ class ShellEnvironment(MutableMapping):
         self._type_hints.pop(key, None)
 
     def __setitem__(self, key: str, value: Any):
-        match key:
-            # Read-only computed variables
-            case '?' | '$' | 'HOME' | 'PPID' | 'SHLVL' as k:
-                raise ValueError(f'{k} is read-only')
-            # Settable computed variables - delegate to property setters
-            case 'PATH':
-                self.path = value
-            case 'PWD':
-                self.pwd = Path(value) if not isinstance(value, Path) else value
-            case 'OLDPWD':
-                self.old_pwd = Path(value) if value and not isinstance(value, Path) else value
-            case 'PS1':
-                self.ps1 = value
-            case 'PS2':
-                self.ps2 = value
-            case 'PYSH_CONFIG_DIR':
-                self.config_dir = Path(value) if not isinstance(value, Path) else value
-            case _:
-                self._env[key] = value
-                # Record type hint for non-string values (for bash sync-back)
-                if not isinstance(value, str):
-                    self._type_hints[key] = type(value)
-                elif key in self._type_hints:
-                    del self._type_hints[key]
-                os.environ[key] = env_to_str(value)
+        if desc := _SPECIAL_VARS.get(key):
+            if desc.prop is None:
+                raise ValueError(f'{key} is read-only')
+            setattr(self, desc.prop, value)
+            return
+        self._env[key] = value
+        # Record type hint for non-string values (for bash sync-back)
+        if not isinstance(value, str):
+            self._type_hints[key] = type(value)
+        elif key in self._type_hints:
+            del self._type_hints[key]
+        os.environ[key] = env_to_str(value)
 
     def __delitem__(self, key: str):
-        match key:
-            case (
-                '?'
-                | '$'
-                | 'HOME'
-                | 'OLDPWD'
-                | 'PATH'
-                | 'PPID'
-                | 'PS1'
-                | 'PS2'
-                | 'PWD'
-                | 'PYSH_CONFIG_DIR'
-                | 'SHLVL'
-            ):
-                raise ValueError('Cannot delete built-in environment variables')
-            case _:
-                del self._env[key]
-                os.environ.pop(key, None)
+        if key in _SPECIAL_VARS:
+            raise ValueError('Cannot delete built-in environment variables')
+        del self._env[key]
+        os.environ.pop(key, None)
 
     def __iter__(self) -> Iterator:
         yield from self._env
-        # Also yield computed variable keys (except internal ? and $)
-        yield from ('HOME', 'OLDPWD', 'PATH', 'PPID', 'PWD', 'PYSH_CONFIG_DIR', 'SHLVL')
+        yield from _EXPORTED_SPECIAL
 
     def __contains__(self, key: object) -> bool:
-        match key:
-            case (
-                '?'
-                | '$'
-                | 'HOME'
-                | 'OLDPWD'
-                | 'PATH'
-                | 'PPID'
-                | 'PS1'
-                | 'PS2'
-                | 'PWD'
-                | 'PYSH_CONFIG_DIR'
-                | 'SHLVL'
-            ):
-                return True
-            case _:
-                return key in self._env
+        return key in _SPECIAL_VARS or key in self._env
 
     def __len__(self) -> int:
-        # Extras: HOME, OLDPWD, PATH, PPID, PWD, PYSH_CONFIG_DIR, SHLVL
-        return len(self._env) + 7
+        return len(self._env) + len(_EXPORTED_SPECIAL)
 
 
 env: ShellEnvironment = ShellEnvironment()

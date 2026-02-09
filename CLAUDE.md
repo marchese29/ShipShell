@@ -363,6 +363,8 @@ env.traps.set(TrapType.EXIT, handler)
 
 ### Environment (`shell/environment.py`)
 
+Special variables (HOME, PATH, PWD, PS1, etc.) are managed via a **`_SpecialVar` registry** — a single `_SPECIAL_VARS` dict that declares each variable's backing attribute, property setter, export behavior, and copy-on-read flag. All dunder methods (`__getitem__`, `__setitem__`, `__delitem__`, `__contains__`, `__iter__`, `__len__`) are registry-driven lookups. To add a new special variable, add one entry to `_SPECIAL_VARS` and a property — no other methods need changes.
+
 The shell environment uses **copy-on-read semantics** for mutable values. When you access a mutable value like `PATH`, you get a copy—mutations don't affect the stored value:
 
 ```python
@@ -380,7 +382,7 @@ env['PATH'] = path
 
 Both `env.path = value` and `env['PATH'] = value` work. Read-only variables (`HOME`, `PPID`, `SHLVL`, `$`, `?`) raise `ValueError` on assignment.
 
-Iteration (`env.items()`, `for k in env`) includes both regular variables and computed variables (`HOME`, `PATH`, `PWD`, etc.). This ensures `source_bash()` can pass all variables to the subprocess.
+Iteration (`env.items()`, `for k in env`) includes both regular variables and exported special variables (`HOME`, `PATH`, `PWD`, etc.). Non-exported specials (`?`, `$`, `PS1`, `PS2`) are accessible via `__getitem__`/`__contains__` but excluded from iteration (callables and internal state are meaningless to subprocesses).
 
 This design:
 - Prevents silent sync failures (mutations not propagating to `os.environ`)
