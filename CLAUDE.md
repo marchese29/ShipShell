@@ -60,6 +60,7 @@ Test organization:
 - `tests/test_callable_pipeline.py` - Python API tests (pipelines, process substitution, conditional chaining)
 - `tests/test_trap.py` - Trap system tests
 - `tests/test_pty.py` - PTY-based output capture tests
+- `tests/test_completion.py` - Tab completion tests (string detection, readline config)
 
 See `tests/CLAUDE.md` for detailed testing patterns.
 
@@ -122,6 +123,23 @@ brew install readline
 ```
 
 History is saved to `~/.pysh_history` by default. Override with `PYSH_HISTFILE` environment variable.
+
+### Tab Completion (`shell/completion.py`)
+
+Tab completion uses readline's built-in filename completer, but only activates **inside string literals**. Outside strings, completion is suppressed (future: Python identifier completion).
+
+**How it works:**
+1. `shell/rl.py` exposes readline's completion API via ctypes (`set_attempted_completion`, `set_completer_delims`, etc.)
+2. `shell/completion.py` registers an attempted completion function that checks if the cursor is inside a string literal
+3. If inside a string (`cd('/tmp/fo<TAB>`): falls through to readline's filename completer
+4. If outside a string (`ls<TAB>`): suppresses completion entirely
+
+**String detection** (`_in_string_literal`): scans from line start to cursor position, tracking open/close quotes. Handles single quotes, double quotes, triple-quoted strings, and escaped quotes.
+
+**Key ctypes details:**
+- Completion callbacks return `c_void_p` (not `c_char_p`) to prevent ctypes auto-conversion — readline needs raw pointers it can `free()`
+- Match strings are `strdup()`'d via libc so readline owns the memory
+- CFUNCTYPE wrappers and word-break bytes are stored at module level to prevent GC
 
 ### Python Shell API (`shell/model.py`)
 

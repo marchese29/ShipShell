@@ -14,7 +14,7 @@ import traceback
 from collections.abc import Callable
 from pathlib import Path
 
-from shell import rl
+from shell import completion, rl
 from shell.environment import env
 from shell.model import Program, ShellResult, ShellRunnable
 from shell.trap import TrapType
@@ -205,6 +205,9 @@ class REPL:
             rl.read_history(str(histfile))
         except OSError as e:
             print(f'Warning: could not load history: {e}', file=sys.stderr)
+
+        # Configure tab completion
+        completion.setup()
 
         self._running = True
 
